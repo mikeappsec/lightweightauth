@@ -1087,8 +1087,8 @@ proxy/IdP/eBPF code paths.
   libraries, no UI deps, no eBPF toolchain.
 - **What it does NOT contain:** reverse-proxy code, an IdP UI, eBPF
   programs, sample non-Go plugins.
-- **Module path:** `github.com/yourorg/lightweightauth`.
-- **Image:** `ghcr.io/yourorg/lightweightauth`.
+- **Module path:** `github.com/mikeappsec/lightweightauth`.
+- **Image:** `ghcr.io/mikeappsec/lightweightauth`.
 - **Helm chart:** `lightweightauth`.
 
 ### `lightweightauth-proxy` — Mode B (separate repo, Tier 1)
@@ -1099,8 +1099,8 @@ proxy/IdP/eBPF code paths.
   connection draining, header normalization.
 - **Why split:** keeps proxy hardening / dep tree out of every core user.
   Releases on its own cadence; HTTP/3 churn doesn't force a core release.
-- **Module path:** `github.com/yourorg/lightweightauth-proxy`.
-- **Image:** `ghcr.io/yourorg/lightweightauth-proxy`.
+- **Module path:** `github.com/mikeappsec/lightweightauth-proxy`.
+- **Image:** `ghcr.io/mikeappsec/lightweightauth-proxy`.
 - **Helm chart:** `lightweightauth-proxy` (can be a sub-chart of
   `lightweightauth`).
 
@@ -1112,7 +1112,7 @@ proxy/IdP/eBPF code paths.
 - **Why split:** an IdP needs a UI, a user store, and migration tooling —
   none of which belong in a sidecar auth proxy. Lets the IdP evolve
   independently.
-- **Module path:** `github.com/yourorg/lightweightauth-idp`.
+- **Module path:** `github.com/mikeappsec/lightweightauth-idp`.
 
 ### `lightweightauth-ebpf` — Mode C (separate repo, Tier 3, post-v1)
 
@@ -1130,7 +1130,7 @@ proxy/IdP/eBPF code paths.
 - **Why split:** non-Go users shouldn't have to clone the Go core repo.
   Reference plugins want a permissive contribution policy and a fast review
   loop; security-critical core wants the opposite.
-- **Module paths:** `github.com/yourorg/lightweightauth-plugins/{go,python,rust}/...`
+- **Module paths:** `github.com/mikeappsec/lightweightauth-plugins/{go,python,rust}/...`
 
 ### Default vs custom plugins (the rule of thumb)
 
@@ -1149,9 +1149,9 @@ builds their own binary that blank-imports the extras alongside, e.g.:
 
 ```go
 import (
-    _ "github.com/yourorg/lightweightauth/pkg/builtins"            // tier 1
-    _ "github.com/yourorg/lightweightauth-plugins/go/identity/hsjwt" // tier 2
-    "github.com/yourorg/lightweightauth/pkg/lwauthd"               // public façade
+    _ "github.com/mikeappsec/lightweightauth/pkg/builtins"            // tier 1
+    _ "github.com/mikeappsec/lightweightauth-plugins/go/identity/hsjwt" // tier 2
+    "github.com/mikeappsec/lightweightauth/pkg/lwauthd"               // public façade
 )
 
 func main() { lwauthd.Main() }
@@ -1159,7 +1159,7 @@ func main() { lwauthd.Main() }
 
 The `pkg/lwauthd` package exposes `Run(opts) / Main()` so external
 binaries don't have to reach into core's `internal/`. This is what the
-[lwauth-extra example](https://github.com/yourorg/lightweightauth-plugins/tree/main/go/cmd/lwauth-extra)
+[lwauth-extra example](https://github.com/mikeappsec/lightweightauth-plugins/tree/main/go/cmd/lwauth-extra)
 demonstrates end-to-end.
 
 **Promotion criteria from tier 2 → tier 1:** broad demand, dep-light,

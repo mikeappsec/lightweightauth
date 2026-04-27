@@ -59,8 +59,8 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jws"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/yourorg/lightweightauth/internal/cache"
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 const (

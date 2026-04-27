@@ -15,8 +15,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/yourorg/lightweightauth/internal/controller"
-	"github.com/yourorg/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/internal/controller"
+	"github.com/mikeappsec/lightweightauth/internal/server"
 )
 
 // startCRDController boots a controller-runtime manager that watches the

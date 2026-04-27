@@ -1,4 +1,4 @@
-module github.com/yourorg/lightweightauth
+module github.com/mikeappsec/lightweightauth
 
 go 1.26.2
 

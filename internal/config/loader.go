@@ -8,9 +8,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/yourorg/lightweightauth/internal/cache"
-	"github.com/yourorg/lightweightauth/internal/pipeline"
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/internal/pipeline"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // Source produces successive AuthConfig snapshots. The server layer

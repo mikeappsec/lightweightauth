@@ -22,7 +22,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // Config is the YAML/CRD shape.

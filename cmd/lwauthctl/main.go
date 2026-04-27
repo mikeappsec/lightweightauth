@@ -11,10 +11,10 @@ import (
 	"os"
 	"sort"
 
-	_ "github.com/yourorg/lightweightauth/pkg/builtins"
+	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 
-	"github.com/yourorg/lightweightauth/internal/config"
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 func main() {

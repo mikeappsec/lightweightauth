@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourorg/lightweightauth/internal/server"
-	"github.com/yourorg/lightweightauth/pkg/lwauthd"
+	"github.com/mikeappsec/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/pkg/lwauthd"
 
-	_ "github.com/yourorg/lightweightauth/pkg/builtins"
+	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 )
 
 const cfgV1 = `

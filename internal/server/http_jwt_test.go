@@ -15,11 +15,11 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/yourorg/lightweightauth/internal/config"
-	"github.com/yourorg/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/internal/server"
 
 	// Register the built-in modules so config.Compile can find them.
-	_ "github.com/yourorg/lightweightauth/pkg/builtins"
+	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 )
 
 // startJWKS starts an in-memory JWKS endpoint and returns the URL plus a

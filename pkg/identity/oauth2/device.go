@@ -12,7 +12,7 @@ import (
 
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/yourorg/lightweightauth/pkg/session"
+	"github.com/mikeappsec/lightweightauth/pkg/session"
 )
 
 // RFC 8628 Device Authorization Grant.

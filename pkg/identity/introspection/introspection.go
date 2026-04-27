@@ -34,8 +34,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourorg/lightweightauth/internal/cache"
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 type Config struct {

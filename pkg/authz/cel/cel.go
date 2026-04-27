@@ -24,7 +24,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 type authorizer struct {

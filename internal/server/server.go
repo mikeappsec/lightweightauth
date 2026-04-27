@@ -6,7 +6,7 @@ package server
 import (
 	"sync/atomic"
 
-	"github.com/yourorg/lightweightauth/internal/pipeline"
+	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 )
 
 // EngineHolder is what every server adapter holds. The config layer swaps

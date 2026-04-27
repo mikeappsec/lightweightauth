@@ -23,7 +23,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // Config is the YAML/CRD shape understood by the jwt identifier.

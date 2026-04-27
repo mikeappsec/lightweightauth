@@ -18,8 +18,8 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/yourorg/lightweightauth/internal/config"
-	"github.com/yourorg/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/internal/server"
 )
 
 // refreshIDP is a tiny IdP that records the number of /token calls and

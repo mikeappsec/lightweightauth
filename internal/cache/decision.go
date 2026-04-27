@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // Decision is the opt-in cache that wraps the authorize step. It coalesces

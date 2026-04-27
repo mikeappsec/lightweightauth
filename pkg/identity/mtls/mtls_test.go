@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // makeCert mints a self-signed leaf cert for testing. Optional spiffeID

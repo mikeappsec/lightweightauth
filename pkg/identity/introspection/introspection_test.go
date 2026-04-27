@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 func mkServer(t *testing.T, hits *atomic.Int32, claims map[string]any) *httptest.Server {

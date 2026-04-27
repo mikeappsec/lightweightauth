@@ -24,7 +24,7 @@ lwauth --watch-namespace=auth-system --authconfig-name=default
 
 This runs `lightweightauth` as an authorization service only. It does **not**
 proxy traffic by itself. To put it in the data path of HTTP requests in a
-single binary, use the sibling repo [lightweightauth-proxy](https://github.com/yourorg/lightweightauth-proxy):
+single binary, use the sibling repo [lightweightauth-proxy](https://github.com/mikeappsec/lightweightauth-proxy):
 
 ```sh
 lwauth-proxy --config ./lwauth.yaml --upstream http://localhost:9000

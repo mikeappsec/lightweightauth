@@ -29,7 +29,7 @@ import (
 
 	"github.com/open-policy-agent/opa/v1/rego"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 const defaultQuery = "data.authz.allow"

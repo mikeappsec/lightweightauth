@@ -21,7 +21,7 @@ import (
 	rpcstatus "google.golang.org/genproto/googleapis/rpc/status"
 	codes "google.golang.org/grpc/codes"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // ExtAuthzServer implements envoy.service.auth.v3.AuthorizationServer.

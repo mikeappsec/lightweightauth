@@ -10,12 +10,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/yourorg/lightweightauth/api/crd/v1alpha1"
-	"github.com/yourorg/lightweightauth/internal/config"
-	"github.com/yourorg/lightweightauth/internal/controller"
-	"github.com/yourorg/lightweightauth/internal/server"
+	v1alpha1 "github.com/mikeappsec/lightweightauth/api/crd/v1alpha1"
+	"github.com/mikeappsec/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/internal/controller"
+	"github.com/mikeappsec/lightweightauth/internal/server"
 
-	_ "github.com/yourorg/lightweightauth/pkg/builtins"
+	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 )
 
 // makeAuthConfig returns a minimal but valid AuthConfig that uses

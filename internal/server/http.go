@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // HTTPHandler exposes the pipeline as a simple JSON HTTP API used by local
