@@ -1,0 +1,48 @@
+# Default values for the lightweightauth chart. M0 ships a minimal,
+# unopinionated set; HPA, PDB, NetworkPolicy templates land in M4.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/yourorg/lightweightauth
+  tag: ""           # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# Pull secrets needed when image.repository lives in an authenticated
+# registry. Reference an existing Secret already provisioned by your
+# secret manager (External Secrets, SealedSecrets, Vault Agent, ...):
+#
+#   imagePullSecrets:
+#     - name: my-pull-secret
+#
+# Hardened-image (dhi.io) support is deferred to a later milestone.
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  grpcPort: 9001
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+config:
+  # Inline AuthConfig YAML mounted at /etc/lwauth/config.yaml.
+  # Replace with a CRD-based source once the controller ships (M4).
+  inline: |
+    identifiers: []
+    authorizers: []
+
+crds:
+  install: false   # true once the controller ships in M4
+
+controller:
+  enabled: false   # M4
+
+metrics:
+  serviceMonitor: false

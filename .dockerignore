@@ -1,0 +1,22 @@
+# Build artifacts
+bin/
+dist/
+out/
+
+# Git / CI
+.git/
+.github/
+
+# Docs we don't need at runtime
+docs/
+*.md
+!examples/**
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Tests
+**/*_test.go

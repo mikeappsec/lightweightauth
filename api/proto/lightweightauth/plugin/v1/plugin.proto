@@ -1,0 +1,58 @@
+// Out-of-process plugin contract (DESIGN.md §2).
+//
+// A plugin process implements one or more of these services and is reached
+// over Unix-domain or TCP gRPC. The lwauth core wraps each remote call in
+// the pkg/module Identifier/Authorizer/ResponseMutator interface so the
+// pipeline cannot tell built-ins from plugins apart.
+syntax = "proto3";
+
+package lightweightauth.plugin.v1;
+
+option go_package = "github.com/yourorg/lightweightauth/api/proto/lightweightauth/plugin/v1;pluginv1";
+
+import "lightweightauth/v1/auth.proto";
+
+service IdentifierPlugin {
+  rpc Identify(IdentifyRequest) returns (IdentifyResponse);
+}
+service AuthorizerPlugin {
+  rpc Authorize(AuthorizePluginRequest) returns (AuthorizePluginResponse);
+}
+service MutatorPlugin {
+  rpc Mutate(MutateRequest) returns (MutateResponse);
+}
+
+message IdentifyRequest {
+  lightweightauth.v1.AuthorizeRequest request = 1;
+}
+message IdentifyResponse {
+  // no_match=true means "not my credential"; the host moves to the next
+  // identifier. Mutually exclusive with identity.
+  bool no_match = 1;
+  lightweightauth.v1.Identity identity = 2;
+  string error = 3;
+}
+
+message AuthorizePluginRequest {
+  lightweightauth.v1.AuthorizeRequest request  = 1;
+  lightweightauth.v1.Identity         identity = 2;
+}
+message AuthorizePluginResponse {
+  bool   allow       = 1;
+  int32  http_status = 2;
+  map<string, string> upstream_headers = 3;
+  map<string, string> response_headers = 4;
+  string deny_reason = 5;
+  string error       = 6;
+}
+
+message MutateRequest {
+  lightweightauth.v1.AuthorizeRequest  request  = 1;
+  lightweightauth.v1.Identity          identity = 2;
+  lightweightauth.v1.AuthorizeResponse decision = 3;
+}
+message MutateResponse {
+  map<string, string> upstream_headers = 1;
+  map<string, string> response_headers = 2;
+  string error = 3;
+}

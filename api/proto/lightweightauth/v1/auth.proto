@@ -1,0 +1,50 @@
+// Native LightweightAuth gRPC API (Door B in DESIGN.md §1).
+//
+// This file is the design source of truth for the native authorization
+// surface. Code is generated with buf in milestone M2; until then the
+// shape is committed here for review.
+syntax = "proto3";
+
+package lightweightauth.v1;
+
+option go_package = "github.com/yourorg/lightweightauth/api/proto/lightweightauth/v1;authv1";
+
+service Auth {
+  // One-shot decision (most common path).
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+
+  // Streaming for long-lived sessions / WebSocket re-checks.
+  rpc AuthorizeStream(stream AuthorizeRequest)
+      returns (stream AuthorizeResponse);
+}
+
+message AuthorizeRequest {
+  string method   = 1;  // "GET", "grpc.health.v1.Health/Check", ...
+  string resource = 2;  // free-form: URL path, gRPC FQN, topic name, ...
+  map<string, string> headers = 3;
+  bytes  body     = 4;  // optional, opt-in per AuthConfig
+  PeerInfo peer   = 5;  // mTLS chain, IP, SPIFFE ID
+  string tenant_id = 6;
+  map<string, string> context = 7; // trace id, request id, ...
+}
+
+message PeerInfo {
+  string remote_addr = 1;
+  string spiffe_id   = 2;
+  bytes  cert_chain  = 3; // DER-encoded leaf cert; full chain optional
+}
+
+message Identity {
+  string subject = 1;
+  string source  = 2;            // identifier name that produced it
+  map<string, string> claims = 3; // flattened claims (numbers/objects -> JSON)
+}
+
+message AuthorizeResponse {
+  bool   allow        = 1;
+  int32  http_status  = 2;            // hint for HTTP callers
+  map<string, string> upstream_headers = 3;
+  map<string, string> response_headers = 4;
+  Identity identity   = 5;
+  string deny_reason  = 6;
+}

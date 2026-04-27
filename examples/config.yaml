@@ -1,0 +1,47 @@
+# Example AuthConfig consumed by `lwauth --config examples/config.yaml`.
+# As of M1: jwt + apikey identifiers and rbac authorizer are functional.
+# OAuth2, mTLS, OPA, and OpenFGA become available in later milestones.
+
+# Optional: limit this config to specific virtual hosts.
+hosts:
+  - api.example.com
+
+# Optional: stamp every Request with this tenant id.
+tenantId: example
+
+identifierMode: firstMatch
+
+identifiers:
+  - name: corp-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: [api.example.com]
+      header: Authorization
+      scheme: Bearer
+
+  - name: dev-apikey
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        # !! dev/test only -- production stores hash these in a secret manager
+        local-test-key-1: dev-user
+        local-test-key-2: dev-admin
+
+authorizers:
+  - name: rbac
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow:
+        - admin
+        - editor
+
+# response: []  # response mutators (e.g. mint downstream JWT) come in M3
+
+# cache:        # opt-in decision cache (DESIGN.md §5)
+#   key: ["sub", "method", "pathTemplate"]
+#   ttl: "30s"
+#   negativeTtl: "5s"

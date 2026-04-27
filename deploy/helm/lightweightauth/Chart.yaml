@@ -1,0 +1,20 @@
+apiVersion: v2
+name: lightweightauth
+description: |
+  LightweightAuth — pluggable authn/authz service. This chart deploys the
+  core (Deployment + Service); for Mode A pair it with an Envoy chart
+  configured to call the `lwauth` Service via ext_authz, or for Mode B
+  install the sibling `lightweightauth-proxy` chart.
+type: application
+version: 0.0.1
+appVersion: "0.0.1"
+keywords:
+  - auth
+  - oidc
+  - oauth2
+  - rbac
+  - opa
+  - ext_authz
+home: https://github.com/yourorg/lightweightauth
+sources:
+  - https://github.com/yourorg/lightweightauth

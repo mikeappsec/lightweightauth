@@ -1,0 +1,36 @@
+# Local dev config — no external IdP needed.
+# Run:  ./bin/lwauth --config examples/dev-local.yaml
+#
+# Test allow:
+#   curl -i -X POST localhost:8080/v1/authorize \
+#     -H 'X-Api-Key: dev-admin-key' \
+#     -d '{"method":"GET","path":"/things","headers":{"X-Api-Key":["dev-admin-key"]}}'
+#
+# Test deny (viewer is not in allow list):
+#   curl -i -X POST localhost:8080/v1/authorize \
+#     -d '{"method":"GET","path":"/things","headers":{"X-Api-Key":["dev-viewer-key"]}}'
+#
+# Test no-credential 401:
+#   curl -i -X POST localhost:8080/v1/authorize -d '{"path":"/things"}'
+
+tenantId: dev
+identifierMode: firstMatch
+
+identifiers:
+  - name: dev-apikey
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        dev-admin-key:  { subject: alice, roles: [admin] }
+        dev-editor-key: { subject: bob,   roles: [editor] }
+        dev-viewer-key: { subject: carol, roles: [viewer] }
+
+authorizers:
+  - name: rbac
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow:
+        - admin
+        - editor

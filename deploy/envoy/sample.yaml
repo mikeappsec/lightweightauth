@@ -1,0 +1,64 @@
+# Sample Envoy config that wires the ext_authz HTTP filter to lwauth.
+# Use as a starting point for the Helm chart's optional Envoy sidecar
+# (DESIGN.md §3 Mode A). Ports/cluster names match deploy/helm defaults.
+#
+# Tested with Envoy 1.37.3 (current stable as of 2026-04). The
+# `envoy.service.auth.v3` API has been stable since Envoy 1.18 (2021),
+# so this config also runs unchanged on any 1.18+ release.
+#
+# Hardened-image support (dhi.io/envoy) is deferred to a later milestone.
+
+static_resources:
+  listeners:
+    - name: ingress
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8000 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: local
+                  virtual_hosts:
+                    - name: app
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: upstream_app }
+                http_filters:
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      grpc_service:
+                        envoy_grpc: { cluster_name: lwauth }
+                        timeout: 0.25s
+                      failure_mode_allow: false
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: upstream_app
+      connect_timeout: 1s
+      type: STRICT_DNS
+      load_assignment:
+        cluster_name: upstream_app
+        endpoints:
+          - lb_endpoints:
+              - endpoint: { address: { socket_address: { address: app, port_value: 8080 } } }
+
+    - name: lwauth
+      connect_timeout: 0.25s
+      type: STRICT_DNS
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config: { http2_protocol_options: {} }
+      load_assignment:
+        cluster_name: lwauth
+        endpoints:
+          - lb_endpoints:
+              - endpoint: { address: { socket_address: { address: lwauth, port_value: 9001 } } }
