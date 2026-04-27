@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/yourorg/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/internal/config"
 )
 
 // GroupVersion is the canonical (group, version) for our CRDs.

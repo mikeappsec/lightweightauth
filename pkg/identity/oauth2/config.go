@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
-	"github.com/yourorg/lightweightauth/pkg/session"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/session"
 )
 
 // parseConfig converts a free-form YAML map into a typed Config. We do

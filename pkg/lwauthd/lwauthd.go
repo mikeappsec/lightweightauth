@@ -8,9 +8,9 @@
 //	package main
 //
 //	import (
-//	    _ "github.com/yourorg/lightweightauth/pkg/builtins"
+//	    _ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 //	    _ "example.com/my-plugins/foo"        // your plugin
-//	    "github.com/yourorg/lightweightauth/pkg/lwauthd"
+//	    "github.com/mikeappsec/lightweightauth/pkg/lwauthd"
 //	)
 //
 //	func main() { lwauthd.Main() }            // or lwauthd.Run(opts)
@@ -34,9 +34,9 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/yourorg/lightweightauth/internal/config"
-	"github.com/yourorg/lightweightauth/internal/pipeline"
-	"github.com/yourorg/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/internal/pipeline"
+	"github.com/mikeappsec/lightweightauth/internal/server"
 )
 
 // Options configure a Run invocation.

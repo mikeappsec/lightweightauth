@@ -21,9 +21,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/yourorg/lightweightauth/api/crd/v1alpha1"
-	"github.com/yourorg/lightweightauth/internal/config"
-	"github.com/yourorg/lightweightauth/internal/server"
+	v1alpha1 "github.com/mikeappsec/lightweightauth/api/crd/v1alpha1"
+	"github.com/mikeappsec/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/internal/server"
 )
 
 // AuthConfigReconciler watches a single AuthConfig and swaps the

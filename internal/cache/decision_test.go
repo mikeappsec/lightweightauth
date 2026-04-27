@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 func mkDec(t *testing.T, pos, neg time.Duration, keys ...string) *Decision {

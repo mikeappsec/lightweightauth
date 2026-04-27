@@ -16,7 +16,7 @@ import (
 
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/yourorg/lightweightauth/pkg/session"
+	"github.com/mikeappsec/lightweightauth/pkg/session"
 )
 
 // HTTPHandler is the entrypoint mounted at MountPrefix(). It dispatches

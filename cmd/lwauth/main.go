@@ -5,9 +5,9 @@
 package main
 
 import (
-	_ "github.com/yourorg/lightweightauth/pkg/builtins"
+	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 
-	"github.com/yourorg/lightweightauth/pkg/lwauthd"
+	"github.com/mikeappsec/lightweightauth/pkg/lwauthd"
 )
 
 func main() { lwauthd.Main() }

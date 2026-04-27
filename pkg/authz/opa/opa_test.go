@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 const adminOnly = `

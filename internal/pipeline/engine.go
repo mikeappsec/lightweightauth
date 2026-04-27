@@ -12,8 +12,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/yourorg/lightweightauth/internal/cache"
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // Engine is the per-request entry point. Construct via New and never

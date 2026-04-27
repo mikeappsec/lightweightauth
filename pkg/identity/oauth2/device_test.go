@@ -14,8 +14,8 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/yourorg/lightweightauth/internal/config"
-	"github.com/yourorg/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/internal/config"
+	"github.com/mikeappsec/lightweightauth/internal/server"
 )
 
 // deviceFakeIDP is a minimal RFC 8628 IdP layered on top of the same

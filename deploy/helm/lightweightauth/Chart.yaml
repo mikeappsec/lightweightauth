@@ -15,6 +15,6 @@ keywords:
   - rbac
   - opa
   - ext_authz
-home: https://github.com/yourorg/lightweightauth
+home: https://github.com/mikeappsec/lightweightauth
 sources:
-  - https://github.com/yourorg/lightweightauth
+  - https://github.com/mikeappsec/lightweightauth

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 func sign(secret, msg []byte) string {

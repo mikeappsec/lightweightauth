@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yourorg/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 // ----- header-add ---------------------------------------------------------
