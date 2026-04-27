@@ -32,6 +32,7 @@ func parseConfig(raw map[string]any) (Config, error) {
 	c.PostLogoutPath = getString("postLogoutPath")
 	c.EndSessionURL = getString("endSessionUrl")
 	c.RefreshLeeway = getString("refreshLeeway")
+	c.DeviceAuthURL = getString("deviceAuthUrl")
 	if v, ok := raw["scopes"].([]any); ok {
 		for _, s := range v {
 			if s2, ok := s.(string); ok {

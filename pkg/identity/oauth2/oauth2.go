@@ -77,6 +77,11 @@ type Config struct {
 	// `endSessionUrl?id_token_hint=<idt>&post_logout_redirect_uri=<rd>`.
 	EndSessionURL string `yaml:"endSessionUrl" json:"endSessionUrl"`
 
+	// DeviceAuthURL is the IdP's RFC 8628 device authorization endpoint.
+	// When set, /oauth2/device/start and /oauth2/device/poll are
+	// available. The token exchange reuses [Config.TokenURL].
+	DeviceAuthURL string `yaml:"deviceAuthUrl" json:"deviceAuthUrl"`
+
 	// RefreshLeeway is how close to access-token expiry we proactively
 	// rotate via the refresh_token. Empty/zero disables refresh.
 	RefreshLeeway string `yaml:"refreshLeeway" json:"refreshLeeway"`
@@ -107,6 +112,7 @@ type identifier struct {
 	postLogout     string
 	endSessionURL  string
 	refreshLeeway  time.Duration
+	deviceAuthURL  string
 
 	oauth      *oauth2.Config
 	keyset     jwk.Set
@@ -226,6 +232,7 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 		postLogout:     cfg.PostLogoutPath,
 		endSessionURL:  cfg.EndSessionURL,
 		refreshLeeway:  leeway,
+		deviceAuthURL:  cfg.DeviceAuthURL,
 		oauth: &oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,

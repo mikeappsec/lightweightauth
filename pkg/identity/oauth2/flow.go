@@ -29,6 +29,10 @@ func (i *identifier) HTTPHandler() http.Handler {
 	mux.HandleFunc(prefix+"/logout", i.handleLogout)
 	mux.HandleFunc(prefix+"/userinfo", i.handleUserInfo)
 	mux.HandleFunc(prefix+"/refresh", i.handleRefresh)
+	if i.deviceAuthURL != "" {
+		mux.HandleFunc(prefix+"/device/start", i.handleDeviceStart)
+		mux.HandleFunc(prefix+"/device/poll", i.handleDevicePoll)
+	}
 	return mux
 }
 

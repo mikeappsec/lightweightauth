@@ -14,6 +14,7 @@ import (
 	_ "github.com/yourorg/lightweightauth/pkg/authz/opa"
 	_ "github.com/yourorg/lightweightauth/pkg/authz/rbac"
 	_ "github.com/yourorg/lightweightauth/pkg/identity/apikey"
+	_ "github.com/yourorg/lightweightauth/pkg/identity/dpop"
 	_ "github.com/yourorg/lightweightauth/pkg/identity/hmac"
 	_ "github.com/yourorg/lightweightauth/pkg/identity/introspection"
 	_ "github.com/yourorg/lightweightauth/pkg/identity/jwt"
