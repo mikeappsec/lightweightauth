@@ -1,0 +1,27 @@
+# buf module configuration for the LightweightAuth proto surface.
+# See DESIGN.md §1 (Door B) and §7 (M8).
+#
+# Code is generated with `buf generate` (see buf.gen.yaml). The
+# generated *.pb.go / *_grpc.pb.go files are committed alongside the
+# .proto sources so consumers don't need a proto toolchain installed.
+version: v2
+modules:
+  - path: api/proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Single-package module; the file path mirrors the package, so the
+    # standard "DIRECTORY_SAME_PACKAGE" rule trips on our doc.go.
+    - PACKAGE_DIRECTORY_MATCH
+    # We deliberately call the service `Auth`, not `AuthService` (the
+    # generated client is `authv1.NewAuthClient`, which reads better).
+    - SERVICE_SUFFIX
+    # Authorize and AuthorizeStream intentionally share the same
+    # request/response messages — see DESIGN.md §1 (Door B).
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE
