@@ -114,5 +114,13 @@ func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
 		PositiveTTL: pos,
 		NegativeTTL: neg,
 		KeyFields:   spec.Key,
+		Backend: cache.BackendSpec{
+			Type:      spec.Backend,
+			Addr:      spec.Addr,
+			Username:  spec.Username,
+			Password:  spec.Password,
+			KeyPrefix: spec.KeyPrefix,
+			TLS:       spec.TLS,
+		},
 	})
 }

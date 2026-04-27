@@ -56,4 +56,15 @@ type CacheSpec struct {
 	TTL string `json:"ttl,omitempty" yaml:"ttl,omitempty"`
 	// NegativeTTL is how long deny decisions are cached (default 5s).
 	NegativeTTL string `json:"negativeTtl,omitempty" yaml:"negativeTtl,omitempty"`
+
+	// Backend selects the storage layer. Empty / "memory" uses the
+	// in-process LRU (default). "valkey" turns on the shared backend
+	// described in DESIGN.md §5; the additional fields below are
+	// forwarded to that backend's factory.
+	Backend   string `json:"backend,omitempty" yaml:"backend,omitempty"`
+	Addr      string `json:"addr,omitempty" yaml:"addr,omitempty"`
+	Username  string `json:"username,omitempty" yaml:"username,omitempty"`
+	Password  string `json:"password,omitempty" yaml:"password,omitempty"`
+	KeyPrefix string `json:"keyPrefix,omitempty" yaml:"keyPrefix,omitempty"`
+	TLS       bool   `json:"tls,omitempty" yaml:"tls,omitempty"`
 }

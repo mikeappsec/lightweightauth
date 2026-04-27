@@ -12,7 +12,11 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/composite"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/cel"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/opa"
+	_ "github.com/mikeappsec/lightweightauth/pkg/authz/openfga"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/rbac"
+
+	// Register the shared cache backend(s) for their side-effect.
+	_ "github.com/mikeappsec/lightweightauth/internal/cache/valkey"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/apikey"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/dpop"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/hmac"
