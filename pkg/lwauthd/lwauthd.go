@@ -34,6 +34,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
+	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	"github.com/mikeappsec/lightweightauth/internal/config"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/internal/server"
@@ -152,9 +153,11 @@ func Run(opts Options) error {
 	}
 	grpcSrv := grpc.NewServer()
 	authv3.RegisterAuthorizationServer(grpcSrv, server.NewExtAuthzServer(holder))
+	authv1.RegisterAuthServer(grpcSrv, server.NewNativeAuthServer(holder))
 
 	hs := health.NewServer()
 	hs.SetServingStatus("envoy.service.auth.v3.Authorization", healthpb.HealthCheckResponse_SERVING)
+	hs.SetServingStatus("lightweightauth.v1.Auth", healthpb.HealthCheckResponse_SERVING)
 	healthpb.RegisterHealthServer(grpcSrv, hs)
 
 	reflection.Register(grpcSrv)

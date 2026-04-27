@@ -8,7 +8,7 @@ syntax = "proto3";
 
 package lightweightauth.plugin.v1;
 
-option go_package = "github.com/yourorg/lightweightauth/api/proto/lightweightauth/plugin/v1;pluginv1";
+option go_package = "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/plugin/v1;pluginv1";
 
 import "lightweightauth/v1/auth.proto";
 

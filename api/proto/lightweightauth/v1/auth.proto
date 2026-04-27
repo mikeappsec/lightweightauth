@@ -7,7 +7,7 @@ syntax = "proto3";
 
 package lightweightauth.v1;
 
-option go_package = "github.com/yourorg/lightweightauth/api/proto/lightweightauth/v1;authv1";
+option go_package = "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1;authv1";
 
 service Auth {
   // One-shot decision (most common path).

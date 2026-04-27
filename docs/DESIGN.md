@@ -978,14 +978,77 @@ by dependency, not by calendar.
 
 ### Next
 
-10. **M8 – Native gRPC (Door B) + SDKs.**
-   - Implement `lightweightauth.v1.Auth` (`Authorize` unary +
-     `AuthorizeStream` for per-message stream re-checks) on the same
-     `:9001` listener as Door A.
-   - Tiny **Go interceptor SDK** in core (`pkg/client/go`) for callers
-     that want native gRPC instead of ext_authz.
-   - Conformance tests proving Door A and Door B reach identical
-     `Decision`s for the same input.
+10. **M8 – Native gRPC (Door B) + SDKs ✅** _(branch
+    `m8-native-grpc-and-sdks`)_.
+
+    *Native `lightweightauth.v1.Auth` service* (`internal/server/native.go`).
+    `Authorize` (unary, the common case) and `AuthorizeStream`
+    (bidirectional, for long-lived sessions / WebSocket re-auth) land on
+    the same `:9001` listener that already serves Door A
+    (`envoy.service.auth.v3.Authorization`); both are registered against
+    the same `EngineHolder` so a config swap takes effect on both
+    surfaces atomically. The native adapter is ~150 LOC mirroring
+    `internal/server/grpc.go`: a `requestFromAuthorize` that produces
+    the same `*module.Request` ext_authz emits, plus a
+    `responseFromDecision` that returns `Allow=false` in the body
+    (rather than via gRPC status) so callers can read both the
+    `deny_reason` and any `response_headers` in one round trip.
+    `AuthorizeStream` is independent — a deny on message N does NOT
+    close the stream; the *caller* decides when to disconnect.
+    Streamed health is advertised as `lightweightauth.v1.Auth` in the
+    standard `grpc.health.v1` service.
+
+    *Generated proto bindings* (`api/proto/lightweightauth/v1/*.pb.go`,
+    `*_grpc.pb.go`). Generated with **buf** (`buf.yaml`,
+    `buf.gen.yaml`, `make proto`); both the .proto and the generated
+    code are committed so consumers don't need a toolchain. The lint
+    config disables `SERVICE_SUFFIX` and the unique-RPC-message rules
+    so `Auth.Authorize` / `AuthorizeStream` can share
+    `Authorize{Request,Response}` (both directions of the bidi stream
+    use the same shape — that is the whole point).
+
+    *Go SDK* (`pkg/client/go`, importable as `lwauthclient`). Three
+    surfaces from one tiny client:
+    - `Client.Authorize(ctx, *Request) (*Response, error)` — direct
+      one-shot calls; `Request` and `Response` are SDK structs that
+      hide the generated proto types so callers don't depend on
+      `api/proto/...` directly.
+    - `Client.UnaryServerInterceptor()` — drop into
+      `grpc.NewServer(grpc.UnaryInterceptor(cli.UnaryServerInterceptor()))`
+      and every inbound RPC is authorized using `info.FullMethod` as
+      the resource, with incoming gRPC metadata flattened into headers.
+      Deny → `codes.PermissionDenied` (or `Unauthenticated` for 401),
+      with the lwauth `deny_reason` as the gRPC status message.
+    - `Client.HTTPMiddleware(next)` — net/http middleware. Allow →
+      `UpstreamHeaders` are stamped on the inbound request before
+      `next` sees them; deny → `http_status` from lwauth + body
+      carrying `deny_reason`. `HTTPStatusOnError` (default 503) is the
+      single knob for fail-closed-vs-open when lwauth itself is
+      unreachable; we ship 503 so the default is conservative.
+
+    *Conformance tests* (`internal/server/conformance_test.go`). One
+    `EngineHolder` serves both Door A (ext_authz) and Door B (native)
+    on a single bufconn server; a fixture table walks
+    `{admin allowed, viewer denied, missing credential}` and asserts
+    the allow/deny verdict and HTTP status hint match across the two
+    doors. We deliberately don't compare deny reason strings byte-for-
+    byte (Door A's reason is the body Envoy sends to the client; Door
+    B's is consumed programmatically), but both originate from the
+    same `Decision.Reason`.
+
+    *Outbound helper for service-to-service callers* (`pkg/clientauth`).
+    The M6 deferral: this is the *caller* side of the `jwt` identifier.
+    A small RFC 6749 §4.4 client-credentials helper —
+    `NewClientCredentialsSource(cfg)` returns a goroutine-safe Source
+    with lazy fetch + automatic refresh (configurable `Leeway`,
+    default 30 s). `Source.HTTPClient(ctx)` wraps any
+    `*http.Client` with `Authorization: Bearer <tok>` injection on
+    every outbound request, so a service can call an
+    lwauth-protected upstream in one line. `AuthStyle` covers the
+    three common shapes: HTTP Basic, body params, or auto-detect with
+    Basic→body fallback on 401 (Auth0 / Keycloak / generic OAuth 2.0
+    parity). mTLS-to-IdP is supported by passing a pre-configured
+    `HTTPClient` so `ClientSecret` can be empty.
 
 11. **M9 – Observability + audit.**
     - Prometheus metrics surface: `lwauth_cache_*`, `lwauth_decision_*`
