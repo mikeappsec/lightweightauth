@@ -31,6 +31,7 @@ the `pkg/module` interfaces these implement.
 | `mtls` | [mtls.md](mtls.md) | Service-to-service identity via client certificates / SPIFFE. |
 | `hmac` | [hmac.md](hmac.md) | AWS-SigV4-style request signatures (CLI tools, webhooks). |
 | `dpop` | [dpop.md](dpop.md) | RFC 9449 sender-constrained bearers (wraps another identifier). |
+| `grpc-plugin` | [plugin-grpc.md](plugin-grpc.md) | Out-of-process plugin (also valid under `authorizers:` and `mutators:`). |
 
 ## Authorizers
 

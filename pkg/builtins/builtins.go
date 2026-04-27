@@ -26,4 +26,9 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/oauth2"
 	_ "github.com/mikeappsec/lightweightauth/pkg/mutator/headers"
 	_ "github.com/mikeappsec/lightweightauth/pkg/mutator/jwtissue"
+
+	// M10: out-of-process plugin host. Registers the type "grpc-plugin"
+	// under all three module kinds so configs can pull in remote
+	// identifiers / authorizers / mutators identically to built-ins.
+	_ "github.com/mikeappsec/lightweightauth/pkg/plugin/grpc"
 )
