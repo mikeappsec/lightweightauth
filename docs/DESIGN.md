@@ -344,7 +344,7 @@ identifiers:
 
 We'll define the plugin proto and the adapter early (so the pipeline
 interface stays plugin-friendly), but defer the *plugin host runtime*
-(lifecycle: spawning, health-checking, restarting) to milestone **M7**.
+(lifecycle: spawning, health-checking, restarting) to milestone **M10**.
 Until then, users who want this can run their plugin as a separate Pod
 and point lwauth at it via a static address.
 
@@ -726,7 +726,7 @@ Three distinct caches, each with a different invalidation story:
 |--------|-------|
 | **In-house `lru`** (`internal/cache/lru_internal.go`) | `container/list` + `map`, ~80 LOC, generic, eviction callback. **Default in-process backend.** Per-entry TTL is enforced by the wrapping `cache.LRU` so we don't need an "expirable" variant. |
 | **`ristretto`** | Higher throughput, admission policy; more complex. Use if benchmarks demand it. |
-| **`groupcache` / Redis** | Needed only when running many lwauth replicas and you want shared cache. Add as a `cache.Backend` plugin (M7). |
+| **Valkey (`valkey-io/valkey-go`) / Redis** | Shared `cache.Backend` for multi-replica decision / introspection / DPoP-replay caches; landed in M7 (`internal/cache/valkey`). Same client also speaks Redis 7.x. `groupcache` rejected (no `Delete` → no revocation; upstream in maintenance). |
 | **`singleflight.Group`** | Mandatory in front of every cache to coalesce stampedes. Cheap, do this from day one. |
 
 ### Negative caching
@@ -928,14 +928,55 @@ by dependency, not by calendar.
    when no `DPoP` header is present, preserving the chained-identifier
    story.
 
-### Next
+9. **M7 – ReBAC + shared cache backend ✅** _(branch
+   `m7-rebac-and-shared-cache`)_.
 
-9. **M7 – ReBAC + shared cache backend.**
-   - First-class **OpenFGA / SpiceDB** authorizer adapter (Zanzibar-style
-     ReBAC), behind the composite authorizer from M5 so it composes
-     with RBAC/OPA.
-   - Pluggable `cache.Backend` with a Redis / groupcache implementation
-     for multi-replica decision-cache sharing.
+   *OpenFGA adapter authorizer* (`pkg/authz/openfga`) — registered as
+   `openfga`. Adapts an external OpenFGA Pod (operator-run alongside
+   lwauth) by mapping each authorize call to a `POST
+   {apiUrl}/stores/{storeId}/check` with a `tuple_key:{user, relation,
+   object}` body. The three tuple components are produced by Go
+   `text/template` snippets evaluated against `{Identity, Request}`,
+   so AuthConfigs derive them from request metadata
+   (`user: "user:{{ .Identity.Subject }}"`,
+   `relation: "{{ .Request.Method | lower }}"`,
+   `object: "doc:{{ index .Request.PathParts 1 }}"`). Empty rendered
+   tuples deny without a network round-trip; non-2xx responses surface
+   as `module.ErrUpstream` (so M5's negative cache skips them);
+   per-request timeout (`timeout`, default 2 s); optional
+   `apiToken` becomes `Authorization: Bearer …`; optional
+   `authorizationModelId` pins a model version. Composes under the
+   M5 `composite` authorizer — the recommended pattern is
+   `anyOf: [rbac, openfga]` so cheap role checks short-circuit before
+   the network hop. SpiceDB stays a future adapter at the same
+   surface; we picked OpenFGA first because of the simpler HTTP
+   `Check` API and CNCF sandbox status.
+
+   *Shared cache backend — Valkey* (`internal/cache/valkey`). New
+   `cache.BackendSpec`/`BackendFactory`/`RegisterBackend` registry
+   (`internal/cache/registry.go`) lets `AuthConfig.cache.backend`
+   select between `memory` (in-process LRU, default) and `valkey`
+   without touching the `Decision` cache call sites. The Valkey
+   backend uses `github.com/valkey-io/valkey-go` (auto-pipelining
+   RESP3 client by the Valkey core team) and binds to the standard
+   `cache.Backend` interface (`Get/Set/Delete` with TTL). `keyPrefix`
+   isolates multiple AuthConfigs sharing one Valkey deployment;
+   factory pings on construction so misconfiguration surfaces at
+   `AuthConfig` compile time. We chose **Valkey over Redis** because
+   it is BSD-3 (Apache-2.0-friendly) post the Redis Inc.
+   re-licensing, is wire-compatible (RESP2/3 unchanged), and is the
+   default in-cloud option (AWS ElastiCache for Valkey, GCP
+   Memorystore for Valkey). The same backend connects to plain Redis
+   if an operator prefers it. `groupcache` is deferred — its lack of
+   `Delete` makes revocation impossible, and the upstream is in
+   maintenance mode. Tests use `github.com/alicebob/miniredis/v2`
+   (RESP2-compatible) with `DisableCache: true` + `AlwaysRESP2: true`
+   on the client; production Valkey speaks RESP3 so client-side
+   tracking stays available there. The `dpop` replay cache from M6.5
+   already routes through `cache.Backend`, so opting into Valkey
+   makes it shared across replicas for free.
+
+### Next
 
 10. **M8 – Native gRPC (Door B) + SDKs.**
    - Implement `lightweightauth.v1.Auth` (`Authorize` unary +

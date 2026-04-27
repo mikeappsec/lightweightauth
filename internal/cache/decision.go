@@ -47,6 +47,10 @@ type DecisionOptions struct {
 	//   "header:<Name>", "claim:<Name>"
 	// Unknown values are skipped so future fields don't break old configs.
 	KeyFields []string
+	// Backend optionally selects a non-default cache backend (e.g.
+	// shared "valkey" for multi-replica deployments). Empty Backend.Type
+	// falls back to the in-process LRU "memory" backend.
+	Backend BackendSpec
 }
 
 // NewDecision returns a Decision cache or nil if disabled.
@@ -61,7 +65,11 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 		o.NegativeTTL = 5 * time.Second
 	}
 	stats := &Stats{}
-	backend, err := NewLRU(o.Size, 0, stats)
+	spec := o.Backend
+	if spec.Size == 0 {
+		spec.Size = o.Size
+	}
+	backend, err := BuildBackend(spec, stats)
 	if err != nil {
 		return nil, fmt.Errorf("decision cache: %w", err)
 	}
