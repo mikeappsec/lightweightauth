@@ -800,9 +800,6 @@ by dependency, not by calendar.
    reload is the M4 mechanism. Pinned to `controller-runtime v0.21.0`
    + `k8s.io/* v0.34.1` (newer combinations broke the cache build).
 
-### Next
-
-
 6. **M5 – Policy expansion + decision cache ✅** — embedded **OPA/Rego**
    authorizer (`pkg/authz/opa`, prepared queries on the hot path);
    **CEL** authorizer (`pkg/authz/cel`, `google/cel-go`, bool-typed
@@ -824,10 +821,6 @@ by dependency, not by calendar.
    observability counters (`Stats.Hits` / `.Misses` / `.Evictions`)
    wired through every backend; the concrete Prometheus surface
    ships in M9.
-
-### Next
-
-
 
 7. **M6 – Remaining credential modules ✅** — shipped:
    - **OAuth 2.0 Bearer Token (RFC 6750)** — already covered by two
@@ -873,65 +866,78 @@ by dependency, not by calendar.
      `id_token_hint` + `post_logout_redirect_uri`), and a server-side
      `MemoryStore` (`pkg/session/memory.go`) implementing
      `session.Store` with 256-bit opaque SIDs and a TTL janitor.
-   - **OAuth2 Client Credentials Grant** (RFC 6749 §4.4) and
-     **OAuth2 Device Authorization Grant** (RFC 8628, sometimes
-     called "device-code flow" because the IdP issues a `device_code`
-     token to the device and a `user_code` for the human) are
-     deferred:
-     - *Client Credentials Grant* is the **caller** side of the `jwt`
-       identifier — services run the grant themselves to obtain a
-       bearer token and hand the result to lwauth, where `jwt`
-       already validates it. The only useful artefact is a small
-       outbound helper (`pkg/clientauth`) for service-to-service
-       callers of lwauth-protected upstreams; lands in **M8**
-       alongside the Door B SDKs.
-     - *Device Authorization Grant* is a new interactive flow shape
-       (parallel to auth-code) for CLIs / TVs / IoT. The IdP returns
-       a `device_code` (the long opaque token the device polls with)
-       plus a short human-typeable `user_code` and a
-       `verification_uri`. Lands as
-       `/oauth2/device/start` (returns `user_code` + URI for the
-       user) + `/oauth2/device/poll` (the device polls with the
-       `device_code` until the user completes verification) under
-       the existing `oauth2` mount in **M6.5** (small follow-up
-       release between M6 and M7). On success it produces the same
-       `Session` shape as the auth-code path, so refresh-token
-       rotation and RP-logout from M6 apply unchanged.
+   - **OAuth2 Client Credentials Grant** (RFC 6749 §4.4) is deferred
+     to **M8**: it is the **caller** side of the `jwt` identifier —
+     services run the grant themselves to obtain a bearer and hand
+     the result to lwauth, where `jwt` already validates it. The
+     only useful artefact is a small outbound helper
+     (`pkg/clientauth`) for service-to-service callers of
+     lwauth-protected upstreams; lands alongside the Door B SDKs.
+   - **OAuth2 Device Authorization Grant** (RFC 8628) and **DPoP**
+     (RFC 9449) are split into a small follow-up release **M6.5**
+     (see below) so M6 can ship without their additional surface.
 
-   **M6.5 also ships DPoP (RFC 9449) — sender-constrained
-   bearer tokens.** Today the `jwt` and `oauth2-introspection`
-   identifiers accept any bearer that validates, which means a
-   leaked token is a usable token. DPoP fixes that by binding the
-   token to a client-held key: the IdP embeds the key thumbprint
-   in `cnf.jkt`, and every request carries a `DPoP` proof header
-   (a short JWT signed by the same key, asserting the HTTP
-   method, URL, and a fresh `jti`). Concrete deliverables:
-   - new `pkg/identity/dpop` middleware-style verifier that wraps
-     the `jwt` / `oauth2-introspection` identifiers — verifies the
-     proof's signature against the embedded JWK, checks `htm`
-     equals the request method, `htu` equals the request URL,
-     `iat` is within a small skew, and `ath` matches
-     `base64url(sha256(access_token))` per §4.3.
-   - per-instance `jti` replay cache (LRU, default 10k entries,
-     TTL = `iat + skew`) plumbed through the same
-     `internal/cache` surface as decision/introspection caches so
-     M7's Redis backend slots in for free.
-   - confirmation-claim check: when the access token carries
-     `cnf.jkt`, the proof's JWK thumbprint MUST equal it
-     (RFC 7638 thumbprint).
-   - opt-in via a `dpop: { required: true, skew: 30s }` block on
-     the wrapped identifier; absence of `DPoP` header on a
-     non-required identifier just degrades to plain bearer
-     semantics (preserves the chained-identifier story).
+8. **M6.5 – Device Authorization Grant + DPoP ✅** _(branch
+   `m6.5-device-grant-and-dpop`)_.
 
-8. **M7 – ReBAC + shared cache backend.**
+   *Device Authorization Grant (RFC 8628).* New interactive flow shape
+   parallel to auth-code, for CLIs / TVs / IoT. Mounted under the
+   existing `oauth2` HTTP surface (gated by `deviceAuthUrl` so the
+   routes don't appear when the IdP doesn't support the grant):
+   - `/oauth2/device/start` — proxies to the IdP's device authorization
+     endpoint and returns the JSON body verbatim
+     (`device_code`, `user_code`, `verification_uri`,
+     `verification_uri_complete`, `expires_in`, `interval`).
+   - `/oauth2/device/poll` — the caller POSTs `{ device_code }` (JSON
+     or form-urlencoded). lwauth exchanges via
+     `urn:ietf:params:oauth:grant-type:device_code` and returns:
+     - 200 + `Set-Cookie` + `{subject, email, accessTokenExpiry}` on
+       success (mints the same `Session` shape as `/oauth2/callback`),
+     - 202 + `{error: authorization_pending|slow_down}` for non-terminal
+       polls so vanilla HTTP clients don't throw on a 4xx,
+     - 4xx with the IdP's body for terminal errors (`expired_token`,
+       `access_denied`).
+     Refresh-token rotation and RP-initiated logout from M6 apply
+     unchanged.
+
+   *DPoP (RFC 9449) — sender-constrained bearers.* New
+   `pkg/identity/dpop` wrapper-style identifier registered as `dpop`.
+   Resolves its inner identifier via `module.BuildIdentifier` so it
+   composes with `jwt`, `oauth2-introspection`, or any future bearer
+   verifier. Per-request verification (RFC 9449 §4.3):
+   - protected header carries `typ=dpop+jwt` and an embedded public
+     `jwk`; signature verifies under that JWK,
+   - asymmetric-only `alg` allow-list (RS/PS/ES/EdDSA) — HMAC and
+     `none` are rejected before signature work,
+   - `htm` matches the request method (case-insensitive),
+   - `htu` matches host + path of the request, ignoring query and
+     fragment per §4.3 step 9; scheme cross-checked against
+     `X-Forwarded-Proto` when present,
+   - `iat` within ±`skew` (default 30 s),
+   - `jti` not seen recently — replay cache backed by
+     `internal/cache.LRU` (default 10 000 entries, TTL = 2·skew),
+     so M7's Redis backend slots in for free,
+   - confirmation-claim binding: when the inner identity surfaces
+     `cnf.jkt` (RFC 7800), it MUST equal the RFC 7638 SHA-256
+     thumbprint of the embedded JWK,
+   - access-token binding: when the request carries a bearer (or
+     `DPoP`-typed) `Authorization` header, the proof's `ath` claim
+     MUST equal `base64url(sha256(token))`.
+   Opt-in via `dpop: { required: true, skew: 30s }` on the wrapped
+   identifier; `required: false` falls through to the inner identifier
+   when no `DPoP` header is present, preserving the chained-identifier
+   story.
+
+### Next
+
+9. **M7 – ReBAC + shared cache backend.**
    - First-class **OpenFGA / SpiceDB** authorizer adapter (Zanzibar-style
      ReBAC), behind the composite authorizer from M5 so it composes
      with RBAC/OPA.
    - Pluggable `cache.Backend` with a Redis / groupcache implementation
      for multi-replica decision-cache sharing.
 
-9. **M8 – Native gRPC (Door B) + SDKs.**
+10. **M8 – Native gRPC (Door B) + SDKs.**
    - Implement `lightweightauth.v1.Auth` (`Authorize` unary +
      `AuthorizeStream` for per-message stream re-checks) on the same
      `:9001` listener as Door A.
@@ -940,7 +946,7 @@ by dependency, not by calendar.
    - Conformance tests proving Door A and Door B reach identical
      `Decision`s for the same input.
 
-10. **M9 – Observability + audit.**
+11. **M9 – Observability + audit.**
     - Prometheus metrics surface: `lwauth_cache_*`, `lwauth_decision_*`
       (latency histogram split by allow/deny + authorizer), per-tenant
       labels.
@@ -950,7 +956,7 @@ by dependency, not by calendar.
       `Identity.Source`, tenant, decision, latency, deny reason).
     - `lwauthctl audit` to tail a running instance.
 
-11. **M10 – Sibling repos + plugin runtime.**
+12. **M10 – Sibling repos + plugin runtime.**
     - Bootstrap `lightweightauth-proxy` (Mode B reverse proxy importing
       the core as a library) with its own Dockerfile + Helm chart.
     - Bootstrap `lightweightauth-idp` (OIDC issuer, token endpoint,
@@ -962,14 +968,14 @@ by dependency, not by calendar.
       (spawn / health-check / restart), `grpc-plugin` adapter under the
       `plugin/v1` proto.
 
-12. **M11 – Multi-tenancy hardening + xDS push.**
+13. **M11 – Multi-tenancy hardening + xDS push.**
     - Replace ConfigMap+SIGHUP with a controller-pushed gRPC stream
       (xDS-style) for clusters with many `AuthConfig`s.
     - Per-tenant rate limits (token-bucket).
     - Per-tenant key-material isolation; cluster-scoped
       `IdentityProvider` with tenant overrides.
 
-13. **M12 – Supply-chain hardening.**
+14. **M12 – Supply-chain hardening.**
     - Docker Hardened Image bases (`dhi.io/golang`, `dhi.io/alpine`,
       `dhi.io/envoy`).
     - Cosign-signed releases verified by Kyverno / Sigstore policy.
@@ -978,7 +984,7 @@ by dependency, not by calendar.
     - Deferred from M2 to keep the early build pipeline accessible to
       contributors without dhi.io entitlement.
 
-14. **M13 – v1.0.**
+15. **M13 – v1.0.**
     - `pkg/module` API frozen under SemVer; CRDs promoted from
       `v1alpha1` to `v1`.
     - Plugin contract `plugin/v1` declared stable; future evolution
@@ -988,11 +994,11 @@ by dependency, not by calendar.
 
 ### Experimental / post-v1
 
-15. **eBPF data plane** in the separate `lightweightauth-ebpf` repo
+16. **eBPF data plane** in the separate `lightweightauth-ebpf` repo
     (Mode C, §3). Linux-only, `CAP_BPF`, kernel ≥ 5.10. Stays
     experimental until at least three production users report stable
     operation.
-16. **WASM plugins** via `wazero`. Defer until the auth-library
+17. **WASM plugins** via `wazero`. Defer until the auth-library
     ecosystem in WASM matures (§2).
 
 ### Explicit non-goals
