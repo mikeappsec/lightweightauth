@@ -38,6 +38,8 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/config"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 )
 
 // Options configure a Run invocation.
@@ -118,6 +120,25 @@ func Run(opts Options) error {
 	default:
 		return errors.New("lwauthd: must set either ConfigPath or WatchNamespace")
 	}
+
+	// Observability defaults (M9).
+	//
+	// Audit: emit one JSON line per terminal decision through the same
+	// slog logger Run uses, so audit + operational logs land on the same
+	// transport (stderr by default; operators redirect with a Handler).
+	// Operators who want a separate audit sink call audit.SetDefault
+	// from their main() before invoking Run.
+	if audit.Default() == audit.Discard {
+		audit.SetDefault(audit.NewSlogSink(log))
+	}
+	// Cache stats: bind decision-cache live counters to Prometheus once
+	// at startup. The closures dereference the current Engine on every
+	// scrape, so hot-reload replaces the underlying *cache.Stats
+	// transparently. Counters are monotonic across reloads from the
+	// scraper's POV — the kernel of an ENG hot-swap doesn't reset
+	// previously observed values because we register CounterFuncs that
+	// remember nothing themselves.
+	registerDecisionCacheStats(holder)
 
 	errCh := make(chan error, 3)
 
@@ -208,4 +229,57 @@ func Main() {
 		slog.Error("lwauthd", "err", err)
 		os.Exit(1)
 	}
+}
+
+// registerDecisionCacheStats binds the live atomic counters of the
+// engine's decision cache to the process-wide metrics recorder.
+//
+// It is called once at startup. The closures dereference holder.Load()
+// on every scrape, so an Engine swap (CRD reconcile, fsnotify reload)
+// updates what Prometheus reads without re-registering. When no engine
+// is loaded yet, or caching is disabled in this AuthConfig, the
+// closures return 0 and the metric is harmless.
+//
+// Registration is idempotent across Run invocations in the same
+// process: if MustRegister panics with AlreadyRegisteredError we ignore
+// the second registration. Tests that exercise Run repeatedly need
+// this.
+func registerDecisionCacheStats(h *server.EngineHolder) {
+	read := func(get func(*pipeline.Engine) uint64) func() uint64 {
+		return func() uint64 {
+			eng := h.Load()
+			if eng == nil {
+				return 0
+			}
+			return get(eng)
+		}
+	}
+	defer func() {
+		// MustRegister panics on duplicate. Tests boot Run repeatedly
+		// against the default registry; recover so they don't crash.
+		_ = recover()
+	}()
+	metrics.Default().RegisterCacheStats("decision",
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheStats()
+			if s == nil {
+				return 0
+			}
+			return s.Hits.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheStats()
+			if s == nil {
+				return 0
+			}
+			return s.Misses.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheStats()
+			if s == nil {
+				return 0
+			}
+			return s.Evictions.Load()
+		}),
+	)
 }
