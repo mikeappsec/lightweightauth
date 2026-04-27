@@ -11,9 +11,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/tracing"
 )
 
 // Engine is the per-request entry point. Construct via New and never
@@ -70,39 +78,167 @@ func New(o Options) (*Engine, error) {
 	}, nil
 }
 
+// DecisionCacheStats returns the live atomic counters of the engine's
+// decision cache, or nil if caching is disabled. Used by the
+// observability layer to surface cache hits/misses/evictions as
+// Prometheus CounterFunc metrics — the values are read at scrape time
+// so a hot-reload that builds a new cache simply updates what the
+// closure dereferences.
+func (e *Engine) DecisionCacheStats() *cache.Stats {
+	if e == nil || e.decisionCache == nil {
+		return nil
+	}
+	return e.decisionCache.Stats()
+}
+
 // Evaluate runs the full identify → authorize → mutate pipeline.
 //
 // On allow, the returned Decision has Allow=true and any headers the
 // mutators added. On deny, Decision.Allow=false and Status carries the
 // HTTP status the server layer should surface (401/403/503).
+//
+// Observability (M9): every call emits one OTel span tree, one
+// lwauth_decisions_total + lwauth_decision_latency_seconds sample, and
+// one audit.Event via the package defaults. All three are no-ops when
+// not configured, so the cost is a few atomic loads on the hot path.
 func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decision, *module.Identity, error) {
+	start := time.Now()
 	if r.Context == nil {
 		r.Context = make(map[string]any)
 	}
 
-	id, err := e.identify(ctx, r)
+	ctx, span := tracing.Tracer().Start(ctx, "pipeline.Evaluate")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("lwauth.method", r.Method),
+		attribute.String("lwauth.host", r.Host),
+		attribute.String("lwauth.path", r.Path),
+		attribute.String("lwauth.tenant", r.TenantID),
+	)
+
+	dec, id, cacheHit, evalErr := e.evaluate(ctx, r)
+	e.report(ctx, r, id, dec, cacheHit, evalErr, time.Since(start), span)
+	return dec, id, evalErr
+}
+
+// evaluate is the stage runner; Evaluate wraps it with observability
+// emission. Returns (decision, identity, cacheHit, error).
+func (e *Engine) evaluate(ctx context.Context, r *module.Request) (*module.Decision, *module.Identity, bool, error) {
+	id, err := e.identifyWithSpan(ctx, r)
 	if err != nil {
-		return denyFromError(err), nil, err
+		return denyFromError(err), nil, false, err
 	}
 	r.Context["identity"] = id
 
-	dec, _, err := e.runAuthorize(ctx, r, id)
+	dec, hit, err := e.runAuthorize(ctx, r, id)
 	if err != nil {
-		return denyFromError(err), id, err
+		return denyFromError(err), id, false, err
 	}
 	if dec == nil || !dec.Allow {
 		if dec == nil {
 			dec = &module.Decision{Allow: false, Status: 403, Reason: "denied"}
 		}
-		return dec, id, nil
+		return dec, id, hit, nil
 	}
 
 	for _, m := range e.mutators {
-		if err := m.Mutate(ctx, r, id, dec); err != nil {
-			return denyFromError(err), id, err
+		if err := e.mutateWithSpan(ctx, m, r, id, dec); err != nil {
+			return denyFromError(err), id, hit, err
 		}
 	}
-	return dec, id, nil
+	return dec, id, hit, nil
+}
+
+// identifyWithSpan wraps identify with an OTel span.
+func (e *Engine) identifyWithSpan(ctx context.Context, r *module.Request) (*module.Identity, error) {
+	ctx, span := tracing.Tracer().Start(ctx, "pipeline.Identify")
+	defer span.End()
+	id, err := e.identify(ctx, r)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+	if id != nil {
+		span.SetAttributes(
+			attribute.String("lwauth.identity.subject", id.Subject),
+			attribute.String("lwauth.identity.source", id.Source),
+		)
+	}
+	return id, nil
+}
+
+// mutateWithSpan wraps a single mutator invocation with an OTel span.
+func (e *Engine) mutateWithSpan(ctx context.Context, m module.ResponseMutator, r *module.Request, id *module.Identity, d *module.Decision) error {
+	ctx, span := tracing.Tracer().Start(ctx, "pipeline.Mutate")
+	defer span.End()
+	span.SetAttributes(attribute.String("lwauth.mutator", m.Name()))
+	if err := m.Mutate(ctx, r, id, d); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+	return nil
+}
+
+// report fans out the terminal decision to metrics + audit + span.
+// Tolerates nil Recorder / Discard sink so tests and embedders pay nothing.
+func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Identity,
+	dec *module.Decision, cacheHit bool, evalErr error, latency time.Duration, span trace.Span) {
+
+	outcome := "allow"
+	switch {
+	case evalErr != nil:
+		outcome = "error"
+	case dec == nil || !dec.Allow:
+		outcome = "deny"
+	}
+
+	azName := ""
+	if e.authorizer != nil {
+		azName = e.authorizer.Name()
+	}
+
+	metrics.Default().ObserveDecision(outcome, azName, r.TenantID, latency)
+
+	subject, source := "", ""
+	if id != nil {
+		subject, source = id.Subject, id.Source
+	}
+	denyReason := ""
+	httpStatus := 200
+	if dec != nil {
+		denyReason = dec.Reason
+		if !dec.Allow {
+			httpStatus = dec.Status
+		}
+	}
+	if evalErr != nil && denyReason == "" {
+		denyReason = evalErr.Error()
+	}
+
+	audit.Default().Record(ctx, &audit.Event{
+		Timestamp:      time.Now().UTC(),
+		Tenant:         r.TenantID,
+		Subject:        subject,
+		IdentitySource: source,
+		Authorizer:     azName,
+		Decision:       outcome,
+		DenyReason:     denyReason,
+		HTTPStatus:     httpStatus,
+		Method:         r.Method,
+		Host:           r.Host,
+		Path:           r.Path,
+		LatencyMs:      float64(latency.Microseconds()) / 1000.0,
+		CacheHit:       cacheHit,
+		TraceID:        tracing.TraceIDFromContext(ctx),
+	})
+
+	span.SetAttributes(
+		attribute.String("lwauth.decision", outcome),
+		attribute.Bool("lwauth.cache_hit", cacheHit),
+	)
+	if evalErr != nil {
+		span.SetStatus(codes.Error, evalErr.Error())
+	}
 }
 
 // runAuthorize calls the configured authorizer, optionally going through
@@ -145,8 +281,10 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 			id, err := idr.Identify(ctx, r)
 			if err != nil {
 				if errors.Is(err, module.ErrNoMatch) {
+					metrics.Default().ObserveIdentifier(idr.Name(), "no_match")
 					continue
 				}
+				metrics.Default().ObserveIdentifier(idr.Name(), "error")
 				lastErr = err
 				continue
 			}
@@ -154,8 +292,10 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 				if id.Source == "" {
 					id.Source = idr.Name()
 				}
+				metrics.Default().ObserveIdentifier(idr.Name(), "match")
 				return id, nil
 			}
+			metrics.Default().ObserveIdentifier(idr.Name(), "no_match")
 		}
 		if lastErr != nil {
 			return nil, lastErr
@@ -168,8 +308,7 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 // that implement module.HTTPMounter. Used by the HTTP server to expose
 // flow endpoints like /oauth2/start. Each prefix appears at most once;
 // duplicates are caller-visible (returned as-is) so the server can warn.
-func (e *Engine) HTTPMounts() []module.HTTPMounter {
-	var out []module.HTTPMounter
+func (e *Engine) HTTPMounts() []module.HTTPMounter {	var out []module.HTTPMounter
 	walk := func(v any) {
 		if m, ok := v.(module.HTTPMounter); ok {
 			out = append(out, m)

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 )
 
 // HTTPHandler exposes the pipeline as a simple JSON HTTP API used by local
@@ -20,10 +21,10 @@ type HTTPHandler struct {
 	Engines *EngineHolder
 }
 
-// NewHTTPHandler returns an http.Handler with /v1/authorize, /healthz, and
-// /readyz registered. It also walks the current engine for module.HTTPMounter
-// implementations (e.g. the OAuth2 auth-code module) and mounts their
-// prefixes on the same mux.
+// NewHTTPHandler returns an http.Handler with /v1/authorize, /healthz,
+// /readyz, and /metrics registered. It also walks the current engine for
+// module.HTTPMounter implementations (e.g. the OAuth2 auth-code module)
+// and mounts their prefixes on the same mux.
 func NewHTTPHandler(h *EngineHolder) http.Handler {
 	mux := http.NewServeMux()
 	hh := &HTTPHandler{Engines: h}
@@ -36,6 +37,9 @@ func NewHTTPHandler(h *EngineHolder) http.Handler {
 		}
 		w.WriteHeader(200)
 	})
+	// Prometheus scrape surface. The Default recorder is process-wide
+	// so a hot-reload of the engine doesn't lose counters.
+	mux.Handle("/metrics", metrics.Default().Handler())
 	if eng := h.Load(); eng != nil {
 		seen := map[string]bool{}
 		for _, m := range eng.HTTPMounts() {

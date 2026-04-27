@@ -1056,15 +1056,77 @@ by dependency, not by calendar.
     parity). mTLS-to-IdP is supported by passing a pre-configured
     `HTTPClient` so `ClientSecret` can be empty.
 
-11. **M9 – Observability + audit.**
-    - Prometheus metrics surface: `lwauth_cache_*`, `lwauth_decision_*`
-      (latency histogram split by allow/deny + authorizer), per-tenant
-      labels.
-    - OpenTelemetry tracing with `traceparent` propagation from Envoy /
-      callers; spans on each pipeline stage.
-    - Structured audit log (one JSON line per decision, including
-      `Identity.Source`, tenant, decision, latency, deny reason).
-    - `lwauthctl audit` to tail a running instance.
+11. **M9 – Observability + audit ✅** _(branch
+    `m9-observability-and-audit`)_.
+
+    *Prometheus metrics surface* (`pkg/observability/metrics`). New
+    `Recorder` type with its own `*prometheus.Registry` so tests get an
+    isolated surface; the process-wide `Default()` is what the pipeline
+    reads on the hot path. Five emitters land at v1.0:
+
+    | Metric | Type | Labels |
+    |---|---|---|
+    | `lwauth_decisions_total` | counter | `outcome`, `authorizer`, `tenant` |
+    | `lwauth_decision_latency_seconds` | histogram (16 exp buckets, 100µs…3.3s) | `outcome`, `authorizer`, `tenant` |
+    | `lwauth_identifier_total` | counter | `identifier`, `outcome` (`match`/`no_match`/`error`) |
+    | `lwauth_cache_hits_total` / `_misses_total` / `_evictions_total` | `CounterFunc` | `cache` |
+
+    Cache stats use `prometheus.CounterFunc` so the registry pulls the
+    live `atomic.Uint64` values from `cache.Stats` at scrape time —
+    zero polling, and a hot-reload that builds a new `*cache.Decision`
+    just changes what the registered closure dereferences.
+    `pkg/lwauthd` calls `RegisterCacheStats("decision", ...)` once at
+    startup; the closure goes through `EngineHolder.Load()` so it
+    survives every reload. `MustRegister` panics on duplicate are
+    swallowed so tests can boot `Run` repeatedly. The `/metrics` route
+    is mounted on the existing HTTP listener
+    (`internal/server/http.go`) — no new port to expose.
+
+    *OpenTelemetry tracing* (`pkg/observability/tracing`). Thin wrapper
+    around the OTel global tracer. `pipeline.Engine.Evaluate` opens
+    `pipeline.Evaluate` as the outer span and `pipeline.Identify` /
+    `pipeline.Mutate` as children, with attributes
+    `lwauth.{method,host,path,tenant,decision,cache_hit,identity.subject,identity.source,mutator}`.
+    No exporter is wired in core: operators register their own
+    `TracerProvider` (OTLP HTTP/gRPC, stdout, …) at process start;
+    until they do, every span call resolves to the OTel no-op tracer
+    and costs ~5 ns. Trace context propagation in/out of lwauth is
+    expected via the standard `otelhttp` / `otelgrpc` server handlers,
+    which operators wrap around the listeners themselves.
+    `tracing.TraceIDFromContext(ctx)` exposes the W3C trace-id to the
+    audit sink so audit lines and distributed traces correlate.
+
+    *Structured audit log* (`pkg/observability/audit`). One `Event`
+    struct per terminal decision, emitted via a `Sink` interface. The
+    default `NewSlogSink` writes one JSON line per decision through a
+    caller-supplied `*slog.Logger` under the message `audit`, with
+    keys `ts, tenant, subject, identity_source, authorizer, decision,
+    deny_reason, http_status, method, host, path, latency_ms,
+    cache_hit, trace_id`. `audit.Discard` is the default until
+    `lwauthd.Run` upgrades it to a slog sink at startup. Headers and
+    request bodies are deliberately *not* logged — operators who need
+    them enable trace context propagation and read the request span
+    instead.
+
+    *`lwauthctl audit` subcommand*. Tail mode: reads JSONL audit
+    records from `--file` (default stdin), filters with
+    `--tenant`/`--subject`/`--decision`, and re-emits matching lines.
+    Pipes cleanly off `kubectl logs deploy/lwauth -f` since the JSONL
+    handler reuses the operational stdout. Non-audit slog records
+    (anything without `"msg":"audit"`) are skipped so a mixed stream
+    works. `--follow` keeps reading past EOF for tailing a rotated
+    file. The deferred admin-streaming endpoint becomes M14's
+    `POST /v1/admin/...` audit feed.
+
+    *Engine integration* lives in `internal/pipeline/engine.go`:
+    `Evaluate` is now `start := time.Now(); ... evaluate(); report()`
+    where `report` fans out to metrics/audit/span via the package
+    defaults. The hot-path overhead is one extra `time.Now()`, two
+    atomic loads (`metrics.Default()`, `audit.Default()`), and three
+    span-API calls — the OTel no-op tracer makes those last three
+    free until an operator wires a real provider. Identifier outcomes
+    are recorded inside `identify` so the `lwauth_identifier_total`
+    counter reflects every probe across `firstMatch`/`allMust`.
 
 12. **M10 – Sibling repos + plugin runtime.**
     - Bootstrap `lightweightauth-proxy` (Mode B reverse proxy importing
