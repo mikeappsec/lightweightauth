@@ -1,5 +1,16 @@
-# Default values for the lightweightauth chart. M0 ships a minimal,
-# unopinionated set; HPA, PDB, NetworkPolicy templates land in M4.
+# values.yaml — lightweightauth (M4)
+#
+# The chart now supports two operational modes:
+#
+#   1. file-mode (default): an inline AuthConfig is mounted via ConfigMap
+#      and reloaded on change (fsnotify, set `config.watch: true`).
+#   2. CRD-mode: the controller watches an AuthConfig CR in
+#      `controller.watchNamespace` and hot-swaps the engine on each
+#      reconcile. Enable with `controller.enabled: true` and install the
+#      CRDs with `crds.install: true`.
+#
+# Multi-replica is fine in either mode; M4 keeps a single-replica
+# file-replacement model (no leader election yet — that's M11).
 
 replicaCount: 2
 
@@ -8,14 +19,6 @@ image:
   tag: ""           # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 
-# Pull secrets needed when image.repository lives in an authenticated
-# registry. Reference an existing Secret already provisioned by your
-# secret manager (External Secrets, SealedSecrets, Vault Agent, ...):
-#
-#   imagePullSecrets:
-#     - name: my-pull-secret
-#
-# Hardened-image (dhi.io) support is deferred to a later milestone.
 imagePullSecrets: []
 
 service:
@@ -31,18 +34,70 @@ resources:
     cpu: 500m
     memory: 256Mi
 
+# ---------------------------------------------------------------------------
+# Configuration source
+# ---------------------------------------------------------------------------
 config:
   # Inline AuthConfig YAML mounted at /etc/lwauth/config.yaml.
-  # Replace with a CRD-based source once the controller ships (M4).
+  # Ignored when controller.enabled is true.
   inline: |
     identifiers: []
     authorizers: []
+  # Reload on ConfigMap change via fsnotify (file-mode only).
+  watch: true
 
+# ---------------------------------------------------------------------------
+# CRD installation
+# ---------------------------------------------------------------------------
 crds:
-  install: false   # true once the controller ships in M4
+  install: true
+  keep: true
 
+# ---------------------------------------------------------------------------
+# Controller (CRD-mode)
+# ---------------------------------------------------------------------------
 controller:
-  enabled: false   # M4
+  enabled: false
+  watchNamespace: ""
+  authConfigName: default
 
+# ---------------------------------------------------------------------------
+# ServiceAccount + RBAC
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+# ---------------------------------------------------------------------------
+# Scaling + availability
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: ""
+
+# ---------------------------------------------------------------------------
+# Network policy
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  allowedFrom:
+    namespaceSelectors: []
+    podSelectors: []
+
+# ---------------------------------------------------------------------------
+# Metrics + observability
+# ---------------------------------------------------------------------------
 metrics:
+  enabled: true
   serviceMonitor: false

@@ -1,0 +1,38 @@
+{{- if and .Values.rbac.create .Values.controller.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "lwauth.fullname" . }}
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["lightweightauth.io"]
+    resources: ["authconfigs", "authpolicies", "identityproviders"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["lightweightauth.io"]
+    resources: ["authconfigs/status", "authpolicies/status", "identityproviders/status"]
+    verbs: ["get", "update", "patch"]
+  # Leader election is M11; keep the lease verbs ready so we can flip
+  # the switch without re-issuing RBAC.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lwauth.fullname" . }}
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "lwauth.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lwauth.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

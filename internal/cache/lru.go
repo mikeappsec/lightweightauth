@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	lru "github.com/hashicorp/golang-lru/v2/expirable"
 )
 
-// LRU is an in-process Backend backed by an expirable LRU cache.
+// LRU is an in-process Backend backed by a small in-house LRU
+// (see [lru]).
 //
 // It is the default implementation used by the JWKS, introspection, and
 // decision caches when no external backend (Redis, groupcache, ...) is
 // configured. Safe for concurrent use.
 type LRU struct {
-	c     *lru.LRU[string, lruEntry]
-	stats *Stats
+	c          *lru[lruEntry]
+	defaultTTL time.Duration
+	stats      *Stats
 }
 
 type lruEntry struct {
@@ -34,8 +34,11 @@ func NewLRU(size int, defaultTTL time.Duration, stats *Stats) (*LRU, error) {
 		stats = &Stats{}
 	}
 	onEvict := func(_ string, _ lruEntry) { stats.Evictions.Add(1) }
-	c := lru.NewLRU[string, lruEntry](size, onEvict, defaultTTL)
-	return &LRU{c: c, stats: stats}, nil
+	return &LRU{
+		c:          newLRU[lruEntry](size, onEvict),
+		defaultTTL: defaultTTL,
+		stats:      stats,
+	}, nil
 }
 
 // Get returns the cached value or ok=false on miss/expiry.
@@ -58,6 +61,9 @@ func (l *LRU) Get(_ context.Context, key string) ([]byte, bool, error) {
 // to the LRU's default TTL configured in NewLRU.
 func (l *LRU) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
 	e := lruEntry{value: value}
+	if ttl == 0 {
+		ttl = l.defaultTTL
+	}
 	if ttl > 0 {
 		e.expiry = time.Now().Add(ttl)
 	}

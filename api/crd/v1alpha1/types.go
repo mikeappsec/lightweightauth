@@ -1,23 +1,65 @@
 // Package v1alpha1 contains the Kubernetes CRD types for LightweightAuth:
 // AuthConfig, AuthPolicy, IdentityProvider. See docs/DESIGN.md §3.
 //
-// M0 ships only the type *shapes*; deepcopy generation, the controller,
-// and admission validation arrive in M4. Importing this package outside
-// of the controller is fine for typed YAML decoding.
+// In M4 these became real Kubernetes types: metav1.TypeMeta /
+// metav1.ObjectMeta, scheme registration, runtime.Object implementations,
+// and List types so controller-runtime can watch them.
 //
+// We hand-write the DeepCopy methods rather than generate them. The
+// payload is small (config.AuthConfig is JSON-roundtrippable) and the
+// generator chain (controller-gen) would add a build-time dependency for
+// little gain. If the surface grows, switching to generated code is a
+// drop-in.
+//
+// +kubebuilder:object:generate=true
 // +groupName=lightweightauth.io
 package v1alpha1
 
 import (
+	"encoding/json"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/yourorg/lightweightauth/internal/config"
 )
 
-// AuthConfig is the K8s CRD wrapping config.AuthConfig.
+// GroupVersion is the canonical (group, version) for our CRDs.
+var GroupVersion = schema.GroupVersion{Group: "lightweightauth.io", Version: "v1alpha1"}
+
+// SchemeBuilder is consumed by AddToScheme.
+var SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
+
+// AddToScheme registers our types with a runtime.Scheme. The controller
+// manager calls this in main().
+var AddToScheme = SchemeBuilder.AddToScheme
+
+func addKnownTypes(scheme *runtime.Scheme) error {
+	scheme.AddKnownTypes(GroupVersion,
+		&AuthConfig{}, &AuthConfigList{},
+		&AuthPolicy{}, &AuthPolicyList{},
+		&IdentityProvider{}, &IdentityProviderList{},
+	)
+	metav1.AddToGroupVersion(scheme, GroupVersion)
+	return nil
+}
+
+// =====================================================================
+// AuthConfig — the main resource. Wraps internal/config.AuthConfig in
+// the .spec field so the on-disk YAML and the K8s CR share one source
+// of truth.
+// =====================================================================
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+
+// AuthConfig is the main namespaced resource a tenant authors.
 type AuthConfig struct {
-	TypeMeta   `json:",inline"`
-	ObjectMeta `json:"metadata,omitempty"`
-	Spec       config.AuthConfig `json:"spec"`
-	Status     AuthConfigStatus  `json:"status,omitempty"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              config.AuthConfig `json:"spec"`
+	Status            AuthConfigStatus  `json:"status,omitempty"`
 }
 
 // AuthConfigStatus is the typical K8s status sub-resource shape.
@@ -27,44 +69,178 @@ type AuthConfigStatus struct {
 	Message            string `json:"message,omitempty"`
 }
 
-// AuthPolicy binds an AuthConfig to one or more hosts/path patterns. The
-// detailed selector shape lands in M4; this is a placeholder so the API
-// surface is committed.
-type AuthPolicy struct {
-	TypeMeta   `json:",inline"`
-	ObjectMeta `json:"metadata,omitempty"`
-	Spec       AuthPolicySpec `json:"spec"`
+// +kubebuilder:object:root=true
+
+// AuthConfigList is required by controller-runtime for list/watch.
+type AuthConfigList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []AuthConfig `json:"items"`
 }
 
+// DeepCopyObject implements runtime.Object.
+func (in *AuthConfig) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the receiver. JSON round-trip keeps the implementation
+// short — config.AuthConfig is by definition JSON-encodable.
+func (in *AuthConfig) DeepCopy() *AuthConfig {
+	if in == nil {
+		return nil
+	}
+	out := &AuthConfig{}
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	out.Status = in.Status
+	if b, err := json.Marshal(in.Spec); err == nil {
+		_ = json.Unmarshal(b, &out.Spec)
+	}
+	return out
+}
+
+// DeepCopyObject implements runtime.Object.
+func (in *AuthConfigList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the list and every item.
+func (in *AuthConfigList) DeepCopy() *AuthConfigList {
+	if in == nil {
+		return nil
+	}
+	out := &AuthConfigList{TypeMeta: in.TypeMeta}
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	out.Items = make([]AuthConfig, len(in.Items))
+	for i := range in.Items {
+		out.Items[i] = *in.Items[i].DeepCopy()
+	}
+	return out
+}
+
+// =====================================================================
+// AuthPolicy — binds an AuthConfig to host/path patterns. Concrete
+// matcher shape is intentionally minimal in v1alpha1; richer matching
+// (CEL on attributes, header conditions) is a v1beta1 concern.
+// =====================================================================
+
+// +kubebuilder:object:root=true
+
+// AuthPolicy binds an AuthConfig to one or more hosts/path patterns.
+type AuthPolicy struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              AuthPolicySpec `json:"spec"`
+}
+
+// AuthPolicySpec selects which inbound requests an AuthConfig applies to.
 type AuthPolicySpec struct {
 	AuthConfigRef string   `json:"authConfigRef"`
 	Hosts         []string `json:"hosts,omitempty"`
 	PathPatterns  []string `json:"pathPatterns,omitempty"`
 }
 
-// IdentityProvider is cluster-scoped and reusable across namespaces /
-// tenants. Concrete fields land in M4.
-type IdentityProvider struct {
-	TypeMeta   `json:",inline"`
-	ObjectMeta `json:"metadata,omitempty"`
-	Spec       IdentityProviderSpec `json:"spec"`
+// +kubebuilder:object:root=true
+
+// AuthPolicyList is the list type for AuthPolicy.
+type AuthPolicyList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []AuthPolicy `json:"items"`
 }
 
+// DeepCopyObject implements runtime.Object.
+func (in *AuthPolicy) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the receiver.
+func (in *AuthPolicy) DeepCopy() *AuthPolicy {
+	if in == nil {
+		return nil
+	}
+	out := &AuthPolicy{TypeMeta: in.TypeMeta}
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	out.Spec.AuthConfigRef = in.Spec.AuthConfigRef
+	out.Spec.Hosts = append([]string(nil), in.Spec.Hosts...)
+	out.Spec.PathPatterns = append([]string(nil), in.Spec.PathPatterns...)
+	return out
+}
+
+// DeepCopyObject implements runtime.Object.
+func (in *AuthPolicyList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the list and every item.
+func (in *AuthPolicyList) DeepCopy() *AuthPolicyList {
+	if in == nil {
+		return nil
+	}
+	out := &AuthPolicyList{TypeMeta: in.TypeMeta}
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	out.Items = make([]AuthPolicy, len(in.Items))
+	for i := range in.Items {
+		out.Items[i] = *in.Items[i].DeepCopy()
+	}
+	return out
+}
+
+// =====================================================================
+// IdentityProvider — cluster-scoped, reusable IdP definitions. Tenant
+// AuthConfigs reference these by name.
+// =====================================================================
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Cluster
+
+// IdentityProvider is cluster-scoped so multiple tenants can share
+// one IdP definition without duplicating it in every namespace.
+type IdentityProvider struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              IdentityProviderSpec `json:"spec"`
+}
+
+// IdentityProviderSpec captures the bits an Identifier needs to verify
+// tokens; full IdP shape (OAuth2 client creds, JWKS pinning, ...)
+// arrives with the M5/M6 modules.
 type IdentityProviderSpec struct {
 	IssuerURL string   `json:"issuerUrl"`
+	JWKSURL   string   `json:"jwksUrl,omitempty"`
 	Audiences []string `json:"audiences,omitempty"`
 }
 
-// Stand-ins for k8s.io/apimachinery types so this package can compile in
-// M0 without pulling in the K8s deps; replaced with real metav1.TypeMeta /
-// metav1.ObjectMeta in M4.
-type (
-	TypeMeta struct {
-		Kind       string `json:"kind,omitempty"`
-		APIVersion string `json:"apiVersion,omitempty"`
+// +kubebuilder:object:root=true
+
+// IdentityProviderList is the list type for IdentityProvider.
+type IdentityProviderList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []IdentityProvider `json:"items"`
+}
+
+// DeepCopyObject implements runtime.Object.
+func (in *IdentityProvider) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the receiver.
+func (in *IdentityProvider) DeepCopy() *IdentityProvider {
+	if in == nil {
+		return nil
 	}
-	ObjectMeta struct {
-		Name      string `json:"name,omitempty"`
-		Namespace string `json:"namespace,omitempty"`
+	out := &IdentityProvider{TypeMeta: in.TypeMeta}
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	out.Spec.IssuerURL = in.Spec.IssuerURL
+	out.Spec.JWKSURL = in.Spec.JWKSURL
+	out.Spec.Audiences = append([]string(nil), in.Spec.Audiences...)
+	return out
+}
+
+// DeepCopyObject implements runtime.Object.
+func (in *IdentityProviderList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the list and every item.
+func (in *IdentityProviderList) DeepCopy() *IdentityProviderList {
+	if in == nil {
+		return nil
 	}
-)
+	out := &IdentityProviderList{TypeMeta: in.TypeMeta}
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	out.Items = make([]IdentityProvider, len(in.Items))
+	for i := range in.Items {
+		out.Items[i] = *in.Items[i].DeepCopy()
+	}
+	return out
+}

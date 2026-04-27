@@ -1,0 +1,58 @@
+{{- /*
+NetworkPolicy: only Envoy / mesh / explicit peers can dial lwauth.
+Disabled by default — enabling it without configured peers will block
+all traffic. Operators set networkPolicy.allowedFrom.* to fit their
+mesh topology.
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lightweightauth
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- with .Values.networkPolicy.allowedFrom.namespaceSelectors }}
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+        {{- end }}
+        {{- with .Values.networkPolicy.allowedFrom.podSelectors }}
+        {{- range . }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.service.httpPort }}
+          protocol: TCP
+        - port: {{ .Values.service.grpcPort }}
+          protocol: TCP
+{{- end }}
+---
+{{- if and .Values.metrics.serviceMonitor .Values.metrics.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: lightweightauth
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lightweightauth
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+{{- end }}

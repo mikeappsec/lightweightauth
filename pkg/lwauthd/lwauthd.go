@@ -41,10 +41,29 @@ import (
 
 // Options configure a Run invocation.
 type Options struct {
+	// ConfigPath points at the AuthConfig YAML to load on startup.
+	// Required when WatchNamespace is empty (file mode).
 	ConfigPath string
-	HTTPAddr   string // "" to disable HTTP. Default ":8080".
-	GRPCAddr   string // "" to disable gRPC. Default ":9001".
-	Logger     *slog.Logger
+
+	// HTTPAddr / GRPCAddr — set to "" to disable.
+	HTTPAddr string // Default ":8080".
+	GRPCAddr string // Default ":9001".
+
+	// WatchConfigFile, if true, starts an fsnotify watcher on
+	// ConfigPath that hot-reloads the engine on every change. Cheap;
+	// safe to leave on. Default: false (M4 keeps it explicit).
+	WatchConfigFile bool
+
+	// WatchNamespace, if non-empty, switches lwauthd into Kubernetes
+	// CRD mode: a controller-runtime manager is booted and the
+	// AuthConfig identified by AuthConfigName in this namespace is
+	// reconciled into the engine on every change. ConfigPath is
+	// ignored in this mode (the initial engine starts empty until the
+	// first reconcile completes).
+	WatchNamespace string
+	AuthConfigName string
+
+	Logger *slog.Logger
 }
 
 // LoadEngine reads a YAML AuthConfig file and compiles it into a
@@ -76,13 +95,45 @@ func Run(opts Options) error {
 		opts.GRPCAddr = ":9001"
 	}
 
-	eng, err := LoadEngine(opts.ConfigPath)
-	if err != nil {
-		return err
+	// Three sources of an Engine, mutually exclusive:
+	//   1. WatchNamespace set  -> CRD mode; engine starts empty,
+	//      first Reconcile installs it.
+	//   2. ConfigPath set      -> file mode; load once, optionally
+	//      fsnotify-watch.
+	//   3. neither             -> error: nothing to compile.
+	var holder *server.EngineHolder
+	switch {
+	case opts.WatchNamespace != "":
+		if opts.ConfigPath != "" && opts.WatchConfigFile {
+			return errOptionsConflict
+		}
+		holder = server.NewEngineHolder(nil)
+	case opts.ConfigPath != "":
+		eng, err := LoadEngine(opts.ConfigPath)
+		if err != nil {
+			return err
+		}
+		holder = server.NewEngineHolder(eng)
+	default:
+		return errors.New("lwauthd: must set either ConfigPath or WatchNamespace")
 	}
-	holder := server.NewEngineHolder(eng)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if opts.WatchConfigFile && opts.ConfigPath != "" {
+		if err := startFileWatcher(ctx, log, opts.ConfigPath, holder); err != nil {
+			return err
+		}
+		log.Info("file watcher started", "path", opts.ConfigPath)
+	}
+	if opts.WatchNamespace != "" {
+		if err := startCRDController(ctx, log, opts, holder, errCh); err != nil {
+			return err
+		}
+	}
 
 	// HTTP
 	httpSrv := &http.Server{Addr: opts.HTTPAddr, Handler: server.NewHTTPHandler(holder)}
@@ -126,24 +177,30 @@ func Run(opts Options) error {
 		log.Info("shutting down")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
 	go grpcSrv.GracefulStop()
-	return httpSrv.Shutdown(ctx)
+	return httpSrv.Shutdown(shutdownCtx)
 }
 
 // Main is a convenience entrypoint that parses the standard --config /
-// --http-addr / --grpc-addr flags and calls Run. Equivalent to
-// cmd/lwauth's main().
+// --http-addr / --grpc-addr / --watch-* flags and calls Run. Equivalent
+// to cmd/lwauth's main().
 func Main() {
-	cfgPath := flag.String("config", "config.yaml", "path to AuthConfig YAML")
+	cfgPath := flag.String("config", "config.yaml", "path to AuthConfig YAML (file mode)")
 	httpAddr := flag.String("http-addr", ":8080", "HTTP listen address ('' to disable)")
 	grpcAddr := flag.String("grpc-addr", ":9001", "gRPC listen address ('' to disable)")
+	watchFile := flag.Bool("watch-config-file", false, "fsnotify-watch --config and reload on change")
+	watchNS := flag.String("watch-namespace", "", "Kubernetes namespace to watch for AuthConfig CRs (enables CRD mode)")
+	acName := flag.String("authconfig-name", "default", "name of the AuthConfig CR to reconcile (CRD mode)")
 	flag.Parse()
 	if err := Run(Options{
-		ConfigPath: *cfgPath,
-		HTTPAddr:   *httpAddr,
-		GRPCAddr:   *grpcAddr,
+		ConfigPath:      *cfgPath,
+		HTTPAddr:        *httpAddr,
+		GRPCAddr:        *grpcAddr,
+		WatchConfigFile: *watchFile,
+		WatchNamespace:  *watchNS,
+		AuthConfigName:  *acName,
 	}); err != nil {
 		slog.Error("lwauthd", "err", err)
 		os.Exit(1)

@@ -21,7 +21,9 @@ type HTTPHandler struct {
 }
 
 // NewHTTPHandler returns an http.Handler with /v1/authorize, /healthz, and
-// /readyz registered.
+// /readyz registered. It also walks the current engine for module.HTTPMounter
+// implementations (e.g. the OAuth2 auth-code module) and mounts their
+// prefixes on the same mux.
 func NewHTTPHandler(h *EngineHolder) http.Handler {
 	mux := http.NewServeMux()
 	hh := &HTTPHandler{Engines: h}
@@ -34,6 +36,17 @@ func NewHTTPHandler(h *EngineHolder) http.Handler {
 		}
 		w.WriteHeader(200)
 	})
+	if eng := h.Load(); eng != nil {
+		seen := map[string]bool{}
+		for _, m := range eng.HTTPMounts() {
+			p := m.MountPrefix()
+			if p == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			mux.Handle(p, m.HTTPHandler())
+		}
+	}
 	return mux
 }
 

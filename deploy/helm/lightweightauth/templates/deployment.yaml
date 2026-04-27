@@ -1,22 +1,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "lwauth.fullname" . }}
   labels:
-    app.kubernetes.io/name: lightweightauth
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "lwauth.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: lightweightauth
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- include "lwauth.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: lightweightauth
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "lwauth.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- if not .Values.controller.enabled }}
+        # Force pod restart on inline-config change. fsnotify covers
+        # in-place reloads; this is a belt-and-braces hash for clusters
+        # that ship config out-of-band.
+        checksum/config: {{ .Values.config.inline | sha256sum }}
+        {{- end }}
     spec:
+      serviceAccountName: {{ include "lwauth.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -26,8 +33,16 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --config=/etc/lwauth/config.yaml
             - --http-addr=:{{ .Values.service.httpPort }}
+            {{- if .Values.controller.enabled }}
+            - --watch-namespace={{ .Values.controller.watchNamespace | default .Release.Namespace }}
+            - --authconfig-name={{ .Values.controller.authConfigName }}
+            {{- else }}
+            - --config=/etc/lwauth/config.yaml
+            {{- if .Values.config.watch }}
+            - --watch-config-file
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.httpPort }}
@@ -38,31 +53,40 @@ spec:
           livenessProbe:
             httpGet: { path: /healthz, port: http }
           resources: {{- toYaml .Values.resources | nindent 12 }}
+          {{- if not .Values.controller.enabled }}
           volumeMounts:
             - name: config
               mountPath: /etc/lwauth
+          {{- end }}
+      {{- if not .Values.controller.enabled }}
       volumes:
         - name: config
           configMap:
-            name: {{ .Release.Name }}-config
+            name: {{ include "lwauth.fullname" . }}-config
+      {{- end }}
 ---
+{{- if not .Values.controller.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-config
+  name: {{ include "lwauth.fullname" . }}-config
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
 data:
   config.yaml: |
 {{ .Values.config.inline | indent 4 }}
 ---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "lwauth.fullname" . }}
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   selector:
-    app.kubernetes.io/name: lightweightauth
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "lwauth.selectorLabels" . | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.service.httpPort }}

@@ -15,7 +15,11 @@ client ─► lwauth (HTTP :8080 / gRPC :9001)
 ```
 
 ```sh
-lwauth --config ./lwauth.yaml
+# file-mode (default): static config, optional fsnotify hot reload
+lwauth --config ./lwauth.yaml --watch-config-file
+
+# CRD-mode: watch an AuthConfig CR in a namespace
+lwauth --watch-namespace=auth-system --authconfig-name=default
 ```
 
 This runs `lightweightauth` as an authorization service only. It does **not**
@@ -104,11 +108,24 @@ helm install lwauth ./deploy/helm/lightweightauth \
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `replicaCount` | 2 | HA. |
-| `crds.install` | `true` | Install the `AuthConfig` / `AuthPolicy` CRDs. |
-| `controller.enabled` | `true` | Run the CRD-watching controller. |
-| `cache.backend` | `memory` | `memory` or `redis`. |
-| `metrics.serviceMonitor` | `true` | Prometheus Operator integration. |
+| `replicaCount` | `2` | HA when not autoscaled. |
+| `config.inline` | minimal stub | Inline AuthConfig YAML (file-mode). |
+| `config.watch` | `true` | fsnotify hot reload of the mounted ConfigMap. |
+| `crds.install` | `true` | Install `AuthConfig` / `AuthPolicy` / `IdentityProvider` CRDs (`helm.sh/resource-policy: keep`). |
+| `crds.keep` | `true` | Leave CRDs behind on `helm uninstall`. |
+| `controller.enabled` | `false` | Switch from file-mode to CRD-mode. |
+| `controller.watchNamespace` | `""` (release ns) | Namespace whose CRs the controller watches. |
+| `controller.authConfigName` | `default` | Name of the `AuthConfig` CR to follow. |
+| `serviceAccount.create` | `true` | Create the SA used by the controller. |
+| `rbac.create` | `true` | Install ClusterRole + binding on `lightweightauth.io/*`. |
+| `autoscaling.enabled` | `false` | HPA on CPU. |
+| `podDisruptionBudget.enabled` | `false` | PDB with `minAvailable: 1`. |
+| `networkPolicy.enabled` | `false` | Lock ingress to listed peers. |
+| `metrics.serviceMonitor` | `false` | Requires prometheus-operator CRDs. |
+
+> Cache backend (`memory` / `redis`), token introspection, and
+> ServiceMonitor metric content land in M5–M9; the toggles above are
+> the chart-level surface area as of M4.
 
 For the data-plane, install one of:
 
@@ -126,10 +143,13 @@ Three CRDs in `lightweightauth.io/v1alpha1`:
 
 A controller (controller-runtime) watches these and:
 
-1. Validates them (admission webhook + status conditions).
-2. Compiles them into the on-wire config format.
-3. Pushes config to `lwauth` Pods via mounted ConfigMap (M4) or xDS-style
-   stream (M5+).
+1. Reports compile health on `.status` (`ready`, `observedGeneration`,
+   `message`). Bad specs are surfaced via the CR, never crash the pod.
+2. Compiles `spec` into a `*pipeline.Engine`.
+3. Publishes the engine in-process via `EngineHolder.Swap` — every
+   subsequent decision uses the new engine atomically. Single-replica
+   file-replacement model in M4; xDS-style cluster-wide push lands in
+   M11.
 
 ## Production checklist
 

@@ -67,3 +67,44 @@ func TestLRU_RejectsBadSize(t *testing.T) {
 		t.Fatal("NewLRU(0) should error")
 	}
 }
+
+// TestLRU_EvictionOrder pins the in-house simpleLRU's MRU/LRU semantics:
+// once at capacity, the least-recently-used key is dropped on insert,
+// and Get bumps a key back to MRU.
+func TestLRU_EvictionOrder(t *testing.T) {
+	t.Parallel()
+	stats := &Stats{}
+	c, _ := NewLRU(2, 0, stats)
+	ctx := context.Background()
+
+	_ = c.Set(ctx, "a", []byte("1"), 0)
+	_ = c.Set(ctx, "b", []byte("2"), 0)
+	// Touch "a" so "b" becomes the LRU.
+	if _, ok, _ := c.Get(ctx, "a"); !ok {
+		t.Fatal("a should be present")
+	}
+	_ = c.Set(ctx, "c", []byte("3"), 0)
+
+	if _, ok, _ := c.Get(ctx, "b"); ok {
+		t.Error("b should have been evicted")
+	}
+	if _, ok, _ := c.Get(ctx, "a"); !ok {
+		t.Error("a should still be present (it was MRU)")
+	}
+	if got := stats.Evictions.Load(); got != 1 {
+		t.Errorf("Evictions = %d, want 1", got)
+	}
+}
+
+// TestLRU_DefaultTTLFallback verifies that ttl==0 on Set falls back to
+// the cache's defaultTTL configured at NewLRU.
+func TestLRU_DefaultTTLFallback(t *testing.T) {
+	t.Parallel()
+	c, _ := NewLRU(8, 5*time.Millisecond, nil)
+	ctx := context.Background()
+	_ = c.Set(ctx, "k", []byte("v"), 0) // 0 → defaultTTL
+	time.Sleep(15 * time.Millisecond)
+	if _, ok, _ := c.Get(ctx, "k"); ok {
+		t.Fatal("default TTL did not apply")
+	}
+}

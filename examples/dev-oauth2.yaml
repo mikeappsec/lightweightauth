@@ -1,0 +1,53 @@
+# OAuth2 auth-code dev config — point at any OIDC provider you have handy
+# (Keycloak, Auth0, Dex, GitHub OAuth, Google) and you have an oauth2-proxy
+# replacement.
+#
+# Run:
+#   ./bin/lwauth --config examples/dev-oauth2.yaml
+#
+# Browser flow:
+#   open http://localhost:8080/oauth2/start?rd=/protected
+#       → IdP login → http://localhost:8080/oauth2/callback
+#       → Set-Cookie: _lwauth_session=...
+#       → 302 to /protected
+#   GET  http://localhost:8080/oauth2/userinfo    # JSON of current session
+#   GET  http://localhost:8080/oauth2/logout      # clears the cookie
+#
+# Then any subsequent /v1/authorize call (or Envoy ext_authz check) that
+# carries the session cookie will pass through the rbac authorizer.
+#
+# The cookie.secret below is a DEMO ONLY value; rotate it via
+# `openssl rand -hex 32` before any real deployment.
+
+tenantId: dev
+identifierMode: firstMatch
+
+identifiers:
+  - name: corp-oauth
+    type: oauth2
+    config:
+      clientId:     ${OAUTH_CLIENT_ID}
+      clientSecret: ${OAUTH_CLIENT_SECRET}
+      authUrl:      https://idp.example.com/authorize
+      tokenUrl:     https://idp.example.com/token
+      jwksUrl:      https://idp.example.com/.well-known/jwks.json
+      issuerUrl:    https://idp.example.com/
+      redirectUrl:  http://localhost:8080/oauth2/callback
+      scopes: [openid, profile, email]
+      postLoginPath:  /protected
+      postLogoutPath: /
+      cookie:
+        name:   _lwauth_session
+        secret: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd
+        secure: false      # true in prod (HTTPS only)
+        sameSite: lax
+        maxAge: 8h
+
+authorizers:
+  - name: rbac
+    type: rbac
+    config:
+      rolesFrom: claim:groups
+      allow:
+        - admin
+        - editor

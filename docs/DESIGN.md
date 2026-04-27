@@ -724,9 +724,9 @@ Three distinct caches, each with a different invalidation story:
 
 | Option | Notes |
 |--------|-------|
-| **`hashicorp/golang-lru/v2`** | Solid, simple, in-process. **Recommended default.** |
+| **In-house `lru`** (`internal/cache/lru_internal.go`) | `container/list` + `map`, ~80 LOC, generic, eviction callback. **Default in-process backend.** Per-entry TTL is enforced by the wrapping `cache.LRU` so we don't need an "expirable" variant. |
 | **`ristretto`** | Higher throughput, admission policy; more complex. Use if benchmarks demand it. |
-| **`groupcache` / Redis** | Needed only when running many lwauth replicas and you want shared cache. Add as a `cache.Backend` plugin. |
+| **`groupcache` / Redis** | Needed only when running many lwauth replicas and you want shared cache. Add as a `cache.Backend` plugin (M7). |
 | **`singleflight.Group`** | Mandatory in front of every cache to coalesce stampedes. Cheap, do this from day one. |
 
 ### Negative caching
@@ -757,27 +757,254 @@ costs nothing and is invaluable when tuning later.
 
 ---
 
-## 7. Roadmap (suggested)
+## 7. Roadmap
 
-1. **M0 – skeleton ✅:** repo layout, module interfaces, design docs.
-2. **M1 – local mode ✅:** HTTP server, JWT identifier (jwx/v2 + JWKS),
-   RBAC authorizer, LRU cache, file config.
-3. **M2 – Envoy ext_authz ✅:** `envoy.service.auth.v3.Authorization`
+The roadmap is the authoritative checklist for everything §1–§8 promise.
+Items marked ✅ are merged on `main`; everything else is ordered roughly
+by dependency, not by calendar.
+
+### Done
+
+1. **M0 – skeleton ✅** — repo layout, module interfaces (`pkg/module`),
+   design docs, `lwauth` + `lwauthctl` binaries, Helm chart skeleton,
+   sample Envoy config, Dockerfile, plugin proto sketch.
+2. **M1 – local mode ✅** — HTTP server, JWT identifier (`jwx/v2` + JWKS
+   cache), API-key identifier (in-memory static map only), RBAC
+   authorizer, in-process LRU cache layer, file-based AuthConfig YAML
+   loader, `httptest` JWT round-trip + cache + RBAC tests.
+3. **M2 – Envoy ext_authz ✅** — `envoy.service.auth.v3.Authorization`
    gRPC service (`internal/server/grpc.go`), dual HTTP+gRPC listeners
    in `pkg/lwauthd`, bufconn integration tests, sample Envoy config at
-   `deploy/envoy/sample.yaml` targeting Envoy 1.37.3.
-4. **M3 – OAuth2 auth-code + sessions:** the oauth2-proxy-equivalent feature set.
-5. **M4 – K8s:** CRDs, controller, Helm chart.
-6. **M5 – OPA + decision cache.**
-7. **M6 – mTLS, HMAC, API key modules.**
-8. **M7 – sibling repos kickoff:** scaffold `lightweightauth-proxy`,
-   `lightweightauth-idp`, and the `lightweightauth-plugins` SDK; out-of-process
-   plugin host runtime in core.
-9. **M8 – supply-chain hardening:** Docker Hardened Image base
-   (`dhi.io/golang`, `dhi.io/alpine`, `dhi.io/envoy`), cosign-signed releases
-   verified by Kyverno/Sigstore policy, SBOM publication, mirrored images for
-   air-gapped deployments. Deferred from M2 to keep the early build pipeline
-   accessible to contributors without dhi.io entitlement.
+   `deploy/envoy/sample.yaml` and compose stack vs Envoy 1.37.x.
+4. **M3 – OAuth2 auth-code + sessions ✅** — AES-256-GCM encrypted
+   cookie session store (`pkg/session`), oauth2 identifier with PKCE +
+   state + JWKS-verified id_token (`pkg/identity/oauth2`), HTTP flow
+   endpoints `/oauth2/{start,callback,logout,userinfo}` mounted via the
+   new `module.HTTPMounter` interface, full e2e flow test against an
+   in-process fake IdP.
+
+5. **M4 – Kubernetes ✅** — `lightweightauth.io/v1alpha1` CRDs
+   (`AuthConfig`, `AuthPolicy`, `IdentityProvider`) at
+   `api/crd/v1alpha1` with hand-written DeepCopy + scheme registration;
+   single-CR `controller-runtime` reconciler (`internal/controller`)
+   that compiles `AuthConfig.Spec` and atomically swaps the engine via
+   `*server.EngineHolder`; compile errors recorded on `.status.message`
+   never crash the manager; CR deletion preserves the last good engine.
+   `fsnotify` hot-reload path for non-K8s deployments
+   (`pkg/lwauthd/watch.go`, 100 ms debounce, re-arms on atomic editor
+   replace). Helm chart hardened with ServiceAccount + RBAC,
+   ClusterRole on `lightweightauth.io/*`, CRD manifests (Helm
+   `keep` policy), HPA (autoscaling/v2), PDB, NetworkPolicy with
+   peer selectors, optional `ServiceMonitor`. xDS-style controller→pod
+   streaming push remains **deferred to M11**; ConfigMap + atomic
+   reload is the M4 mechanism. Pinned to `controller-runtime v0.21.0`
+   + `k8s.io/* v0.34.1` (newer combinations broke the cache build).
+
+### Next
+
+
+6. **M5 – Policy expansion + decision cache ✅** — embedded **OPA/Rego**
+   authorizer (`pkg/authz/opa`, prepared queries on the hot path);
+   **CEL** authorizer (`pkg/authz/cel`, `google/cel-go`, bool-typed
+   expressions over `identity` / `request` / `context`); **composite**
+   authorizer (`pkg/authz/composite`) with `allOf` / `anyOf` semantics
+   that builds children via `module.BuildAuthorizer` so RBAC + ABAC +
+   ReBAC compose recursively. **Decision cache**
+   (`internal/cache/decision.go`) wraps `Authorizer.Authorize` with
+   `golang.org/x/sync/singleflight` stampede coalescing, positive +
+   negative TTLs, hash-truncated keys built from declared fields
+   (`sub`, `tenant`, `method`, `host`, `path`, `header:*`, `claim:*`),
+   and never caches `ErrUpstream`. Wired in via `AuthConfig.cache`
+   (`{ key: [...], ttl: 30s, negativeTtl: 5s }`); zero TTL or absent
+   stanza disables it. **Token introspection** identifier
+   (`pkg/identity/introspection`, RFC 7662) with per-identifier LRU
+   keyed by `sha256(token)`, TTL bounded by `min(exp - now, maxCacheTtl)`,
+   negative cache for `active=false`, and an in-package singleflight
+   so concurrent first-misses collapse to one IdP round-trip. Cache
+   observability counters (`Stats.Hits` / `.Misses` / `.Evictions`)
+   wired through every backend; the concrete Prometheus surface
+   ships in M9.
+
+### Next
+
+
+
+7. **M6 – Remaining credential modules ✅** — shipped:
+   - **OAuth 2.0 Bearer Token (RFC 6750)** — already covered by two
+     identifiers; M6 confirms the surface is complete:
+     - `jwt` (`pkg/identity/jwt`) for self-contained signed bearers
+       (JWKS verify, `iss`/`aud`/`exp`/`nbf`).
+     - `oauth2-introspection` (`pkg/identity/introspection`) for opaque
+       bearers (RFC 7662 with per-identifier LRU + singleflight).
+     Both consume `Authorization: Bearer <token>` with configurable
+     `header` / `scheme`. No third "bearer" module is needed —
+     every OAuth 2.0 bearer is either signed or opaque, and each
+     case has a dedicated identifier.
+   - **mTLS** identifier (`pkg/identity/mtls`) with two ingestion paths:
+     in-process `Request.PeerCerts` and Envoy
+     `x-forwarded-client-cert` parsing. SPIFFE URI-SAN takes
+     precedence over CN; optional `trustedIssuers` Subject-DN
+     allow-list.
+   - **HMAC** identifier (`pkg/identity/hmac`) with a pluggable
+     `Canonicalizer` function value. Default canonicalizes
+     `method|path|date|sha256(body)`; both
+     `keyId="...", signature="..."` and compact `keyId:sig`
+     `Authorization` formats are accepted; clock-skew (default 5m)
+     enforced via the `Date` header; constant-time compare.
+   - **API-key** upgrades: argon2id (RFC 9106 §4 interactive params)
+     storage (`pkg/identity/apikey/store.go`) with three backends —
+     in-process `hashed.entries`, flat-file `hashed.file`, and
+     K8s-Secret-volume `hashed.dir` (skips `..data` symlinks). The
+     plaintext `static` map from M1 is retained as the test backend.
+     `keyId` lands on `Identity.Claims["keyId"]` for audit
+     attribution. Redis / Vault backends remain in
+     lightweightauth-plugins.
+   - **Response mutators**: `jwt-issue` (`pkg/mutator/jwtissue`,
+     HS256/384/512 + RS256/384/512, `copyClaims`, configurable header
+     + scheme), `header-add` / `header-remove` / `header-passthrough`
+     (`pkg/mutator/headers`, `${sub}` / `${claim:foo}` expansion +
+     `subjectHeader` shortcut + ext_authz delete-via-empty-value
+     semantics).
+   - **OAuth2 follow-ups** deferred from M3: refresh-token rotation
+     (per-request opportunistic refresh inside `/oauth2/userinfo` plus
+     an explicit `/oauth2/refresh` endpoint, `RefreshLeeway`
+     configurable, RFC 6749 §6 rotated-RT handling), RP-initiated
+     single-logout (`endSessionUrl` + OIDC RP-Initiated Logout 1.0
+     `id_token_hint` + `post_logout_redirect_uri`), and a server-side
+     `MemoryStore` (`pkg/session/memory.go`) implementing
+     `session.Store` with 256-bit opaque SIDs and a TTL janitor.
+   - **OAuth2 Client Credentials Grant** (RFC 6749 §4.4) and
+     **OAuth2 Device Authorization Grant** (RFC 8628, sometimes
+     called "device-code flow" because the IdP issues a `device_code`
+     token to the device and a `user_code` for the human) are
+     deferred:
+     - *Client Credentials Grant* is the **caller** side of the `jwt`
+       identifier — services run the grant themselves to obtain a
+       bearer token and hand the result to lwauth, where `jwt`
+       already validates it. The only useful artefact is a small
+       outbound helper (`pkg/clientauth`) for service-to-service
+       callers of lwauth-protected upstreams; lands in **M8**
+       alongside the Door B SDKs.
+     - *Device Authorization Grant* is a new interactive flow shape
+       (parallel to auth-code) for CLIs / TVs / IoT. The IdP returns
+       a `device_code` (the long opaque token the device polls with)
+       plus a short human-typeable `user_code` and a
+       `verification_uri`. Lands as
+       `/oauth2/device/start` (returns `user_code` + URI for the
+       user) + `/oauth2/device/poll` (the device polls with the
+       `device_code` until the user completes verification) under
+       the existing `oauth2` mount in **M6.5** (small follow-up
+       release between M6 and M7). On success it produces the same
+       `Session` shape as the auth-code path, so refresh-token
+       rotation and RP-logout from M6 apply unchanged.
+
+   **M6.5 also ships DPoP (RFC 9449) — sender-constrained
+   bearer tokens.** Today the `jwt` and `oauth2-introspection`
+   identifiers accept any bearer that validates, which means a
+   leaked token is a usable token. DPoP fixes that by binding the
+   token to a client-held key: the IdP embeds the key thumbprint
+   in `cnf.jkt`, and every request carries a `DPoP` proof header
+   (a short JWT signed by the same key, asserting the HTTP
+   method, URL, and a fresh `jti`). Concrete deliverables:
+   - new `pkg/identity/dpop` middleware-style verifier that wraps
+     the `jwt` / `oauth2-introspection` identifiers — verifies the
+     proof's signature against the embedded JWK, checks `htm`
+     equals the request method, `htu` equals the request URL,
+     `iat` is within a small skew, and `ath` matches
+     `base64url(sha256(access_token))` per §4.3.
+   - per-instance `jti` replay cache (LRU, default 10k entries,
+     TTL = `iat + skew`) plumbed through the same
+     `internal/cache` surface as decision/introspection caches so
+     M7's Redis backend slots in for free.
+   - confirmation-claim check: when the access token carries
+     `cnf.jkt`, the proof's JWK thumbprint MUST equal it
+     (RFC 7638 thumbprint).
+   - opt-in via a `dpop: { required: true, skew: 30s }` block on
+     the wrapped identifier; absence of `DPoP` header on a
+     non-required identifier just degrades to plain bearer
+     semantics (preserves the chained-identifier story).
+
+8. **M7 – ReBAC + shared cache backend.**
+   - First-class **OpenFGA / SpiceDB** authorizer adapter (Zanzibar-style
+     ReBAC), behind the composite authorizer from M5 so it composes
+     with RBAC/OPA.
+   - Pluggable `cache.Backend` with a Redis / groupcache implementation
+     for multi-replica decision-cache sharing.
+
+9. **M8 – Native gRPC (Door B) + SDKs.**
+   - Implement `lightweightauth.v1.Auth` (`Authorize` unary +
+     `AuthorizeStream` for per-message stream re-checks) on the same
+     `:9001` listener as Door A.
+   - Tiny **Go interceptor SDK** in core (`pkg/client/go`) for callers
+     that want native gRPC instead of ext_authz.
+   - Conformance tests proving Door A and Door B reach identical
+     `Decision`s for the same input.
+
+10. **M9 – Observability + audit.**
+    - Prometheus metrics surface: `lwauth_cache_*`, `lwauth_decision_*`
+      (latency histogram split by allow/deny + authorizer), per-tenant
+      labels.
+    - OpenTelemetry tracing with `traceparent` propagation from Envoy /
+      callers; spans on each pipeline stage.
+    - Structured audit log (one JSON line per decision, including
+      `Identity.Source`, tenant, decision, latency, deny reason).
+    - `lwauthctl audit` to tail a running instance.
+
+11. **M10 – Sibling repos + plugin runtime.**
+    - Bootstrap `lightweightauth-proxy` (Mode B reverse proxy importing
+      the core as a library) with its own Dockerfile + Helm chart.
+    - Bootstrap `lightweightauth-idp` (OIDC issuer, token endpoint,
+      minimal admin UI).
+    - Bootstrap `lightweightauth-plugins` (SDKs in Go / Python / Rust +
+      reference plugins: SAML bridge, Vault-backed API keys, custom
+      HMAC).
+    - **Out-of-process plugin host runtime** in core: lifecycle
+      (spawn / health-check / restart), `grpc-plugin` adapter under the
+      `plugin/v1` proto.
+
+12. **M11 – Multi-tenancy hardening + xDS push.**
+    - Replace ConfigMap+SIGHUP with a controller-pushed gRPC stream
+      (xDS-style) for clusters with many `AuthConfig`s.
+    - Per-tenant rate limits (token-bucket).
+    - Per-tenant key-material isolation; cluster-scoped
+      `IdentityProvider` with tenant overrides.
+
+13. **M12 – Supply-chain hardening.**
+    - Docker Hardened Image bases (`dhi.io/golang`, `dhi.io/alpine`,
+      `dhi.io/envoy`).
+    - Cosign-signed releases verified by Kyverno / Sigstore policy.
+    - SBOM publication (`syft`) on every release.
+    - Mirrored images for air-gapped deployments.
+    - Deferred from M2 to keep the early build pipeline accessible to
+      contributors without dhi.io entitlement.
+
+14. **M13 – v1.0.**
+    - `pkg/module` API frozen under SemVer; CRDs promoted from
+      `v1alpha1` to `v1`.
+    - Plugin contract `plugin/v1` declared stable; future evolution
+      through `plugin/v2`.
+    - Documented promotion criteria for tier 2 → tier 1 plugins.
+    - Published Go SDK + Python/Rust plugin SDKs.
+
+### Experimental / post-v1
+
+15. **eBPF data plane** in the separate `lightweightauth-ebpf` repo
+    (Mode C, §3). Linux-only, `CAP_BPF`, kernel ≥ 5.10. Stays
+    experimental until at least three production users report stable
+    operation.
+16. **WASM plugins** via `wazero`. Defer until the auth-library
+    ecosystem in WASM matures (§2).
+
+### Explicit non-goals
+
+- **OAuth2 implicit flow** — dropped by OAuth 2.1; we will not ship it.
+  Users with a legacy IdP that only emits implicit can wrap it as an
+  out-of-process plugin.
+- **Reimplementing Zanzibar** — we adapt OpenFGA / SpiceDB; we will
+  not build our own ReBAC engine (§5).
+- **Becoming a service mesh** — we integrate with one (Envoy) instead.
+- **Outperforming Envoy at p99 throughput in Mode B** — Mode B exists
+  for one-binary simplicity, not for throughput records (§3).
 
 ---
 

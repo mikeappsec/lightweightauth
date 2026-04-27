@@ -16,6 +16,7 @@ package module
 
 import (
 	"context"
+	"net/http"
 	"strings"
 )
 
@@ -102,6 +103,23 @@ type Authorizer interface {
 type ResponseMutator interface {
 	Name() string
 	Mutate(ctx context.Context, r *Request, id *Identity, d *Decision) error
+}
+
+// HTTPMounter is an OPTIONAL interface a module may implement to add
+// extra HTTP routes to the lwauth server, beyond the standard
+// /v1/authorize + /healthz surface.
+//
+// Today this is used by the OAuth2 auth-code identifier to expose
+// /oauth2/start, /oauth2/callback, /oauth2/logout. Mounts are namespaced
+// under MountPrefix() (e.g. "/oauth2/") and the server registers them
+// directly on its mux; handlers see the FULL request path.
+type HTTPMounter interface {
+	// MountPrefix is the URL prefix this module wants to own, including
+	// the trailing slash (e.g. "/oauth2/").
+	MountPrefix() string
+	// HTTPHandler is invoked for every request whose path matches
+	// MountPrefix().
+	HTTPHandler() http.Handler
 }
 
 // Factory is what plugin packages register so config can instantiate them

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/yourorg/lightweightauth/internal/cache"
 	"github.com/yourorg/lightweightauth/pkg/module"
 )
 
@@ -24,6 +25,9 @@ type Engine struct {
 
 	// IdentifierMode controls how multiple identifiers compose.
 	identifierMode IdentifierMode
+
+	// decisionCache is optional; nil means "no caching".
+	decisionCache *cache.Decision
 }
 
 // IdentifierMode controls multi-identifier composition. See DESIGN.md §2.
@@ -44,6 +48,9 @@ type Options struct {
 	Authorizer     module.Authorizer
 	Mutators       []module.ResponseMutator
 	IdentifierMode IdentifierMode
+	// DecisionCache is optional; when non-nil the engine consults it
+	// before invoking the authorizer and caches the result.
+	DecisionCache *cache.Decision
 }
 
 // New builds an Engine. Returns an error if required components are missing.
@@ -59,6 +66,7 @@ func New(o Options) (*Engine, error) {
 		authorizer:     o.Authorizer,
 		mutators:       o.Mutators,
 		identifierMode: o.IdentifierMode,
+		decisionCache:  o.DecisionCache,
 	}, nil
 }
 
@@ -78,7 +86,7 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 	}
 	r.Context["identity"] = id
 
-	dec, err := e.authorizer.Authorize(ctx, r, id)
+	dec, _, err := e.runAuthorize(ctx, r, id)
 	if err != nil {
 		return denyFromError(err), id, err
 	}
@@ -95,6 +103,20 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 		}
 	}
 	return dec, id, nil
+}
+
+// runAuthorize calls the configured authorizer, optionally going through
+// the decision cache. The bool return indicates a cache hit (useful for
+// tests and metrics).
+func (e *Engine) runAuthorize(ctx context.Context, r *module.Request, id *module.Identity) (*module.Decision, bool, error) {
+	if e.decisionCache == nil {
+		dec, err := e.authorizer.Authorize(ctx, r, id)
+		return dec, false, err
+	}
+	key := e.decisionCache.Key(r, id)
+	return e.decisionCache.Do(ctx, key, func() (*module.Decision, error) {
+		return e.authorizer.Authorize(ctx, r, id)
+	})
 }
 
 func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Identity, error) {
@@ -140,6 +162,27 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 		}
 		return nil, fmt.Errorf("%w: no identifier matched", module.ErrInvalidCredential)
 	}
+}
+
+// HTTPMounts returns every (prefix, handler) pair registered by modules
+// that implement module.HTTPMounter. Used by the HTTP server to expose
+// flow endpoints like /oauth2/start. Each prefix appears at most once;
+// duplicates are caller-visible (returned as-is) so the server can warn.
+func (e *Engine) HTTPMounts() []module.HTTPMounter {
+	var out []module.HTTPMounter
+	walk := func(v any) {
+		if m, ok := v.(module.HTTPMounter); ok {
+			out = append(out, m)
+		}
+	}
+	for _, i := range e.identifiers {
+		walk(i)
+	}
+	walk(e.authorizer)
+	for _, m := range e.mutators {
+		walk(m)
+	}
+	return out
 }
 
 // denyFromError maps a module error to a Decision the server layer can
