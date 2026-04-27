@@ -621,6 +621,12 @@ identifier that calls the IdP's introspection endpoint and **caches** the
 response keyed by token hash with a TTL bounded by `exp`. This is essential
 for performance — see §5.
 
+> **Note on revocation.** Caching introspection results means an early
+> revocation by the IdP is invisible until the cached entry's TTL
+> expires (default ≤ token `exp`). The "short TTLs + refresh rotation"
+> story handles this for most deployments; operators who need stronger
+> guarantees can opt into the revocation surface in **M14** (§7).
+
 ---
 
 ## 5. Policy enforcement & caching (design now, implement later)
@@ -1078,6 +1084,19 @@ by dependency, not by calendar.
     - Per-tenant rate limits (token-bucket).
     - Per-tenant key-material isolation; cluster-scoped
       `IdentityProvider` with tenant overrides.
+    - **Outbound resilience.** Per-upstream circuit breaker (Hystrix-style
+      half-open trial after a configurable cool-down) and retry budgets
+      for every network-touching module (`oauth2-introspection`, `jwt`
+      JWKS fetch, `openfga` Check, IdP token endpoint, Valkey backend).
+      Today each module has its own timeout but no shared breaker, so a
+      slow IdP can chew up worker goroutines under load. Centralized in
+      a small `pkg/upstream` helper consumed by all built-ins.
+    - **`lwauthctl` dev-loop expansion**: `lwauthctl validate` (compile
+      an AuthConfig YAML offline and surface module errors), `lwauthctl
+      diff` (show what would change vs. the running engine), `lwauthctl
+      explain` (dry-run a request through the pipeline and dump each
+      stage's verdict). The CLI exists in M0 as a stub; M11 makes it
+      genuinely useful for debugging multi-tenant configs.
 
 14. **M12 – Supply-chain hardening.**
     - Docker Hardened Image bases (`dhi.io/golang`, `dhi.io/alpine`,
@@ -1095,6 +1114,49 @@ by dependency, not by calendar.
       through `plugin/v2`.
     - Documented promotion criteria for tier 2 → tier 1 plugins.
     - Published Go SDK + Python/Rust plugin SDKs.
+    - **Plugin-author conformance suite** (`pkg/module/conformance`):
+      a Go test harness third-party module authors can vendor that
+      asserts their `Identifier` / `Authorizer` / `Mutator` honors the
+      contract (concurrent-safe, no Context retention, sentinel errors,
+      `nil`-safety). Published alongside `lightweightauth-plugins`.
+    - **Documentation site + cookbook.** A `docs/cookbook/` of
+      end-to-end recipes ("protect a gRPC service with Istio + lwauth +
+      RBAC", "add OpenFGA to an existing Envoy deployment", "rotate
+      HMAC secrets without downtime"). The per-module references in
+      `docs/modules/` (added on the design/* branch in 2026-04) become
+      the foundation; v1.0 surfaces them on a docs site.
+
+16. **M14 – Revocation (optional).** Until M14, lwauth is *short-TTL
+    by design*: revocation = let things expire. M14 adds three opt-in
+    surfaces for operators who need stronger guarantees:
+
+    - **Token revocation list** (RFC 7009 client-facing helper). New
+      `pkg/identity/revocation` consults a shared store keyed by
+      `jti` (for JWTs) or `sha256(token)` (for opaque bearers) before
+      accepting a credential. Backed by the same `cache.Backend`
+      registry as M7 (Valkey by default) so revocations propagate to
+      every replica via `SET <key> "1" PX <remaining-exp>`. The IdP
+      writes; lwauth reads. A short Bloom-filter pre-check keeps the
+      fast path at one in-process lookup when the list is empty.
+    - **Decision-cache invalidation API.** New `lwauthctl revoke`
+      command and authenticated `POST /v1/admin/revoke` endpoint that
+      delete cached decisions by `(tenant, sub)` or full key prefix.
+      This is what an operator runs *right now* to drop access
+      without waiting for M5's positive TTL. Already partially
+      possible since M7 (`DEL` on Valkey); M14 wraps it in a stable
+      CLI + audited HTTP surface.
+    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
+      already implemented for M3's `MemoryStore`; M14 extends it to
+      a shared `valkey` session store and wires
+      `/oauth2/logout` + admin revoke through it so a logout on one
+      replica is honored by all of them.
+
+    Why optional: the bearer story works fine with short access-token
+    TTLs (≤ 5 min) and refresh rotation (M6) for most deployments.
+    Revocation is mandatory only when (a) you can't shorten TTLs (UX
+    constraints), (b) you have regulatory "kill switch" requirements,
+    or (c) you ship long-lived API keys. Operators who don't need it
+    pay zero cost.
 
 ### Experimental / post-v1
 
