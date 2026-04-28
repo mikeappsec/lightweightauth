@@ -51,7 +51,11 @@ identifiers:
 > `Request.PeerCerts` (i.e. lwauth itself terminated TLS and the Go
 > stack verified the peer) are accepted. Supplying `trustedCAFiles` /
 > `trustedCAs` without the trust flag is rejected at config compile
-> time.
+> time. **The symmetric mistake is also rejected:**
+> `trustForwardedClientCert: true` without **any** anchor — no
+> `trustedCAFiles`, no `trustedCAs`, and no `trustedIssuers` — fails
+> at compile time so an operator can't accidentally re-enable
+> blind-trust XFCC by flipping a single flag.
 
 ### Required Envoy / Istio settings
 
