@@ -1373,6 +1373,22 @@ by dependency, not by calendar.
        contract that turns the API freeze into something we can
        enforce in CI rather than just promise.
 
+    *Known follow-up: multi-writer `configstream.Broker`.* The
+    M12 broker stress test surfaced an implicit single-writer
+    contract on `Broker.Publish`: under concurrent publishers a
+    snapshot from publisher A may iterate the subscriber list
+    behind publisher B's, and write an older snapshot into a
+    slow subscriber's pending slot *after* B's newer snapshot
+    landed. The reconciler is single-writer in production today
+    (one reconcile loop per controller), so this is documented
+    on `Broker.Publish` rather than fixed for v1.0. Lifting the
+    contract is straightforward — compare versions in
+    `subscription.deliver` so the pending slot only moves
+    forwards — and is planned for the post-v1.0 line where
+    per-tenant push and federation may legitimately produce
+    multiple publishers. Tracked separately so it doesn't gate
+    v1.0.
+
     *Secure code review.* Before tagging v1.0 we run a focused
     review of the codebase. Scope:
 
