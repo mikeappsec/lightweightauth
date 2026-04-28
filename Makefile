@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln
 
 GO     ?= go
 BIN    ?= bin
@@ -73,6 +73,11 @@ soak:
 # gated so default `go test ./...` stays fast.
 chaos:
 	$(GO) test -tags chaos ./tests/chaos/... -count=1 -timeout 60s
+
+# Vulnerability scan via Go's official govulncheck. Pinned to the
+# repo's Go toolchain so vendored stdlib paths resolve correctly.
+vuln:
+	GOTOOLCHAIN=go1.26.2 $(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 clean:
 	rm -rf $(BIN)
