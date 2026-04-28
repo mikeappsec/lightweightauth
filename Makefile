@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz
 
 GO     ?= go
 BIN    ?= bin
@@ -52,6 +52,14 @@ envtest-bin:
 # Run the envtest-tagged e2e suite against a real apiserver.
 envtest: envtest-bin
 	$(GO) test -tags envtest ./tests/envtest/... -count=1 -timeout 120s
+
+# Cycle each Fuzz* target for $(FUZZTIME) (default 30s). Go runs one
+# fuzz target per invocation, so we drive them sequentially.
+FUZZTIME ?= 30s
+fuzz:
+	$(GO) test ./pkg/identity/hmac/...  -fuzz=FuzzParseAuth  -fuzztime=$(FUZZTIME)
+	$(GO) test ./pkg/identity/mtls/...  -fuzz=FuzzParseXFCC  -fuzztime=$(FUZZTIME)
+	$(GO) test ./pkg/identity/dpop/...  -fuzz=FuzzMatchHTU   -fuzztime=$(FUZZTIME)
 
 clean:
 	rm -rf $(BIN)
