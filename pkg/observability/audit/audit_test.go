@@ -58,6 +58,25 @@ func TestDiscardSinkIsSafe(t *testing.T) {
 	Discard.Record(context.Background(), &Event{Decision: "allow"})
 }
 
+// TestDiscardIsComparable guards against a regression where Discard
+// was a SinkFunc (function type, uncomparable) and `Default() ==
+// Discard` panicked at runtime. lwauthd.Run uses that exact comparison
+// to decide whether to install a default slog sink.
+func TestDiscardIsComparable(t *testing.T) {
+	t.Parallel()
+	prev := Default()
+	t.Cleanup(func() { SetDefault(prev) })
+
+	SetDefault(nil) // resets to Discard
+	if Default() != Discard {
+		t.Fatalf("Default() != Discard after SetDefault(nil)")
+	}
+	SetDefault(SinkFunc(func(context.Context, *Event) {}))
+	if Default() == Discard {
+		t.Fatalf("Default() == Discard after installing custom sink")
+	}
+}
+
 func TestSetDefault(t *testing.T) {
 	prev := Default()
 	t.Cleanup(func() { SetDefault(prev) })
