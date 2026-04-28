@@ -22,3 +22,6 @@ Thumbs.db
 # Local config
 .env
 *.local.yaml
+
+# envtest binaries (kube-apiserver, etcd) downloaded by setup-envtest
+/.envtest-bin/

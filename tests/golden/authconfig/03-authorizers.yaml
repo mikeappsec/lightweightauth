@@ -1,0 +1,46 @@
+# Golden: every authorizer kind composed under composite.anyOf.
+# Confirms the composite factory recursively builds children, and that
+# rbac / cel / opa / openfga all parse from a frozen YAML shape.
+tenantId: golden-authorizers
+identifierMode: firstMatch
+
+identifiers:
+  - name: dev-apikey
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        k1: { subject: alice, roles: [admin] }
+
+authorizers:
+  - name: combined
+    type: composite
+    config:
+      anyOf:
+        - name: rbac-fast-path
+          type: rbac
+          config:
+            rolesFrom: claim:roles
+            allow: [admin]
+        - name: abac-cel
+          type: cel
+          config:
+            expression: 'identity.subject == "alice"'
+        - name: abac-opa
+          type: opa
+          config:
+            query: data.authz.allow
+            rego: |
+              package authz
+              default allow = false
+              allow if input.identity.subject == "alice"
+        - name: rebac
+          type: openfga
+          config:
+            apiUrl: http://openfga.example.svc:8080
+            storeId: 01HXYZ
+            check:
+              user:     "user:{{ .Identity.Subject }}"
+              relation: "viewer"
+              object:   "doc:readme"
+            timeout:  500ms

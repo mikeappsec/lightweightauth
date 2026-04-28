@@ -1373,6 +1373,22 @@ by dependency, not by calendar.
        contract that turns the API freeze into something we can
        enforce in CI rather than just promise.
 
+    *Known follow-up: multi-writer `configstream.Broker`.* The
+    M12 broker stress test surfaced an implicit single-writer
+    contract on `Broker.Publish`: under concurrent publishers a
+    snapshot from publisher A may iterate the subscriber list
+    behind publisher B's, and write an older snapshot into a
+    slow subscriber's pending slot *after* B's newer snapshot
+    landed. The reconciler is single-writer in production today
+    (one reconcile loop per controller), so this is documented
+    on `Broker.Publish` rather than fixed for v1.0. Lifting the
+    contract is straightforward — compare versions in
+    `subscription.deliver` so the pending slot only moves
+    forwards — and is planned for the post-v1.0 line where
+    per-tenant push and federation may legitimately produce
+    multiple publishers. Tracked separately so it doesn't gate
+    v1.0.
+
     *Secure code review.* Before tagging v1.0 we run a focused
     review of the codebase. Scope:
 
@@ -1429,6 +1445,50 @@ by dependency, not by calendar.
     errors, `nil`-safety). Published alongside
     `lightweightauth-plugins`.
 
+    *Dependency refresh — what landed and why some deps stayed pinned.*
+    Run as a final M12 sweep: `go get -u ./...` followed by
+    `go mod tidy` and a full test + `govulncheck` run. Outcomes:
+
+    - **Bumped to current minor/patch:**
+      - `go.opentelemetry.io/otel` family (`otel`, `trace`, `metric`,
+        `sdk/metric`) **1.41.0 → 1.43.0** — also closes dependabot
+        alert #1 (high) for the multi-value `baggage` header
+        allocation DoS (GHSA-r3pj-fc6c-r6j8).
+      - `golang.org/x/{crypto, net, sys, text, term}` to current.
+      - `sigs.k8s.io/controller-runtime` **v0.21.0 → v0.23.3**.
+      - `sigs.k8s.io/structured-merge-diff/v6` **6.3.2 → 6.4.0**.
+      - `github.com/lestrrat-go/jwx/v3` **3.0.13 → 3.1.0** (and the
+        v2 line consumed by `pkg/identity/oauth2` is at v2.1.6).
+      - All Prometheus, go-openapi, fxamacker/cbor, goccy/go-json,
+        mailru/easyjson, vektah/gqlparser, valyala/fastjson, and
+        gomodules.xyz/jsonpatch indirects to current.
+    - **k8s.io/* held at v0.35.4** (was 0.34.1, target was 0.36.0).
+      The k8s 0.36 release added a new method
+      (`HasSyncedChecker`) to the `client-go`
+      `ResourceEventHandlerRegistration` interface, which
+      controller-runtime v0.23.3 (the latest at v1.0 cut) does not
+      yet implement on its `multi_namespace_cache.handlerRegistration`
+      type. Building against k8s 0.36 + controller-runtime 0.23.3
+      therefore breaks compilation of the indirect dependency chain
+      we don't own. We pin to v0.35.4 (the highest k8s minor
+      controller-runtime 0.23.3 builds against) and will revisit on
+      the next controller-runtime minor.
+    - **Container bases unchanged at v1.0:** `golang:1.26.2-alpine`
+      (matches the repo's `go` directive), `alpine:3.22.4`,
+      `envoyproxy/envoy:v1.37.2`, `ealen/echo-server:0.9.2`. All
+      are on their current minor lines; bumping them is a no-op
+      change tracked separately so a base-image refresh does not
+      gate a code release.
+    - **Verification gates the upgrade ran clean through:**
+      `go build ./...`, `go test ./...` (33/33 packages green),
+      `govulncheck ./...` (zero called vulnerabilities), and the
+      build-tag-gated suites (`make envtest`, `make soak`,
+      `make chaos`, `make fuzz`).
+
+    The `make vuln` Makefile target (added in slice 9) reproduces
+    the scan against the repo's pinned toolchain so contributors
+    can replay the v1.0 result locally.
+
 15. **M13 – Supply-chain hardening.** Deferred to *after* v1.0
     deliberately: M12 freezes the API and ships a reviewed,
     well-tested release using the standard `golang:alpine` base, so
@@ -1484,6 +1544,111 @@ by dependency, not by calendar.
     operation.
 17. **WASM plugins** via `wazero`. Defer until the auth-library
     ecosystem in WASM matures (§2).
+18. **OpenAPI / Protobuf-driven API surface description.** Ship a
+    machine-readable contract for every endpoint lwauth exposes:
+    - **HTTP** (`POST /v1/authorize`, `/healthz`, `/readyz`, `/metrics`,
+      and any `module.HTTPMounter` prefixes such as `/oauth2/*`) as an
+      OpenAPI 3.1 document checked into `api/openapi/lwauth.yaml`,
+      generated from the request/response Go structs (`kin-openapi` or
+      `swaggo` + a `go generate` step) and served at
+      `GET /openapi.json` behind the same admin gate as `/metrics`.
+    - **gRPC** (`envoy.service.auth.v3.Authorization`,
+      `lightweightauth.v1.Auth`, `lightweightauth.v1.ConfigDiscovery`,
+      `grpc.health.v1.Health`) as the existing `.proto` files plus a
+      published `buf.build` module so consumers can codegen clients
+      without vendoring our tree.
+
+    Why post-v1: the wire shapes are stable in v1.0 (frozen by the
+    conformance suite, M12 slice 2), so a generated spec can't drift
+    from reality — but generation, doc hosting, and the admin-gate
+    plumbing for `/openapi.json` are themselves a slice of work, and
+    no v1.0 user is blocked on it. Promote to v1.1 once a contributor
+    picks it up; track as `DOC-OPENAPI-1`.
+
+19. **Multi-writer `configstream.Broker`.** Lift the implicit
+    single-writer contract on `Broker.Publish` so per-tenant
+    publishers and federated control planes can fan in safely.
+    Implementation is small — compare versions in
+    `subscription.deliver` so a slow subscriber's pending slot
+    only ever moves forwards — but it changes a documented
+    invariant, so it's a v1.1 surface change rather than a v1.0
+    patch. Tracked as `M12-BROKER-MW`. (Originally noted in M12
+    §15 "Known follow-up: multi-writer `configstream.Broker`".)
+
+20. **Conformance coverage for all identifiers.** M12 slice 2
+    landed the Door A vs Door B parity harness using `apikey + rbac`
+    as the single fixture. Promote it to a fixture matrix that walks
+    every shipped identifier (`jwt`, `oauth2-introspection`, `mtls`,
+    `hmac`, `dpop` wrapper, `oauth2`) and authorizer (`opa`, `cel`,
+    `composite`, `openfga`) so a transport-level regression in any
+    module is caught at PR time. The harness is already extracted
+    in `pkg/module/conformance` for plugin authors — this is the
+    same idea applied internally. Tracked as `M12-CONF-MATRIX`.
+
+21. **FIPS 140-3 build mode (`boringcrypto`).** Optional `make
+    fips` target that builds with `GOEXPERIMENT=boringcrypto` and
+    the matching toolchain so regulated deployments can ship a
+    FIPS-validated lwauth binary. No code change expected; what's
+    needed is a CI matrix entry, a published image tag, and a
+    docs note on which crypto primitives switch backends. Security
+    review tracks as `K-CRYPTO-2`.
+
+22. **Negative-cache invalid OAuth2 introspection responses.** The
+    `oauth2-introspection` identifier negative-caches `active=false`
+    today, but a malformed / non-2xx introspection response surfaces
+    as `ErrUpstream` and is re-attempted every request. Add a small
+    short-TTL negative cache for the latter so a misbehaving IdP
+    can't be turned into a per-request DoS. Security review tracks
+    as `K-AUTHN-2`.
+
+23. **Distributed (cross-replica) rate-limit aggregation.** M11's
+    `pkg/ratelimit` is per-replica; under N pods a tenant can spend
+    `N × limit` before any replica trips. v1.1 adds an optional
+    Valkey-backed aggregator (the `cache.Backend` registry already
+    provides the connection) keyed by `(tenant, bucket)` with a
+    sliding window. Per-replica buckets stay the default — the
+    distributed mode is opt-in for operators who actually need
+    cluster-wide limits. Security review tracks as `K-DOS-1`.
+
+24. **Signature on plugin replies.** The `grpc-plugin` adapter
+    trusts the plugin's reply payload by virtue of having dialed
+    it; on a shared host or a multi-tenant plugin sidecar that's a
+    weaker boundary than we'd like. Add an optional
+    `plugin/v1.1` extension that lets a plugin sign its
+    `IdentifyResponse` / `AuthorizePluginResponse` body with a
+    pre-shared key (HMAC) or X.509 cert; the host verifies before
+    surfacing the result to the pipeline. Security review tracks
+    as `F-PLUGIN-2`.
+
+25. **Plugin lifecycle + mTLS to plugin host.** M10 explicitly
+    deferred plugin spawn / health-check / restart to M11, and TLS
+    on the plugin dial to "M11 alongside circuit-breaking". M11
+    shipped outbound resilience (`pkg/upstream`) for *core*
+    upstreams but did not extend it to plugin processes; today
+    operators run plugins as sidecar containers / systemd units
+    and let the platform restart them. v1.1 closes both: an opt-in
+    supervisor mode (process exec, periodic
+    `grpc.health.v1.Health.Check`, exponential-backoff restart)
+    and mTLS dial credentials on the existing
+    `address` config knob. Tracked as `M10-PLUGIN-LIFECYCLE`.
+
+26. **SpiceDB adapter.** M7 shipped `openfga` first because of its
+    simpler HTTP `Check` API and CNCF sandbox status, and explicitly
+    flagged SpiceDB as "a future adapter at the same surface".
+    Land it as `pkg/authz/spicedb` registered as `spicedb`,
+    composing under `composite` exactly like `openfga` does. The
+    decision-cache + `pkg/upstream` Guard wiring is reused
+    verbatim. Tracked as `M7-SPICEDB`.
+
+27. **Cookbook recipes + hosted docs site.** M12 §15 promised a
+    `docs/cookbook/` of end-to-end recipes ("protect a gRPC
+    service with Istio + lwauth + RBAC", "add OpenFGA to an
+    existing Envoy deployment", "rotate HMAC secrets without
+    downtime") plus a hosted docs site built from the per-module
+    references in `docs/modules/`. The module references and
+    [QUICKSTART.md](QUICKSTART.md) landed in v1.0; the cookbook
+    and the static-site build (likely `mkdocs-material` or
+    Hugo) did not. Tracked as `DOC-COOKBOOK-1`.
 
 ### Explicit non-goals
 

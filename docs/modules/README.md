@@ -59,6 +59,19 @@ the `pkg/module` interfaces these implement.
 | `memory` | [cache-memory.md](cache-memory.md) | Default. In-process LRU. Single replica or per-replica state. |
 | `valkey` | [cache-valkey.md](cache-valkey.md) | Shared decision/introspection/DPoP-replay cache across replicas. |
 
+## Cross-cutting concerns
+
+| Page | Covers |
+|---|---|
+| [session.md](session.md) | AES-256-GCM cookie store used by the `oauth2` identifier (M3). |
+| [ratelimit.md](ratelimit.md) | Per-tenant token-bucket rate limiter (M11). |
+| [upstream.md](upstream.md) | Outbound resilience: circuit breaker + retry budget (M11). |
+| [observability.md](observability.md) | Prometheus metrics, OTel tracing, structured audit (M9). |
+| [configstream.md](configstream.md) | xDS-style streaming config push (M11). |
+
+For a milestone-by-milestone feature index, see
+[../MILESTONES.md](../MILESTONES.md).
+
 ## How `type` is registered
 
 Every module file ends with a one-liner like:

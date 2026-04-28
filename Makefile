@@ -1,10 +1,15 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln
 
 GO     ?= go
 BIN    ?= bin
 PKG    := ./...
 IMAGE  ?= lightweightauth
 TAG    ?= dev
+
+# envtest binaries live under .envtest-bin/ (gitignored). The path
+# printed by setup-envtest is exported as KUBEBUILDER_ASSETS for the
+# envtest-tagged tests in tests/envtest/.
+ENVTEST_BIN_DIR ?= .envtest-bin
 
 build:
 	$(GO) build -o $(BIN)/lwauth ./cmd/lwauth
@@ -37,6 +42,42 @@ proto:
 
 docker:
 	docker build -t $(IMAGE):$(TAG) .
+
+# Download kube-apiserver + etcd binaries for envtest into ENVTEST_BIN_DIR.
+# Idempotent; safe to re-run.
+envtest-bin:
+	$(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	setup-envtest use --bin-dir $(ENVTEST_BIN_DIR) -p path
+
+# Run the envtest-tagged e2e suite against a real apiserver.
+envtest: envtest-bin
+	$(GO) test -tags envtest ./tests/envtest/... -count=1 -timeout 120s
+
+# Cycle each Fuzz* target for $(FUZZTIME) (default 30s). Go runs one
+# fuzz target per invocation, so we drive them sequentially.
+FUZZTIME ?= 30s
+fuzz:
+	$(GO) test ./pkg/identity/hmac/...  -fuzz=FuzzParseAuth  -fuzztime=$(FUZZTIME)
+	$(GO) test ./pkg/identity/mtls/...  -fuzz=FuzzParseXFCC  -fuzztime=$(FUZZTIME)
+	$(GO) test ./pkg/identity/dpop/...  -fuzz=FuzzMatchHTU   -fuzztime=$(FUZZTIME)
+
+# Soak/load harness: drives synthetic traffic through Door A (HTTP) and Door B (gRPC)
+# against an apikey + rbac + decision-cache config. Build-tag-gated so default
+# `go test ./...` stays fast. Tunables: SOAK_RPS, SOAK_DURATION, SOAK_P99_MS, SOAK_WORKERS.
+# CI default is 1k RPS for 10s; nightly should override SOAK_DURATION=30m SOAK_RPS=10000.
+soak:
+	$(GO) test -tags soak ./tests/soak/... -count=1 -timeout 120s
+
+# Chaos: validates pkg/upstream resilience invariants under simulated
+# upstream faults (500-storm, slow IdP, concurrent fan-out). Build-tag
+# gated so default `go test ./...` stays fast.
+chaos:
+	$(GO) test -tags chaos ./tests/chaos/... -count=1 -timeout 60s
+
+# Vulnerability scan via Go's official govulncheck. Pinned to the
+# repo's Go toolchain so vendored stdlib paths resolve correctly.
+vuln:
+	GOTOOLCHAIN=go1.26.2 $(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 clean:
 	rm -rf $(BIN)

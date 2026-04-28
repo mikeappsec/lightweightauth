@@ -1,0 +1,33 @@
+# Golden: cache + per-tenant rate limit. Both are top-level config
+# blocks that v1.0 freezes the shape of.
+tenantId: golden-cache-rl
+identifierMode: firstMatch
+
+identifiers:
+  - name: dev-apikey
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        k1: { subject: alice, roles: [admin] }
+
+authorizers:
+  - name: rbac
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow: [admin]
+
+cache:
+  key: [sub, method, pathTemplate]
+  ttl: 30s
+  negativeTtl: 5s
+  backend: memory
+
+rateLimit:
+  default:
+    rps: 100
+    burst: 200
+  perTenant:
+    rps: 500
+    burst: 1000

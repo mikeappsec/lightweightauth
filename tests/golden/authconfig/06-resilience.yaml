@@ -1,0 +1,35 @@
+# Golden: the resilience: { breaker, retries } config block, attached
+# to every network-touching module. v1.0 freezes the shared shape.
+tenantId: golden-resilience
+identifierMode: firstMatch
+
+identifiers:
+  - name: dev-apikey
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        k1: { subject: alice, roles: [admin] }
+
+authorizers:
+  - name: rebac
+    type: openfga
+    config:
+      apiUrl: http://openfga.example.svc:8080
+      storeId: 01HXYZ
+      check:
+        user:     "user:{{ .Identity.Subject }}"
+        relation: "viewer"
+        object:   "doc:readme"
+      timeout:  500ms
+      resilience:
+        breaker:
+          failureThreshold: 5
+          successThreshold: 2
+          openFor: 5s
+        retries:
+          maxAttempts: 3
+          baseDelay: 50ms
+          maxDelay: 2s
+          budgetRPS: 10
+          budgetBurst: 20

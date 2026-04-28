@@ -1,0 +1,19 @@
+# Golden: minimal apikey + rbac. The simplest config that compiles
+# end-to-end. If this stops loading, something fundamental broke.
+tenantId: golden-min
+identifierMode: firstMatch
+
+identifiers:
+  - name: dev-apikey
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        k1: { subject: alice, roles: [admin] }
+
+authorizers:
+  - name: rbac
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow: [admin]

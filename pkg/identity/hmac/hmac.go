@@ -152,7 +152,11 @@ func (i *identifier) checkClockSkew(r *module.Request) error {
 func parseAuth(s string) (keyID, sig string, err error) {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, ':'); i > 0 && !strings.ContainsAny(s, "=,") {
-		return s[:i], s[i+1:], nil
+		k, v := s[:i], s[i+1:]
+		if k == "" || v == "" {
+			return "", "", fmt.Errorf("missing keyId/signature")
+		}
+		return k, v, nil
 	}
 	for _, part := range strings.Split(s, ",") {
 		part = strings.TrimSpace(part)
