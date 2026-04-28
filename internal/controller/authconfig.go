@@ -17,7 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -67,6 +69,25 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return reconcile.Result{}, fmt.Errorf("get AuthConfig: %w", err)
 	}
 
+	// Resolve cluster-scoped IdentityProvider references before compile,
+	// so the jwt identifier (and any future bearer-style identifier) sees
+	// a fully materialized config. Tenant-set fields override the IdP's
+	// defaults; see ResolveIdPRefs for the merge rules.
+	var idps v1alpha1.IdentityProviderList
+	if err := r.Client.List(ctx, &idps); err != nil {
+		return reconcile.Result{}, fmt.Errorf("list IdentityProviders: %w", err)
+	}
+	if err := ResolveIdPRefs(&ac.Spec, idps.Items); err != nil {
+		logger.Error(err, "idpRef resolution failed; previous engine kept running")
+		ac.Status = v1alpha1.AuthConfigStatus{
+			Ready:              false,
+			ObservedGeneration: ac.Generation,
+			Message:            err.Error(),
+		}
+		_ = r.Client.Status().Update(ctx, &ac)
+		return reconcile.Result{}, nil //nolint:nilerr // surfaced on status
+	}
+
 	eng, err := config.Compile(&ac.Spec)
 	if err != nil {
 		// Surface compile errors on the CR's status so kubectl describe
@@ -99,9 +120,18 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 // down to just the named AuthConfig so we don't waste reconcile budget
 // on siblings in the same namespace.
 func (r *AuthConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Any IdentityProvider change enqueues the single watched AuthConfig
+	// so its compiled engine picks up the new key material. We don't
+	// need a fan-out here because the reconciler only owns one config;
+	// in a future multi-AuthConfig world this becomes a List+filter.
+	enqueueWatched := handler.EnqueueRequestsFromMapFunc(
+		func(_ context.Context, _ client.Object) []reconcile.Request {
+			return []reconcile.Request{{NamespacedName: r.Watched}}
+		},
+	)
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.AuthConfig{}).
-		WithEventFilter(matchesNamePredicate{Watched: r.Watched}).
+		For(&v1alpha1.AuthConfig{}, builder.WithPredicates(matchesNamePredicate{Watched: r.Watched})).
+		Watches(&v1alpha1.IdentityProvider{}, enqueueWatched).
 		Named("authconfig").
 		Complete(r)
 }
