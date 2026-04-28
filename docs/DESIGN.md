@@ -1577,15 +1577,22 @@ S2. **SEC-MTLS-1 — XFCC trust requires an anchor.** Slice 1 added
     when `trustXFCC == true && pool == nil &&
     len(trustedIssuers) == 0`. Severity: M.
 
-S3. **TEST-RACE-1 — Race-mode flake in `configstream`.**
-    `pkg/configstream/TestGRPC_MultiClientReconnectStorm` passes
-    in isolation but flakes intermittently under
-    `go test -race ./...`. Most likely a shutdown-ordering or
-    goroutine-leak issue in the storm fixture rather than a
-    `Broker` correctness bug, but until that's confirmed it
-    obscures real regressions in CI. Reproduce with
-    `-count=20 -race`, isolate with `-run`, then either fix the
-    test or open a `Broker` fix as required.
+S3. **TEST-RACE-1 — Race-mode flake in `configstream`.** ✅ shipped.
+    `pkg/configstream/TestGRPC_MultiClientReconnectStorm` passed in
+    isolation but flaked intermittently under `go test -race ./...`.
+    Investigated: the original `goleak` allow-list covered only
+    *server-side* gRPC transport helpers
+    (`http2Server.{keepalive,HandleStreams}`, etc.). The client-side
+    counterparts (`http2Client.{reader,keepalive}`,
+    `addrConn.resetTransport`, the resolver/balancer
+    `CallbackSerializer`) can outlive `cc.Close()` and
+    `GracefulStop()` by a few scheduler ticks under `-race ./...`,
+    and trip the leak check before they unwind. Not a `Broker`
+    correctness bug. Fix: mirror the server-side allow-list with the
+    symmetric client-side helpers and wrap the goleak call in a
+    50 ms settle window. A real `Broker` subscription-pump leak does
+    not exit on its own, so it still fails the check after the
+    settle.
 
 #### Tier A — hardening (v1.1)
 
