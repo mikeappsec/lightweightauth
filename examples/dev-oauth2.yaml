@@ -16,7 +16,7 @@
 # Then any subsequent /v1/authorize call (or Envoy ext_authz check) that
 # carries the session cookie will pass through the rbac authorizer.
 #
-# The cookie.secret below is a DEMO ONLY value; rotate it via
+# The cookie.secret below is a DEMO_DO_NOT_USE value; rotate it via
 # `openssl rand -hex 32` before any real deployment.
 
 tenantId: dev

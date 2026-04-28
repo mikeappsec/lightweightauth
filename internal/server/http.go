@@ -145,10 +145,22 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		Headers:  in.Headers,
 	}
 	dec, id, _ := eng.Evaluate(context.WithoutCancel(r.Context()), req)
+	// Engine emits a verbose internal reason (e.g. "hmac: signature
+	// mismatch") that the audit log captures. Public callers see only
+	// a generic status-aligned string so policy and module internals
+	// don't leak.
+	publicMsg := dec.Reason
+	if !dec.Allow {
+		status := dec.Status
+		if status == 0 {
+			status = http.StatusForbidden
+		}
+		publicMsg = publicReason(status, dec.Reason)
+	}
 	out := authorizeResponse{
 		Allow:           dec.Allow,
 		Status:          dec.Status,
-		Reason:          dec.Reason,
+		Reason:          publicMsg,
 		UpstreamHeaders: dec.UpstreamHeaders,
 		ResponseHeaders: dec.ResponseHeaders,
 	}
