@@ -2,9 +2,14 @@
 // (DESIGN.md §4):
 //
 //  1. In-process TLS termination — the server layer populates
-//     Request.PeerCerts with the leaf certificate's DER bytes.
-//  2. Upstream termination via Envoy — Envoy forwards the verified peer
-//     cert chain in the `x-forwarded-client-cert` (XFCC) header.
+//     Request.PeerCerts with the leaf certificate's DER bytes. Trust
+//     here flows from the TLS stack itself; the cert is already
+//     verified by the time it reaches us.
+//  2. Upstream termination via Envoy / Istio — Envoy forwards the
+//     verified peer cert chain in the `x-forwarded-client-cert` (XFCC)
+//     header. **Trust on this path is opt-in** (`trustForwardedClientCert`)
+//     because anything that can reach the auth surface can otherwise
+//     forge identity by setting the header itself.
 //
 // The module accepts whichever is available, with PeerCerts winning when
 // both are present.
@@ -20,6 +25,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
@@ -28,29 +34,53 @@ import (
 // Config is the YAML/CRD shape.
 //
 //	type: mtls
-//	header:        X-Forwarded-Client-Cert       # default; only consulted if PeerCerts is empty
-//	trustedIssuers: ["CN=Corp Root CA"]          # optional, exact-match Subject DN allow-list
+//	header:        X-Forwarded-Client-Cert       # default; only consulted when trustForwardedClientCert: true
+//	trustForwardedClientCert: false              # default; MUST set true to read XFCC
+//	trustedCAFiles: ["/etc/lwauth/ca.pem"]       # PEM bundle(s); enables x509 chain verification of XFCC leaves
+//	trustedCAs:    "-----BEGIN CERTIFICATE-----..."  # alternative inline PEM bundle
+//	trustedIssuers: ["CN=Corp Root CA"]          # optional, secondary Subject-DN allow-list (not a trust check on its own)
 type Config struct {
-	Header         string   `yaml:"header" json:"header"`
-	TrustedIssuers []string `yaml:"trustedIssuers" json:"trustedIssuers"`
+	Header                   string   `yaml:"header" json:"header"`
+	TrustForwardedClientCert bool     `yaml:"trustForwardedClientCert" json:"trustForwardedClientCert"`
+	TrustedCAFiles           []string `yaml:"trustedCAFiles" json:"trustedCAFiles"`
+	TrustedCAs               string   `yaml:"trustedCAs" json:"trustedCAs"`
+	TrustedIssuers           []string `yaml:"trustedIssuers" json:"trustedIssuers"`
 }
 
 type identifier struct {
 	name           string
 	header         string
+	trustXFCC      bool
+	trustedRoots   *x509.CertPool // non-nil ⇒ chain-verify XFCC leaves
 	trustedIssuers map[string]struct{}
 }
 
 func (i *identifier) Name() string { return i.name }
 
 func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Identity, error) {
-	cert, err := i.extractCert(r)
+	cert, fromXFCC, err := i.extractCert(r)
 	if err != nil {
 		return nil, err
 	}
 	if cert == nil {
 		return nil, module.ErrNoMatch
 	}
+
+	// XFCC leaves are not trusted by the TLS stack — they're whatever
+	// bytes the upstream proxy forwarded. When the operator has given
+	// us a CA bundle, verify the chain. Without a CA bundle we fall
+	// back to the (legacy) Subject-DN allow-list, but that is a weak
+	// check by itself — see docs/modules/mtls.md.
+	if fromXFCC && i.trustedRoots != nil {
+		opts := x509.VerifyOptions{
+			Roots:     i.trustedRoots,
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageAny},
+		}
+		if _, err := cert.Verify(opts); err != nil {
+			return nil, fmt.Errorf("%w: mtls: xfcc chain verify: %v", module.ErrInvalidCredential, err)
+		}
+	}
+
 	if len(i.trustedIssuers) > 0 {
 		if _, ok := i.trustedIssuers[cert.Issuer.String()]; !ok {
 			return nil, fmt.Errorf("%w: mtls: issuer %q not trusted", module.ErrInvalidCredential, cert.Issuer.String())
@@ -77,20 +107,36 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 
 // extractCert returns the verified peer leaf certificate. It prefers
 // Request.PeerCerts (set when lwauth itself terminated TLS) and falls
-// back to parsing Envoy's XFCC header.
-func (i *identifier) extractCert(r *module.Request) (*x509.Certificate, error) {
+// back to parsing Envoy's XFCC header — but only when the operator has
+// explicitly opted in via trustForwardedClientCert: true.
+//
+// fromXFCC is true when the cert came from the header (so the caller
+// knows to apply additional verification); false when it came from the
+// TLS stack and is already trusted.
+func (i *identifier) extractCert(r *module.Request) (cert *x509.Certificate, fromXFCC bool, err error) {
 	if len(r.PeerCerts) > 0 {
-		cert, err := x509.ParseCertificate(r.PeerCerts)
+		c, err := x509.ParseCertificate(r.PeerCerts)
 		if err != nil {
-			return nil, fmt.Errorf("%w: mtls: parse PeerCerts: %v", module.ErrInvalidCredential, err)
+			return nil, false, fmt.Errorf("%w: mtls: parse PeerCerts: %v", module.ErrInvalidCredential, err)
 		}
-		return cert, nil
+		return c, false, nil
+	}
+	if !i.trustXFCC {
+		// Default-deny: do not even look at the header. An attacker who
+		// can reach the auth surface cannot forge identity by setting
+		// XFCC themselves; operators who front lwauth with a verified
+		// proxy hop must opt in (and ideally pin trustedCAFiles).
+		return nil, false, nil
 	}
 	xfcc := r.Header(i.header)
 	if xfcc == "" {
-		return nil, nil
+		return nil, false, nil
 	}
-	return parseXFCC(xfcc)
+	c, err := parseXFCC(xfcc)
+	if err != nil {
+		return nil, true, err
+	}
+	return c, true, nil
 }
 
 // parseXFCC understands a (very) common subset of Envoy's XFCC header:
@@ -153,10 +199,63 @@ func anySliceOfStrings(in []string) []any {
 	return out
 }
 
+// loadCAPool builds an x509.CertPool from the optional file list and
+// inline PEM bundle. Returns (nil, nil) when the operator supplied
+// neither — chain verification is then skipped (the legacy DN
+// allow-list path).
+func loadCAPool(files []string, inline string) (*x509.CertPool, error) {
+	if len(files) == 0 && inline == "" {
+		return nil, nil
+	}
+	pool := x509.NewCertPool()
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("mtls: read trustedCAFiles[%q]: %w", f, err)
+		}
+		if !pool.AppendCertsFromPEM(b) {
+			return nil, fmt.Errorf("mtls: trustedCAFiles[%q] contained no PEM certificates", f)
+		}
+	}
+	if inline != "" {
+		if !pool.AppendCertsFromPEM([]byte(inline)) {
+			return nil, fmt.Errorf("mtls: trustedCAs inline PEM contained no certificates")
+		}
+	}
+	return pool, nil
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
 	hdr := "X-Forwarded-Client-Cert"
 	if v, ok := raw["header"].(string); ok && v != "" {
 		hdr = v
+	}
+	trustXFCC := false
+	if v, ok := raw["trustForwardedClientCert"].(bool); ok {
+		trustXFCC = v
+	}
+	var caFiles []string
+	if v, ok := raw["trustedCAFiles"].([]any); ok {
+		for _, x := range v {
+			if s, ok := x.(string); ok && s != "" {
+				caFiles = append(caFiles, s)
+			}
+		}
+	}
+	inlinePEM := ""
+	if v, ok := raw["trustedCAs"].(string); ok {
+		inlinePEM = v
+	}
+	pool, err := loadCAPool(caFiles, inlinePEM)
+	if err != nil {
+		return nil, err
+	}
+	if pool != nil && !trustXFCC {
+		// A CA bundle without trustForwardedClientCert is a
+		// configuration mistake — the operator clearly meant to enable
+		// the XFCC path. Fail closed at compile time so the mistake
+		// surfaces during AuthConfig validation, not at request time.
+		return nil, fmt.Errorf("mtls: trustedCAFiles/trustedCAs requires trustForwardedClientCert: true")
 	}
 	trusted := map[string]struct{}{}
 	if v, ok := raw["trustedIssuers"].([]any); ok {
@@ -166,7 +265,13 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 			}
 		}
 	}
-	return &identifier{name: name, header: hdr, trustedIssuers: trusted}, nil
+	return &identifier{
+		name:           name,
+		header:         hdr,
+		trustXFCC:      trustXFCC,
+		trustedRoots:   pool,
+		trustedIssuers: trusted,
+	}, nil
 }
 
 func init() { module.RegisterIdentifier("mtls", factory) }
