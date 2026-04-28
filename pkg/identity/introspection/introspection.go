@@ -3,6 +3,21 @@
 // the IdP's introspection endpoint and caches the response keyed by
 // sha256(token) (DESIGN.md §4 / §5).
 //
+// Three cache lines are kept side-by-side, all keyed by sha256(token):
+//
+//   - positive: claims for `active: true` tokens, TTL bounded by
+//     min(token.exp - now, maxCacheTtl).
+//   - negative: a sentinel for `active: false` tokens, TTL = negativeTtl.
+//   - error:    a sentinel for upstream failures (network / 5xx /
+//     circuit-open), TTL = errorTtl. This is the K-AUTHN-2 fix: a
+//     misbehaving IdP would otherwise turn into a per-request DoS
+//     amplifier — every retry in the small window after an outage
+//     would re-hit the wounded IdP. With this cache, the gateway
+//     short-circuits the next `errorTtl` of identical-token requests
+//     to a deterministic `ErrUpstream` without re-dialing. The Guard
+//     circuit-breaker is per (tenant, upstream); this cache adds
+//     per-credential-digest coalescing on top of it.
+//
 // Config shape:
 //
 //	identifiers:
@@ -16,6 +31,7 @@
 //	      cacheSize:    100000                  # default
 //	      maxCacheTtl:  300s                    # cap if exp is far in future
 //	      negativeTtl:  10s                     # how long to remember "inactive"
+//	      errorTtl:     5s                      # how long to remember "upstream error"
 //
 // The cache is per-identifier (introspection results are sensitive and
 // shouldn't be co-mingled with the shared decision cache). TTL is bounded
@@ -48,6 +64,7 @@ type Config struct {
 	CacheSize    int
 	MaxCacheTTL  time.Duration
 	NegativeTTL  time.Duration
+	ErrorTTL     time.Duration
 }
 
 type identifier struct {
@@ -56,6 +73,8 @@ type identifier struct {
 	http     *http.Client
 	posCache *cache.LRU
 	negCache *cache.LRU
+	errCache *cache.LRU
+	errStats *cache.Stats // exposed for tests; the LRU writes hits/misses/evictions here.
 	sf       singleflight
 	guard    *upstream.Guard
 }
@@ -73,6 +92,12 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 	if _, ok, _ := i.negCache.Get(ctx, key); ok {
 		return nil, module.ErrInvalidCredential
 	}
+	// Error cache hit → the IdP recently failed for THIS exact token;
+	// short-circuit to the same ErrUpstream rather than DoS-amplifying
+	// the wounded IdP. K-AUTHN-2.
+	if _, ok, _ := i.errCache.Get(ctx, key); ok {
+		return nil, fmt.Errorf("%w: introspection: cached upstream failure", module.ErrUpstream)
+	}
 	if raw, ok, _ := i.posCache.Get(ctx, key); ok {
 		var claims map[string]any
 		if err := json.Unmarshal(raw, &claims); err == nil {
@@ -82,6 +107,15 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 
 	v, err := i.sf.Do(key, func() (any, error) { return i.callIntrospection(ctx, tok) })
 	if err != nil {
+		// Cache ErrUpstream outcomes briefly so a flood of requests
+		// for the same token can't hammer a flapping IdP. We do NOT
+		// cache other error classes (ErrConfig, ErrCredentialInvalid
+		// from a malformed body, etc.) because those are deterministic
+		// in the credential and the negCache / positive paths cover
+		// the "real" deny outcomes.
+		if errors.Is(err, module.ErrUpstream) && i.cfg.ErrorTTL > 0 {
+			_ = i.errCache.Set(ctx, key, []byte{1}, i.cfg.ErrorTTL)
+		}
 		return nil, err
 	}
 	claims := v.(map[string]any)
@@ -212,6 +246,7 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		CacheSize:   100_000,
 		MaxCacheTTL: 5 * time.Minute,
 		NegativeTTL: 10 * time.Second,
+		ErrorTTL:    5 * time.Second,
 	}
 	if v, ok := raw["url"].(string); ok && v != "" {
 		cfg.URL = v
@@ -236,6 +271,9 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	if d, ok := durationFrom(raw, "negativeTtl"); ok {
 		cfg.NegativeTTL = d
 	}
+	if d, ok := durationFrom(raw, "errorTtl"); ok {
+		cfg.ErrorTTL = d
+	}
 
 	pos, err := cache.NewLRU(cfg.CacheSize, 0, nil)
 	if err != nil {
@@ -244,6 +282,11 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	neg, err := cache.NewLRU(cfg.CacheSize, 0, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: introspection %q neg-cache: %v", module.ErrConfig, name, err)
+	}
+	errStats := &cache.Stats{}
+	errC, err := cache.NewLRU(cfg.CacheSize, 0, errStats)
+	if err != nil {
+		return nil, fmt.Errorf("%w: introspection %q err-cache: %v", module.ErrConfig, name, err)
 	}
 	guardCfg, err := upstream.FromMap(raw)
 	if err != nil {
@@ -255,6 +298,8 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		http:     &http.Client{Timeout: 5 * time.Second},
 		posCache: pos,
 		negCache: neg,
+		errCache: errC,
+		errStats: errStats,
 		guard:    upstream.NewGuard(guardCfg),
 	}, nil
 }

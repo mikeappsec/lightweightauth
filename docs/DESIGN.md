@@ -1612,13 +1612,17 @@ A1. **F-PLUGIN-2 (was 24) — Signature on plugin replies.** Slice 8
     before surfacing the result to the pipeline.
 
 A2. **K-AUTHN-2 (was 22) — Negative-cache invalid introspection.**
-    The `oauth2-introspection` identifier negative-caches
-    `active=false` today, but a malformed or non-2xx introspection
-    response surfaces as `ErrUpstream` and is re-attempted every
-    request. A misbehaving IdP can therefore be turned into a
-    per-request DoS amplifier. Add a small short-TTL negative
-    cache for the upstream-error case keyed on a digest of the
-    inbound credential.
+    ✅ shipped on `v1.1-tier-a`. The `oauth2-introspection`
+    identifier already negative-cached `active=false`; v1.1 adds
+    a third cache line for `ErrUpstream` outcomes (network
+    failure, 5xx, circuit-open) keyed on `sha256(token)`,
+    TTL = `errorTtl` (default 5s, set to 0 to disable). A flood
+    of identical-token retries during an IdP blip now coalesces
+    to one upstream call per token per window instead of fanning
+    out. The Guard circuit-breaker still owns the per-(tenant,
+    upstream) coarse policy; this cache adds per-credential
+    coalescing on top. See
+    [pkg/identity/introspection/introspection.go](../pkg/identity/introspection/introspection.go).
 
 A3. **K-DOS-1 (was 23) — Distributed rate-limit aggregation.**
     `pkg/ratelimit` is per-replica; under N pods a tenant can
