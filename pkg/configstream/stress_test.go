@@ -138,6 +138,7 @@ func TestBrokerSubscriberChurn(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			ch := b.Subscribe(ctx)
 			// Read at most a handful of snapshots, then cancel.
 			for n := 0; n < 3; n++ {
