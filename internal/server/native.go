@@ -121,23 +121,32 @@ func requestFromAuthorize(in *authv1.AuthorizeRequest) *module.Request {
 // signalled in the *body* via Allow=false rather than via the gRPC
 // status code, because callers usually want both the deny reason and
 // any response_headers (e.g. WWW-Authenticate) the mutators set.
+//
+// DenyReason is redacted to a stable, status-aligned public string
+// via publicReason — the verbose decision reason still flows through
+// the engine's audit/log path for operators. Door A (HTTP) and the
+// Envoy ext_authz adapter already do this; Door B was previously
+// leaking d.Reason raw to native gRPC clients.
 func responseFromDecision(d *module.Decision, id *module.Identity) *authv1.AuthorizeResponse {
 	if d == nil {
 		return &authv1.AuthorizeResponse{
 			Allow:      false,
 			HttpStatus: http.StatusInternalServerError,
-			DenyReason: "lwauth: nil decision",
+			DenyReason: publicReason(http.StatusInternalServerError, ""),
 		}
 	}
-	resp := &authv1.AuthorizeResponse{
-		Allow:            d.Allow,
-		HttpStatus:       int32(d.Status),
-		UpstreamHeaders:  d.UpstreamHeaders,
-		ResponseHeaders:  d.ResponseHeaders,
-		DenyReason:       d.Reason,
+	httpStatus := int(d.Status)
+	if !d.Allow && httpStatus == 0 {
+		httpStatus = http.StatusForbidden
 	}
-	if !d.Allow && resp.HttpStatus == 0 {
-		resp.HttpStatus = http.StatusForbidden
+	resp := &authv1.AuthorizeResponse{
+		Allow:           d.Allow,
+		HttpStatus:      int32(httpStatus),
+		UpstreamHeaders: d.UpstreamHeaders,
+		ResponseHeaders: d.ResponseHeaders,
+	}
+	if !d.Allow {
+		resp.DenyReason = publicReason(httpStatus, d.Reason)
 	}
 	if id != nil {
 		resp.Identity = &authv1.Identity{

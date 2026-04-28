@@ -100,11 +100,46 @@ to disambiguate.
 
 ### TLS
 
-Today the dial is **always insecure**. The documented topologies (Unix
-socket on the same Pod, or TCP to localhost / a sidecar) don't cross a
-trust boundary, so adding TLS would only buy ceremony. Cross-Pod or
-cross-cluster plugins land in **M11** alongside circuit-breaking and
-client mTLS.
+The host **fails closed** when a non-loopback TCP address is configured
+without transport security. Plaintext is permitted only for loopback
+(`localhost` / `127.0.0.1` / `[::1]`) and Unix-socket addresses, where
+the plugin process is co-located and the connection never traverses a
+network an attacker can reach.
+
+For any other address, configure server-cert verification (and
+optionally client mTLS) via the `tls` block:
+
+```yaml
+authorizers:
+  - name: vendor-policy
+    type: grpc-plugin
+    config:
+      address: corp-policy.svc.cluster.local:9000
+      timeout: 50ms
+      tls:
+        caFile: /etc/lwauth/plugin-ca.pem      # verify the plugin's server cert
+        certFile: /etc/lwauth/plugin-client.pem # optional: present a client cert
+        keyFile: /etc/lwauth/plugin-client.key  # optional: paired with certFile
+        serverName: corp-policy.internal       # optional: SNI / hostname override
+```
+
+Operators who really do want plaintext for a non-loopback address (e.g.
+a hardened L4 mesh that already wraps the connection) must opt in
+explicitly with `insecure: true`. This is a deliberate ceremony — the
+plugin's responses directly drive auth outcomes, so a forged reply is
+an authorization bypass.
+
+```yaml
+authorizers:
+  - name: vendor-policy
+    type: grpc-plugin
+    config:
+      address: corp-policy:9000
+      insecure: true   # documented opt-in; only safe inside an mTLS mesh
+```
+
+`insecure: true` cannot be combined with any `tls.*` setting, and
+`tls.certFile` / `tls.keyFile` must be configured together.
 
 ## Helm wiring
 
