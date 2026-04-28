@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos
 
 GO     ?= go
 BIN    ?= bin
@@ -67,6 +67,12 @@ fuzz:
 # CI default is 1k RPS for 10s; nightly should override SOAK_DURATION=30m SOAK_RPS=10000.
 soak:
 	$(GO) test -tags soak ./tests/soak/... -count=1 -timeout 120s
+
+# Chaos: validates pkg/upstream resilience invariants under simulated
+# upstream faults (500-storm, slow IdP, concurrent fan-out). Build-tag
+# gated so default `go test ./...` stays fast.
+chaos:
+	$(GO) test -tags chaos ./tests/chaos/... -count=1 -timeout 60s
 
 clean:
 	rm -rf $(BIN)
