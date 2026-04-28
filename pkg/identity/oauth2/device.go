@@ -205,6 +205,11 @@ func readDeviceCode(r *http.Request) (string, error) {
 // the raw response body + HTTP status. Used for both the device
 // authorization endpoint and the token endpoint so callers can inspect
 // the IdP's error responses verbatim.
+//
+// Hardening: we use the identifier's bounded http.Client (timeout)
+// instead of http.DefaultClient, and bound the response body with
+// io.LimitReader before ReadAll so an IdP that streams gigabytes
+// can't pin our memory.
 func (i *identifier) postForm(ctx context.Context, endpoint string, form url.Values) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -212,14 +217,28 @@ func (i *identifier) postForm(ctx context.Context, endpoint string, form url.Val
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	cli := i.httpClient
+	if cli == nil {
+		cli = &http.Client{Timeout: 30 * time.Second}
+	}
+	resp, err := cli.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	limit := i.maxResponseBytes
+	if limit <= 0 {
+		limit = 1 << 20
+	}
+	// Read one byte past the limit so we can distinguish "exactly at
+	// the cap" (legitimate large response) from "overflowed the cap"
+	// (truncate-and-fail).
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, resp.StatusCode, err
+	}
+	if int64(len(body)) > limit {
+		return nil, resp.StatusCode, fmt.Errorf("idp response exceeds %d bytes", limit)
 	}
 	return body, resp.StatusCode, nil
 }

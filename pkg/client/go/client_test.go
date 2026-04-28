@@ -173,8 +173,18 @@ func TestClient_HTTPMiddleware_Deny(t *testing.T) {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "rbac") {
-		t.Errorf("body did not surface deny reason: %q", body)
+	bodyStr := string(body)
+	// The SDK middleware proxies the native gRPC DenyReason to the
+	// HTTP body. That reason is now redacted to a stable public
+	// string ("forbidden" / "request denied" / ...) — the verbose
+	// engine reason ("rbac: ...") must NOT cross the network.
+	if bodyStr == "" {
+		t.Errorf("body should surface a public deny reason; got empty")
+	}
+	for _, leak := range []string{"rbac", "subject", "allow-list", "lwauth:"} {
+		if strings.Contains(bodyStr, leak) {
+			t.Errorf("body leaks internal token %q: %q", leak, bodyStr)
+		}
 	}
 }
 

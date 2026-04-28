@@ -14,6 +14,7 @@ package apikey
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
@@ -107,6 +108,12 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 	}
 
 	if hasStatic {
+		// Plaintext keys belong in dev/test only. Emit a single
+		// startup warning so an operator who mounts an example config
+		// in production sees it in their logs immediately, alongside
+		// pod boot.
+		slog.Warn("apikey: plaintext static backend loaded; suitable for dev only -- use hashed.{file,dir,entries} in production",
+			"identifier", name, "keys", len(staticRaw))
 		keys := make(map[string]entry, len(staticRaw))
 		for k, val := range staticRaw {
 			switch t := val.(type) {

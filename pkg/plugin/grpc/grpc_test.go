@@ -93,8 +93,9 @@ func TestIdentifier_Identify_OK(t *testing.T) {
 	})
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
-		"address": addr,
-		"timeout": "200ms",
+		"address":  addr,
+		"timeout":  "200ms",
+		"insecure": true,
 	})
 	if err != nil {
 		t.Fatalf("BuildIdentifier: %v", err)
@@ -126,7 +127,7 @@ func TestIdentifier_NoMatch(t *testing.T) {
 			return &pluginv1.IdentifyResponse{NoMatch: true}, nil
 		},
 	})
-	id, err := module.BuildIdentifier("grpc-plugin", "remote", map[string]any{"address": addr})
+	id, err := module.BuildIdentifier("grpc-plugin", "remote", map[string]any{"address": addr, "insecure": true})
 	if err != nil {
 		t.Fatalf("BuildIdentifier: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestIdentifier_PluginError(t *testing.T) {
 			return &pluginv1.IdentifyResponse{Error: "lookup failed"}, nil
 		},
 	})
-	id, err := module.BuildIdentifier("grpc-plugin", "remote", map[string]any{"address": addr})
+	id, err := module.BuildIdentifier("grpc-plugin", "remote", map[string]any{"address": addr, "insecure": true})
 	if err != nil {
 		t.Fatalf("BuildIdentifier: %v", err)
 	}
@@ -169,7 +170,7 @@ func TestAuthorizer_AllowDeny(t *testing.T) {
 			}, nil
 		},
 	})
-	az, err := module.BuildAuthorizer("grpc-plugin", "remote-az", map[string]any{"address": addr})
+	az, err := module.BuildAuthorizer("grpc-plugin", "remote-az", map[string]any{"address": addr, "insecure": true})
 	if err != nil {
 		t.Fatalf("BuildAuthorizer: %v", err)
 	}
@@ -203,7 +204,7 @@ func TestMutator_MergesHeaders(t *testing.T) {
 			}, nil
 		},
 	})
-	mu, err := module.BuildMutator("grpc-plugin", "remote-mu", map[string]any{"address": addr})
+	mu, err := module.BuildMutator("grpc-plugin", "remote-mu", map[string]any{"address": addr, "insecure": true})
 	if err != nil {
 		t.Fatalf("BuildMutator: %v", err)
 	}
@@ -234,10 +235,100 @@ func TestConfig_AddressRequired(t *testing.T) {
 
 func TestConfig_BadTimeout(t *testing.T) {
 	_, err := module.BuildAuthorizer("grpc-plugin", "x", map[string]any{
-		"address": "test://nope",
-		"timeout": "garbage",
+		"address":  "test://nope",
+		"timeout":  "garbage",
+		"insecure": true,
 	})
 	if !errors.Is(err, module.ErrConfig) {
 		t.Fatalf("err = %v, want ErrConfig", err)
+	}
+}
+
+// TestConfig_FailsClosedOnPlaintextRemote pins the H-01 remediation:
+// any non-loopback TCP address without TLS and without an explicit
+// insecure: true must fail at engine compile time. A regression here
+// would re-introduce blind plaintext gRPC dials that an on-path
+// attacker could intercept or impersonate.
+func TestConfig_FailsClosedOnPlaintextRemote(t *testing.T) {
+	cases := []string{
+		"plugins.svc.cluster.local:9000",
+		"10.0.0.5:9000",
+		"dns:///plugins.example.com:9000",
+		"[2001:db8::1]:9000",
+	}
+	for _, addr := range cases {
+		t.Run(addr, func(t *testing.T) {
+			_, err := module.BuildAuthorizer("grpc-plugin", "x", map[string]any{
+				"address": addr,
+			})
+			if !errors.Is(err, module.ErrConfig) {
+				t.Fatalf("err = %v, want ErrConfig (must fail closed without TLS)", err)
+			}
+		})
+	}
+}
+
+// TestConfig_LoopbackAllowsPlaintext documents the developer-ergonomics
+// carve-out: loopback and unix-socket addresses dial in plaintext
+// without ceremony. This is intentional — co-located plugins in a pod
+// do not traverse a network an attacker can reach.
+func TestConfig_LoopbackAllowsPlaintext(t *testing.T) {
+	cases := []string{
+		"localhost:9000",
+		"127.0.0.1:9000",
+		"[::1]:9000",
+		"unix:/var/run/lwauth/plugin.sock",
+	}
+	for _, addr := range cases {
+		t.Run(addr, func(t *testing.T) {
+			cfg, err := parseCommon("x", map[string]any{"address": addr})
+			if err != nil {
+				t.Fatalf("loopback %q rejected: %v", addr, err)
+			}
+			if cfg.Insecure {
+				t.Errorf("Insecure must remain false; the carve-out is implicit at dial-time, not by flipping the flag")
+			}
+		})
+	}
+}
+
+// TestConfig_RejectsHalfPairTLS pins the API contract that certFile
+// and keyFile travel together. Otherwise a typo silently turns mTLS
+// into one-way TLS, which the plugin server may still accept.
+func TestConfig_RejectsHalfPairTLS(t *testing.T) {
+	for _, raw := range []map[string]any{
+		{"address": "plugins:9000", "tls": map[string]any{"certFile": "c.pem"}},
+		{"address": "plugins:9000", "tls": map[string]any{"keyFile": "k.pem"}},
+	} {
+		_, err := parseCommon("x", raw)
+		if !errors.Is(err, module.ErrConfig) {
+			t.Errorf("expected ErrConfig for half-pair TLS, got %v", err)
+		}
+	}
+}
+
+// TestConfig_RejectsInsecureWithTLS catches the foot-gun of leaving
+// `insecure: true` in a config that also points at real TLS material.
+// We refuse to silently downgrade.
+func TestConfig_RejectsInsecureWithTLS(t *testing.T) {
+	_, err := parseCommon("x", map[string]any{
+		"address":  "plugins:9000",
+		"insecure": true,
+		"tls":      map[string]any{"caFile": "ca.pem"},
+	})
+	if !errors.Is(err, module.ErrConfig) {
+		t.Fatalf("err = %v, want ErrConfig", err)
+	}
+}
+
+// TestConfig_TLSCAFileMissing surfaces filesystem errors at compile
+// time rather than at the first authorize call.
+func TestConfig_TLSCAFileMissing(t *testing.T) {
+	_, err := module.BuildAuthorizer("grpc-plugin", "x", map[string]any{
+		"address": "plugins.example.com:9000",
+		"tls":     map[string]any{"caFile": "/does/not/exist.pem"},
+	})
+	if !errors.Is(err, module.ErrConfig) {
+		t.Fatalf("err = %v, want ErrConfig (missing CA file should fail at build)", err)
 	}
 }

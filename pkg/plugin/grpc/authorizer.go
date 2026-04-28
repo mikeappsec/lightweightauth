@@ -50,7 +50,7 @@ func authorizerFactory(name string, raw map[string]any) (module.Authorizer, erro
 	if err != nil {
 		return nil, err
 	}
-	cc, err := dial(cfg.Address)
+	cc, err := dial(name, cfg)
 	if err != nil {
 		return nil, err
 	}

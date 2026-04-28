@@ -1,4 +1,11 @@
 # Local dev config — no external IdP needed.
+#
+# DEMO_DO_NOT_USE: every credential below is a stand-in for local
+# tinkering. The plaintext `static:` apikey backend will emit a slog
+# warning at boot for exactly this reason. Anything you copy from this
+# file into a real cluster is on you; rotate the keys, switch to
+# `hashed:`, and store secrets in your platform's secret manager.
+#
 # Run:  ./bin/lwauth --config examples/dev-local.yaml
 #
 # Test allow:

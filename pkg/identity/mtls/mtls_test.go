@@ -45,6 +45,59 @@ func makeCert(t *testing.T, cn, issuerCN, spiffeID string) ([]byte, string) {
 	return der, pemStr
 }
 
+// makeCAandLeaf mints a self-signed CA and a leaf certificate signed by
+// that CA. Returns (caPEM, leafPEM, leafDER) — leafDER lets a test
+// stuff the cert into Request.PeerCerts; caPEM goes into the
+// trustedCAs config so the chain verifies.
+func makeCAandLeaf(t *testing.T, caCN, leafCN, spiffeID string) (caPEM, leafPEM string, leafDER []byte) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ca key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: caCN},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("ca cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse ca: %v", err)
+	}
+	caPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("leaf key: %v", err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: leafCN},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	if spiffeID != "" {
+		u, _ := url.Parse(spiffeID)
+		leafTmpl.URIs = []*url.URL{u}
+	}
+	leafDER, err = x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("leaf cert: %v", err)
+	}
+	leafPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}))
+	return caPEM, leafPEM, leafDER
+}
+
 func TestMTLS_PeerCertsPath(t *testing.T) {
 	t.Parallel()
 	der, _ := makeCert(t, "alice", "Corp Root", "")
@@ -70,7 +123,12 @@ func TestMTLS_XFCCPath(t *testing.T) {
 	encoded := url.QueryEscape(pemStr)
 	xfcc := `By=spiffe://example.org;Hash=abc;Cert="` + encoded + `";Subject="CN=bob"`
 
-	id, _ := factory("mtls", map[string]any{})
+	// Operator opts in: a verified Envoy/Istio hop sits in front and
+	// emits XFCC. Without trustForwardedClientCert, the header is
+	// ignored entirely (covered by TestMTLS_XFCC_DefaultIgnored below).
+	id, _ := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+	})
 	got, err := id.Identify(context.Background(), &module.Request{
 		Headers: map[string][]string{"X-Forwarded-Client-Cert": {xfcc}},
 	})
@@ -83,6 +141,98 @@ func TestMTLS_XFCCPath(t *testing.T) {
 	}
 	if got.Claims["spiffe"] != "spiffe://example.org/ns/default/sa/bob" {
 		t.Errorf("spiffe claim missing: %v", got.Claims)
+	}
+}
+
+// TestMTLS_XFCC_DefaultIgnored asserts that with the default config,
+// a forged XFCC header from an attacker-generated self-signed cert is
+// treated as if no credential was presented at all — never as identity
+// material.
+func TestMTLS_XFCC_DefaultIgnored(t *testing.T) {
+	t.Parallel()
+	_, pemStr := makeCert(t, "attacker", "CN=Corp Root CA", "spiffe://example.org/ns/default/sa/admin")
+	xfcc := `Cert="` + url.QueryEscape(pemStr) + `";Subject="CN=admin"`
+
+	// Default factory: trustForwardedClientCert is false.
+	id, err := factory("mtls", map[string]any{})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	_, err = id.Identify(context.Background(), &module.Request{
+		Headers: map[string][]string{"X-Forwarded-Client-Cert": {xfcc}},
+	})
+	if !errors.Is(err, module.ErrNoMatch) {
+		t.Fatalf("err = %v, want ErrNoMatch (forged XFCC must be ignored without trustForwardedClientCert)", err)
+	}
+}
+
+// TestMTLS_XFCC_SelfSignedRejectedByCAPool: even when XFCC is trusted,
+// a self-signed cert that does not chain to the configured CA pool is
+// rejected. The legacy trustedIssuers DN allow-list is no longer the
+// only check.
+func TestMTLS_XFCC_SelfSignedRejectedByCAPool(t *testing.T) {
+	t.Parallel()
+	// Real CA + cert it signed (the "good" path).
+	caPEM, _, _ := makeCAandLeaf(t, "Corp Root CA", "alice", "")
+	// Attacker-controlled self-signed cert with a matching Issuer DN
+	// to bypass the legacy DN-only check.
+	_, attackerPEM := makeCert(t, "alice", "CN=Corp Root CA", "")
+
+	id, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+		"trustedCAs":               caPEM,
+		"trustedIssuers":           []any{"CN=Corp Root CA"},
+	})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	xfcc := `Cert="` + url.QueryEscape(attackerPEM) + `"`
+	_, err = id.Identify(context.Background(), &module.Request{
+		Headers: map[string][]string{"X-Forwarded-Client-Cert": {xfcc}},
+	})
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (self-signed cert must fail chain verify)", err)
+	}
+}
+
+// TestMTLS_XFCC_TrustedChainAccepted is the positive case: a real cert
+// signed by the configured CA passes both chain verification and the
+// optional DN allow-list.
+func TestMTLS_XFCC_TrustedChainAccepted(t *testing.T) {
+	t.Parallel()
+	caPEM, leafPEM, _ := makeCAandLeaf(t, "Corp Root CA", "alice", "")
+
+	id, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+		"trustedCAs":               caPEM,
+	})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	xfcc := `Cert="` + url.QueryEscape(leafPEM) + `"`
+	got, err := id.Identify(context.Background(), &module.Request{
+		Headers: map[string][]string{"X-Forwarded-Client-Cert": {xfcc}},
+	})
+	if err != nil {
+		t.Fatalf("Identify: %v", err)
+	}
+	if got.Subject != "alice" {
+		t.Errorf("Subject = %q, want alice", got.Subject)
+	}
+}
+
+// TestMTLS_CAPoolRequiresTrustFlag rejects the configuration mistake of
+// supplying CA material without enabling the XFCC path — the operator
+// almost certainly meant to enable it.
+func TestMTLS_CAPoolRequiresTrustFlag(t *testing.T) {
+	t.Parallel()
+	caPEM, _, _ := makeCAandLeaf(t, "Corp Root CA", "alice", "")
+	_, err := factory("mtls", map[string]any{
+		"trustedCAs": caPEM,
+		// trustForwardedClientCert deliberately omitted
+	})
+	if err == nil {
+		t.Fatal("factory accepted trustedCAs without trustForwardedClientCert")
 	}
 }
 

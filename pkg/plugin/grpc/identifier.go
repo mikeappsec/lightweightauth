@@ -56,7 +56,7 @@ func identifierFactory(name string, raw map[string]any) (module.Identifier, erro
 	if err != nil {
 		return nil, err
 	}
-	cc, err := dial(cfg.Address)
+	cc, err := dial(name, cfg)
 	if err != nil {
 		return nil, err
 	}

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -51,6 +52,46 @@ type Options struct {
 	// HTTPAddr / GRPCAddr — set to "" to disable.
 	HTTPAddr string // Default ":8080".
 	GRPCAddr string // Default ":9001".
+
+	// --- Listener hardening ---
+	//
+	// TLSCertFile / TLSKeyFile enable TLS on the HTTP listener. When
+	// both are set, ListenAndServeTLS is used; otherwise the server
+	// listens in plaintext (test/dev only).
+	TLSCertFile string
+	TLSKeyFile  string
+	// TLSClientCAFile, when set, requires every HTTP client to present
+	// a certificate chained to one of these CAs (mTLS).
+	TLSClientCAFile string
+
+	// GRPCTLSCertFile / GRPCTLSKeyFile / GRPCTLSClientCAFile do the
+	// same for the gRPC listener (Envoy ext_authz + native Auth +
+	// health + reflection).
+	GRPCTLSCertFile     string
+	GRPCTLSKeyFile      string
+	GRPCTLSClientCAFile string
+
+	// EnableReflection registers grpc_reflection on the gRPC server.
+	// Defaults to false in production: reflection lets a network-
+	// reachable client enumerate every RPC, which is nice in dev and
+	// dangerous in prod.
+	EnableReflection bool
+
+	// DisableHTTPAuthorize removes /v1/authorize. Operators who only
+	// use the gRPC ext_authz path can shrink the public surface.
+	DisableHTTPAuthorize bool
+	// DisableHTTPMetrics removes /metrics from the public listener.
+	DisableHTTPMetrics bool
+
+	// MaxRequestBytes caps inbound /v1/authorize bodies. 0 -> 1 MiB.
+	MaxRequestBytes int64
+
+	// HTTP server timeouts. Zero values pick safe defaults.
+	HTTPReadHeaderTimeout time.Duration // default 10s
+	HTTPReadTimeout       time.Duration // default 30s
+	HTTPWriteTimeout      time.Duration // default 30s
+	HTTPIdleTimeout       time.Duration // default 120s
+	HTTPMaxHeaderBytes    int           // default 1 MiB
 
 	// WatchConfigFile, if true, starts an fsnotify watcher on
 	// ConfigPath that hot-reloads the engine on every change. Cheap;
@@ -158,21 +199,55 @@ func Run(opts Options) error {
 	}
 
 	// HTTP
-	httpSrv := &http.Server{Addr: opts.HTTPAddr, Handler: server.NewHTTPHandler(holder)}
+	httpHandler := server.NewHTTPHandlerWithOptions(holder, server.HTTPHandlerOptions{
+		MaxRequestBytes:  opts.MaxRequestBytes,
+		DisableAuthorize: opts.DisableHTTPAuthorize,
+		DisableMetrics:   opts.DisableHTTPMetrics,
+	})
+	httpSrv := &http.Server{
+		Addr:              opts.HTTPAddr,
+		Handler:           httpHandler,
+		ReadHeaderTimeout: nonZeroDur(opts.HTTPReadHeaderTimeout, 10*time.Second),
+		ReadTimeout:       nonZeroDur(opts.HTTPReadTimeout, 30*time.Second),
+		WriteTimeout:      nonZeroDur(opts.HTTPWriteTimeout, 30*time.Second),
+		IdleTimeout:       nonZeroDur(opts.HTTPIdleTimeout, 120*time.Second),
+		MaxHeaderBytes:    nonZeroInt(opts.HTTPMaxHeaderBytes, 1<<20),
+	}
+	httpTLS, err := buildServerTLS(opts.TLSCertFile, opts.TLSKeyFile, opts.TLSClientCAFile)
+	if err != nil {
+		return fmt.Errorf("http tls: %w", err)
+	}
+	if httpTLS != nil {
+		httpSrv.TLSConfig = httpTLS
+	}
 	go func() {
-		log.Info("http listening", "addr", opts.HTTPAddr)
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+		log.Info("http listening", "addr", opts.HTTPAddr, "tls", httpTLS != nil, "mtls", opts.TLSClientCAFile != "")
+		var serveErr error
+		if httpTLS != nil {
+			// Cert/key already loaded into TLSConfig.Certificates; pass
+			// empty file paths so net/http doesn't reload them.
+			serveErr = httpSrv.ListenAndServeTLS("", "")
+		} else {
+			serveErr = httpSrv.ListenAndServe()
+		}
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			errCh <- serveErr
 		}
 	}()
 
-	// gRPC: Envoy ext_authz + standard health + reflection.
+	// gRPC: Envoy ext_authz + standard health + (optional) reflection.
 	lis, err := net.Listen("tcp", opts.GRPCAddr)
 	if err != nil {
 		_ = httpSrv.Close()
 		return err
 	}
-	grpcSrv := grpc.NewServer()
+	grpcOpts, err := buildGRPCServerOptions(opts)
+	if err != nil {
+		_ = httpSrv.Close()
+		_ = lis.Close()
+		return fmt.Errorf("grpc tls: %w", err)
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 	authv3.RegisterAuthorizationServer(grpcSrv, server.NewExtAuthzServer(holder))
 	authv1.RegisterAuthServer(grpcSrv, server.NewNativeAuthServer(holder))
 
@@ -181,10 +256,15 @@ func Run(opts Options) error {
 	hs.SetServingStatus("lightweightauth.v1.Auth", healthpb.HealthCheckResponse_SERVING)
 	healthpb.RegisterHealthServer(grpcSrv, hs)
 
-	reflection.Register(grpcSrv)
+	if opts.EnableReflection {
+		reflection.Register(grpcSrv)
+	}
 
 	go func() {
-		log.Info("grpc listening", "addr", opts.GRPCAddr)
+		log.Info("grpc listening", "addr", opts.GRPCAddr,
+			"tls", opts.GRPCTLSCertFile != "",
+			"mtls", opts.GRPCTLSClientCAFile != "",
+			"reflection", opts.EnableReflection)
 		if err := grpcSrv.Serve(lis); err != nil {
 			errCh <- err
 		}
@@ -208,8 +288,8 @@ func Run(opts Options) error {
 }
 
 // Main is a convenience entrypoint that parses the standard --config /
-// --http-addr / --grpc-addr / --watch-* flags and calls Run. Equivalent
-// to cmd/lwauth's main().
+// --http-addr / --grpc-addr / --watch-* / --tls-* / --enable-reflection
+// flags and calls Run. Equivalent to cmd/lwauth's main().
 func Main() {
 	cfgPath := flag.String("config", "config.yaml", "path to AuthConfig YAML (file mode)")
 	httpAddr := flag.String("http-addr", ":8080", "HTTP listen address ('' to disable)")
@@ -217,14 +297,34 @@ func Main() {
 	watchFile := flag.Bool("watch-config-file", false, "fsnotify-watch --config and reload on change")
 	watchNS := flag.String("watch-namespace", "", "Kubernetes namespace to watch for AuthConfig CRs (enables CRD mode)")
 	acName := flag.String("authconfig-name", "default", "name of the AuthConfig CR to reconcile (CRD mode)")
+	httpCert := flag.String("tls-cert", "", "PEM cert file for HTTP TLS (leave empty for plaintext)")
+	httpKey := flag.String("tls-key", "", "PEM key file for HTTP TLS")
+	httpClientCA := flag.String("tls-client-ca", "", "PEM CA file; if set, HTTP requires client certs (mTLS)")
+	grpcCert := flag.String("grpc-tls-cert", "", "PEM cert file for gRPC TLS")
+	grpcKey := flag.String("grpc-tls-key", "", "PEM key file for gRPC TLS")
+	grpcClientCA := flag.String("grpc-tls-client-ca", "", "PEM CA file; if set, gRPC requires client certs (mTLS)")
+	enableReflection := flag.Bool("enable-reflection", false, "register gRPC reflection (dev only)")
+	disableAuthorize := flag.Bool("disable-http-authorize", false, "remove /v1/authorize from the HTTP mux")
+	disableMetrics := flag.Bool("disable-http-metrics", false, "remove /metrics from the HTTP mux")
+	maxBody := flag.Int64("max-request-bytes", 0, "cap on /v1/authorize body bytes (0 -> 1 MiB)")
 	flag.Parse()
 	if err := Run(Options{
-		ConfigPath:      *cfgPath,
-		HTTPAddr:        *httpAddr,
-		GRPCAddr:        *grpcAddr,
-		WatchConfigFile: *watchFile,
-		WatchNamespace:  *watchNS,
-		AuthConfigName:  *acName,
+		ConfigPath:           *cfgPath,
+		HTTPAddr:             *httpAddr,
+		GRPCAddr:             *grpcAddr,
+		WatchConfigFile:      *watchFile,
+		WatchNamespace:       *watchNS,
+		AuthConfigName:       *acName,
+		TLSCertFile:          *httpCert,
+		TLSKeyFile:           *httpKey,
+		TLSClientCAFile:      *httpClientCA,
+		GRPCTLSCertFile:      *grpcCert,
+		GRPCTLSKeyFile:       *grpcKey,
+		GRPCTLSClientCAFile:  *grpcClientCA,
+		EnableReflection:     *enableReflection,
+		DisableHTTPAuthorize: *disableAuthorize,
+		DisableHTTPMetrics:   *disableMetrics,
+		MaxRequestBytes:      *maxBody,
 	}); err != nil {
 		slog.Error("lwauthd", "err", err)
 		os.Exit(1)

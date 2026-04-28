@@ -88,7 +88,11 @@ func TestValidate_OK(t *testing.T) {
 	dir := t.TempDir()
 	cfg := writeFile(t, dir, "ac.yaml", validConfigYAML)
 
-	out, err := exec.Command(bin, "validate", "--config", cfg).CombinedOutput()
+	// Use Output (stdout only) -- the apikey module emits a slog
+	// warning to stderr when the plaintext `static` backend loads,
+	// which is a feature of the dev/prod safety net we don't want
+	// to mute here.
+	out, err := exec.Command(bin, "validate", "--config", cfg).Output()
 	if err != nil {
 		t.Fatalf("validate: %v\n%s", err, out)
 	}

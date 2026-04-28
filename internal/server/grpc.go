@@ -65,7 +65,10 @@ func (s *ExtAuthzServer) Check(ctx context.Context, in *authv3.CheckRequest) (*a
 	if status == 0 {
 		status = http.StatusForbidden
 	}
-	return denied(status, statusToGRPC(status), dec.Reason), nil
+	// Verbose internal reason stays on the audit record; the network
+	// reply gets a generic status-aligned string so module and policy
+	// internals don't leak to downstream callers.
+	return denied(status, statusToGRPC(status), publicReason(status, dec.Reason)), nil
 }
 
 // requestFromCheck folds Envoy's nested AttributeContext into the flat

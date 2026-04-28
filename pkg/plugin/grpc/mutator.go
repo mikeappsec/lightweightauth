@@ -60,7 +60,7 @@ func mutatorFactory(name string, raw map[string]any) (module.ResponseMutator, er
 	if err != nil {
 		return nil, err
 	}
-	cc, err := dial(cfg.Address)
+	cc, err := dial(name, cfg)
 	if err != nil {
 		return nil, err
 	}

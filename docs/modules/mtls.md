@@ -19,12 +19,63 @@ identifiers:
   - name: mesh-mtls
     type: mtls
     config:
-      header: x-forwarded-client-cert    # default; Envoy XFCC
-      # Optional Subject-DN allow-list for the issuer.
+      # XFCC ingestion is OPT-IN. Anything that can reach the auth
+      # surface can otherwise forge identity by setting the header
+      # itself. Set true only when a verified Envoy/Istio hop strips
+      # inbound XFCC and re-emits its own.
+      trustForwardedClientCert: true
+      header: x-forwarded-client-cert        # default
+
+      # Strongly recommended when trustForwardedClientCert is true:
+      # pin the CA roots so a self-signed cert with a forged Issuer DN
+      # cannot bypass authentication. Lwauth runs cert.Verify() with
+      # this pool as Roots.
+      trustedCAFiles:
+        - /etc/lwauth/mesh-ca.pem
+      # …or inline:
+      # trustedCAs: |
+      #   -----BEGIN CERTIFICATE-----
+      #   ...
+      #   -----END CERTIFICATE-----
+
+      # Optional secondary Subject-DN allow-list. NOT a trust check on
+      # its own — without trustedCAFiles/trustedCAs an attacker can
+      # mint a self-signed cert whose Issuer string matches.
       trustedIssuers:
         - "CN=workload-ca,O=acme"
-        - "CN=bootstrap-ca,O=acme"
 ```
+
+> **Default-deny posture (post-2026-04-28 security review).**
+> Without `trustForwardedClientCert: true`, the module ignores the
+> XFCC header entirely. Only certificates surfaced via
+> `Request.PeerCerts` (i.e. lwauth itself terminated TLS and the Go
+> stack verified the peer) are accepted. Supplying `trustedCAFiles` /
+> `trustedCAs` without the trust flag is rejected at config compile
+> time.
+
+### Required Envoy / Istio settings
+
+When fronting lwauth with Envoy you must (a) **sanitize** any inbound
+XFCC from untrusted clients and (b) **emit** a fresh XFCC from the
+verified peer cert. The relevant knobs:
+
+```yaml
+# envoy.config.core.v3.HttpConnectionManager
+forward_client_cert_details: SANITIZE_SET     # drop inbound, emit ours
+set_current_client_cert_details:
+  cert: true
+  uri:  true
+  subject: true
+http_filters:
+- name: envoy.filters.http.ext_authz
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+    grpc_service: { envoy_grpc: { cluster_name: lwauth } }
+    include_peer_certificate: true
+```
+
+The Helm chart's NetworkPolicy should additionally restrict ingress to
+lwauth so the only callers are the trusted Envoy/sidecar peers.
 
 Identity precedence: SPIFFE URI SAN > first DNS SAN > Subject CN. The
 identity result is `Identity{Subject: "spiffe://td/ns/foo/sa/bar", Source: "mesh-mtls", Claims: {issuer, dnsSANs, uriSANs, ...}}`.

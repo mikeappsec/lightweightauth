@@ -28,10 +28,18 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: lwauth
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             - --http-addr=:{{ .Values.service.httpPort }}
             {{- if .Values.controller.enabled }}
@@ -53,17 +61,23 @@ spec:
           livenessProbe:
             httpGet: { path: /healthz, port: http }
           resources: {{- toYaml .Values.resources | nindent 12 }}
-          {{- if not .Values.controller.enabled }}
           volumeMounts:
+            # /tmp must be writable even with readOnlyRootFilesystem so
+            # the kernel + Go runtime have a scratch area for spill files.
+            - name: tmp
+              mountPath: /tmp
+            {{- if not .Values.controller.enabled }}
             - name: config
               mountPath: /etc/lwauth
-          {{- end }}
-      {{- if not .Values.controller.enabled }}
+            {{- end }}
       volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if not .Values.controller.enabled }}
         - name: config
           configMap:
             name: {{ include "lwauth.fullname" . }}-config
-      {{- end }}
+        {{- end }}
 ---
 {{- if not .Values.controller.enabled }}
 apiVersion: v1

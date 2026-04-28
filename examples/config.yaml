@@ -26,7 +26,10 @@ identifiers:
     config:
       headerName: X-Api-Key
       static:
-        # !! dev/test only -- production stores hash these in a secret manager
+        # DEMO_DO_NOT_USE: plaintext keys for tutorials only. Production
+        # configs MUST switch to `hashed:` (file/dir/entries) so secrets
+        # never live at rest in cleartext. The module logs a slog warning
+        # at boot whenever this `static:` branch is loaded.
         local-test-key-1: dev-user
         local-test-key-2: dev-admin
 

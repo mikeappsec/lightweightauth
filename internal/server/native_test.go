@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,22 @@ func TestNativeAuthorize_DeniesViewer(t *testing.T) {
 	}
 	if resp.DenyReason == "" {
 		t.Errorf("deny_reason should not be empty")
+	}
+	// Native gRPC must emit a status-aligned PUBLIC reason, not the
+	// engine's verbose internal text. The HTTP authorize endpoint and
+	// the Envoy ext_authz adapter both redact via publicReason; Door B
+	// (this server) used to leak d.Reason raw — that regression is
+	// fenced here.
+	switch resp.DenyReason {
+	case "forbidden", "request denied", "unauthenticated":
+		// ok — one of the stable public mappings.
+	default:
+		t.Errorf("deny_reason = %q; expected redacted public string (e.g. 'forbidden'), not raw internal text", resp.DenyReason)
+	}
+	for _, leak := range []string{"rbac:", "lwauth:", "subject", "allow-list", "claim"} {
+		if strings.Contains(resp.DenyReason, leak) {
+			t.Errorf("deny_reason = %q leaks internal token %q", resp.DenyReason, leak)
+		}
 	}
 }
 

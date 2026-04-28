@@ -54,7 +54,10 @@ func FuzzParseAuth(f *testing.F) {
 			t.Skip()
 		}
 
-		keyID, sig, err := parseAuth(s)
+		keyID, sig, err := func(s string) (string, string, error) {
+			p, err := parseAuth(s)
+			return p.keyID, p.signature, err
+		}(s)
 		if err != nil {
 			// On error, the named returns must be empty — callers
 			// rely on being able to log err without leaking a
