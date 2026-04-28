@@ -17,6 +17,11 @@ import (
 
 	// Register the shared cache backend(s) for their side-effect.
 	_ "github.com/mikeappsec/lightweightauth/internal/cache/valkey"
+	// K-DOS-1: register the Valkey-backed distributed rate-limit
+	// aggregator. Adds the type name "valkey" under
+	// rateLimit.distributed.type. Operators who don't enable
+	// distributed limiting pay nothing for the import.
+	_ "github.com/mikeappsec/lightweightauth/pkg/ratelimit/valkey"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/apikey"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/dpop"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/hmac"

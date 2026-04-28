@@ -1602,13 +1602,23 @@ A2. **K-AUTHN-2 (was 22) — Negative-cache invalid introspection.**
     [pkg/identity/introspection/introspection.go](../pkg/identity/introspection/introspection.go).
 
 A3. **K-DOS-1 (was 23) — Distributed rate-limit aggregation.**
-    `pkg/ratelimit` is per-replica; under N pods a tenant can
-    spend `N × limit` before any replica trips. v1.1 adds an
-    optional Valkey-backed aggregator (the `cache.Backend`
-    registry already provides the connection) keyed by
-    `(tenant, bucket)` with a sliding window. Per-replica
-    buckets stay the default — distributed mode is opt-in for
-    operators who actually need cluster-wide limits.
+    `pkg/ratelimit` was per-replica through v1.0; under N pods a
+    tenant could spend `N × limit` before any replica tripped.
+
+    ✅ v1.1 ships the optional Valkey-backed aggregator on
+    `v1.1-tier-a`. New `rateLimit.distributed:` block selects a
+    registered backend (v1.1 ships `valkey`); per-tenant bucket
+    becomes a sliding-window counter atomic across the fleet via
+    Lua `ZREMRANGEBYSCORE` → `ZCARD` → `ZADD` → `PEXPIRE`.
+    Per-replica buckets stay the default and continue to act as a
+    safety floor: on backend success the local bucket is also
+    charged so a single replica still can't exceed its `rps`; on
+    backend error the limiter falls back to local (or, with
+    `failOpen: true`, allows). New backend abstraction
+    [pkg/ratelimit/backend.go](../pkg/ratelimit/backend.go) keeps
+    the core package dependency-free; concrete impl in
+    [pkg/ratelimit/valkey](../pkg/ratelimit/valkey/) registers via
+    `init()` from the `pkg/builtins` blank-import.
 
 A4. **M10-PLUGIN-LIFECYCLE (supervisor half, was 25) — Plugin
     process supervision.** Slice 8 closed the dial-credentials

@@ -72,10 +72,89 @@ CRD mode — same block under `spec.rateLimit:` of an `AuthConfig`.
   is handled by an LRU sweep when `len(buckets) > 16384`. Operators
   with very high tenant cardinality should keep `burst` modest to
   bound the working set.
-- **Distribution.** Buckets are local to each lwauth replica (token
-  count is goroutine-state, not shared via Valkey). With N replicas a
-  tenant's effective limit is `N × rps`. Sticky-routing or aggregate
+- **Distribution.** Buckets are local to each lwauth replica by
+  default (token count is goroutine-state, not shared via Valkey).
+  With N replicas a tenant's effective limit is `N × rps`. For
+  deployments where that's unacceptable, opt into the cluster-wide
+  aggregator (K-DOS-1) below; otherwise sticky-routing or aggregate
   rate limiting belongs at the L7 proxy in front of lwauth.
+
+## Cluster-wide aggregation (K-DOS-1, v1.1+)
+
+By default, each replica enforces its bucket independently. To cap a
+tenant across **every** lwauth replica in the deployment, add a
+`distributed:` block:
+
+```yaml
+rateLimit:
+  perTenant:
+    rps: 200
+    burst: 400
+  distributed:
+    type: valkey
+    addr: valkey-master.cache.svc:6379
+    password: ${VALKEY_PASSWORD}    # optional
+    keyPrefix: lwauth-rl/           # optional, default empty
+    tls: false
+    window: 1s                      # rolling window length (default 1s)
+    timeout: 50ms                   # per-call deadline (default 50ms)
+    failOpen: false                 # what to do on backend error (default false)
+```
+
+| Field        | Behaviour                                                                              |
+|--------------|----------------------------------------------------------------------------------------|
+| `type`       | Registered backend name. v1.1 ships `valkey`. Required when block present.             |
+| `addr`       | Valkey/Redis 7.x TCP address. Required.                                                |
+| `keyPrefix`  | Prepended to every tenant key — lets multiple lwauth deployments share a Valkey.       |
+| `window`     | Sliding-window length. Default 1s.                                                     |
+| `timeout`    | Per-call deadline; on expiry the limiter falls back to the local bucket.               |
+| `failOpen`   | If true, allow on backend error instead of falling back to the local bucket.           |
+
+**Cluster cap = `perTenant.burst` requests per `window`** (or
+`perTenant.rps × window` when `burst` is zero). So
+`rps:200, burst:400, window:1s` means "≤ 400 requests/second per
+tenant, summed across the entire fleet".
+
+### Semantics under outage
+
+| State                                    | Behaviour                                                       |
+|------------------------------------------|-----------------------------------------------------------------|
+| Backend healthy, returns admit           | Charge the local bucket too; admit if local burst still has room|
+| Backend healthy, returns deny            | **Deny** — cluster cap is authoritative                          |
+| Backend errors / circuit open            | Fall back to local bucket (per-replica floor)                   |
+| Backend errors / circuit open + failOpen | Allow unconditionally                                            |
+| `Request.TenantID == ""`                 | Skip the aggregator; local `default` bucket only                |
+
+The local bucket continues to fire on every admission, so a single
+replica still cannot exceed its configured `rps`/`burst` even if the
+cluster cap had headroom. This is what makes the failure mode safe:
+during a Valkey blip you lose the cluster-wide ceiling but keep the
+per-replica floor — a transient `N × rps` worst case, not unbounded.
+
+### Wire protocol
+
+The Valkey backend ([pkg/ratelimit/valkey](../../pkg/ratelimit/valkey/valkey.go))
+runs an atomic Lua script per call:
+
+```lua
+ZREMRANGEBYSCORE key -inf (now - window)
+if ZCARD key >= limit then return 0 end
+ZADD key now <unique-member>
+PEXPIRE key window
+return 1
+```
+
+One Valkey round-trip per `Allow`. Per-key memory is bounded by
+`limit` (sorted-set entries). Per-key TTL is reset to `window` on
+each admission, so idle tenants don't accumulate state on the server.
+
+### Security
+
+The connection inherits the Valkey ACL / password / TLS settings from
+the same `addr/username/password/tls` fields the `cache: backend:
+valkey` block accepts. Use a dedicated Valkey user with `+EVAL +ZADD
++ZCARD +ZREMRANGEBYSCORE +PEXPIRE -@all` ACL when running on a shared
+Valkey deployment.
 
 ## Sample dry-run
 

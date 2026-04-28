@@ -148,7 +148,7 @@ func TestEngine_RateLimitDeniesWith429(t *testing.T) {
 	t.Parallel()
 	az := &fakeAZ{dec: &module.Decision{Allow: true}}
 	id := &fakeID{name: "a", id: &module.Identity{Subject: "alice"}}
-	lim := ratelimit.New(ratelimit.Spec{
+	lim := ratelimit.MustNew(ratelimit.Spec{
 		PerTenant: ratelimit.Bucket{RPS: 100, Burst: 2},
 	})
 	e, _ := New(Options{
