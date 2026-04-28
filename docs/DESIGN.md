@@ -1492,7 +1492,7 @@ by dependency, not by calendar.
 
 Items previously numbered 15 (M13 – Supply-chain hardening) and 16
 (M14 – Revocation) have been relocated into the tiered post-v1.0
-queue below — see **B4. M13-SUPPLY-CHAIN** and **C3. M14-REVOCATION**.
+queue below — see **X3. M13-SUPPLY-CHAIN** and **C3. M14-REVOCATION**.
 The relocation reflects that neither item is on a v1.0.x patch line
 nor a Tier-A hardening slice: M13 is operator-trust quality work that
 can ship on its own cadence, and M14 is net-new opt-in feature
@@ -1705,27 +1705,6 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     `buf.build` module so consumers can codegen clients without
     vendoring.
 
-B4. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
-    Operator-trust posture work that does not change the user-
-    visible runtime path, so it ships on its own cadence rather
-    than gating a release. Scope:
-    - Docker Hardened Image bases (`dhi.io/golang`,
-      `dhi.io/alpine`, `dhi.io/envoy`) as an opt-in build profile,
-      with the standard `golang:alpine` images remaining the
-      default so contributors without dhi.io entitlement keep a
-      working pipeline.
-    - Cosign-signed releases verified by Kyverno / Sigstore
-      policy.
-    - SBOM publication (`syft`) on every release.
-    - Mirrored images for air-gapped deployments.
-
-    Complements but does not overlap K-CRYPTO-2 (Tier A), which
-    is the FIPS 140-3 build mode. M13 is about the *image* and
-    *release* trust chain; K-CRYPTO-2 is about the *crypto
-    primitive* trust chain. Originally deferred from M2 for the
-    same reason it lands here: it is a quality investment, not a
-    correctness blocker.
-
 #### Tier C — new features (v1.1+)
 
 These add user-visible capability rather than closing a gap. They
@@ -1791,6 +1770,35 @@ X1. **eBPF data plane (was 16)** in the separate
     operation.
 X2. **WASM plugins (was 17)** via `wazero`. Defer until the
     auth-library ecosystem in WASM matures (§2).
+
+X3. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
+    Relocated from Tier B because the entire item depends on
+    external entitlements / ecosystems we do not control: a
+    `dhi.io` enterprise account for the hardened bases, a
+    deployed Sigstore Rekor / Fulcio (or pinned Cosign keys) for
+    operators to verify against, and a release-signing root with
+    organisational ownership. None of those exist for the v1.x
+    line of an OSS project under a single maintainer, and
+    pretending they're a few weeks of work would mis-set
+    expectations. Scope is unchanged from the original B4 entry:
+    - Docker Hardened Image bases (`dhi.io/golang`,
+      `dhi.io/alpine`, `dhi.io/envoy`) as an opt-in build profile,
+      with the standard `golang:alpine` images remaining the
+      default so contributors without dhi.io entitlement keep a
+      working pipeline.
+    - Cosign-signed releases verified by Kyverno / Sigstore
+      policy.
+    - SBOM publication (`syft`) on every release.
+    - Mirrored images for air-gapped deployments.
+
+    Complements but does not overlap K-CRYPTO-2 (Tier A, shipped),
+    which is the FIPS 140-3 build mode. M13 is about the *image*
+    and *release* trust chain; K-CRYPTO-2 is about the *crypto
+    primitive* trust chain — K-CRYPTO-2 already gives operators
+    one independent supply-chain assurance (the Go toolchain's
+    in-tree validated module) without taking on M13's external
+    dependencies. Graduates to Tier B when an operator who needs
+    the full supply-chain story sponsors the entitlements.
 
 ### Prioritization rationale
 
