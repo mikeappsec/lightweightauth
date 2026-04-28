@@ -60,20 +60,14 @@ docker compose -f deploy/docker/compose.yaml up
 curl -i http://localhost:8000/whatever
 ```
 
-Sample Envoy snippet:
-
-```yaml
-http_filters:
-- name: envoy.filters.http.ext_authz
-  typed_config:
-    "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
-    transport_api_version: V3
-    grpc_service:
-      envoy_grpc:
-        cluster_name: lwauth
-      timeout: 0.25s
-    failure_mode_allow: false
-```
+Sample boot config: [deploy/envoy/sample.yaml](../deploy/envoy/sample.yaml)
+— this is the *minimum that boots*. The **minimum that's safe in
+production** (body-binding flags, forwarded-header trust, mTLS anchor
+wiring, header redaction) is documented separately in
+[docs/deployment/envoy.md](deployment/envoy.md), which also explains
+the Envoy half of [SEC-PROXY-1](security/v1.0-review.md#10-outstanding-follow-ups-post-v10).
+If you skip that page you will likely deploy a configuration that
+silently bypasses HMAC body binding.
 
 ### 3. Istio / Gateway API
 
@@ -153,7 +147,25 @@ A controller (controller-runtime) watches these and:
 
 ## Production checklist
 
+Mode A (Envoy) operators should also work through the dedicated
+[Envoy deployment guide](deployment/envoy.md#5-production-checklist),
+which covers the SEC-PROXY-1 / SEC-MTLS-1 configuration traps that
+are not visible from this page.
+
 - [ ] `failure_mode_allow: false` on Envoy — fail closed.
+- [ ] `with_request_body` configured iff any identifier or policy binds
+      the body (HMAC, body-keyed CEL/OPA). When set:
+      `allow_partial_message: false` and `pack_as_bytes: true` — both
+      default-wrong for HMAC. See
+      [deployment/envoy.md §3](deployment/envoy.md#3-sec-proxy-1-parity).
+- [ ] `include_peer_certificate: true` if and only if you use the
+      `mtls` identifier; lwauth-side `trustedIssuers` / `trustedCAs`
+      configured (SEC-MTLS-1 fails closed at startup otherwise).
+- [ ] Forwarded-header trust pinned: `use_remote_address: true` +
+      `xff_num_trusted_hops` set to the real hop count. Don't accept
+      arbitrary XFF chains.
+- [ ] `response_headers_to_remove: [x-lwauth-reason]` on the outermost
+      Envoy so verbose deny reasons don't leak to clients.
 - [ ] Resource requests/limits set on `lwauth` (it's CPU-bound on JWT verify).
 - [ ] PDB allowing only `maxUnavailable: 1` if `replicaCount >= 2`.
 - [ ] HPA on CPU + custom metric `lwauth_decision_latency_seconds_bucket`.
