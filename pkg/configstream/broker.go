@@ -55,6 +55,12 @@ func NewBroker() *Broker {
 // notifies every subscriber. Slow subscribers receive only the latest
 // value (older queued values are dropped). Publish never blocks on a
 // subscriber.
+//
+// Publish is safe to call from a single goroutine. The reconciler is
+// the canonical caller and it serializes its own publishes; calling
+// Publish from multiple goroutines concurrently is not part of the
+// contract and may, under contention, allow an older snapshot to
+// clobber a newer one in a slow subscriber's pending slot.
 func (b *Broker) Publish(spec *config.AuthConfig) Snapshot {
 	b.mu.Lock()
 	b.version++
