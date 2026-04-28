@@ -26,6 +26,7 @@ import (
 	v1alpha1 "github.com/mikeappsec/lightweightauth/api/crd/v1alpha1"
 	"github.com/mikeappsec/lightweightauth/internal/config"
 	"github.com/mikeappsec/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/pkg/configstream"
 )
 
 // AuthConfigReconciler watches a single AuthConfig and swaps the
@@ -45,6 +46,13 @@ type AuthConfigReconciler struct {
 	// care about. Other AuthConfigs are filtered out at the predicate
 	// stage so we never even see them.
 	Watched types.NamespacedName
+
+	// Broker, if non-nil, receives a Publish() call after every
+	// successful Compile-and-Swap. Remote lwauth pods subscribed via
+	// the configstream gRPC server pick the snapshot up from there.
+	// In single-process embedders (cmd/lwauth) this stays nil; the
+	// in-process Holder.Swap is enough.
+	Broker *configstream.Broker
 }
 
 // Reconcile compiles the watched AuthConfig's .spec into a
@@ -103,6 +111,14 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	r.Holder.Swap(eng)
+	if r.Broker != nil {
+		// Publish a deep-copied spec so subscribers can't see
+		// further mutations. The CR object's spec is shared with
+		// the local cache; copying via the existing DeepCopy keeps
+		// us honest.
+		specCopy := ac.DeepCopy().Spec
+		r.Broker.Publish(&specCopy)
+	}
 
 	ac.Status = v1alpha1.AuthConfigStatus{
 		Ready:              true,
