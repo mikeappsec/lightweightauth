@@ -1689,7 +1689,8 @@ B1. **M12-CONF-MATRIX (was 20) — Full conformance matrix.** Slice
 
     *Status: shipped on `v1.1-tier-b`* —
     [internal/server/matrix_test.go](../internal/server/matrix_test.go)
-    walks an 8-cell matrix:
+    walks an 8-cell matrix (full walkthrough with diagrams in
+    [docs/testing/conformance-matrix.md](testing/conformance-matrix.md)):
     - `apikey` × {`rbac`, `cel`, `opa`, `composite-allOf`,
       `openfga`} — every shipped authorizer, exercised under
     a stable identity transport;
