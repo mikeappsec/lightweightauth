@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak
 
 GO     ?= go
 BIN    ?= bin
@@ -60,6 +60,13 @@ fuzz:
 	$(GO) test ./pkg/identity/hmac/...  -fuzz=FuzzParseAuth  -fuzztime=$(FUZZTIME)
 	$(GO) test ./pkg/identity/mtls/...  -fuzz=FuzzParseXFCC  -fuzztime=$(FUZZTIME)
 	$(GO) test ./pkg/identity/dpop/...  -fuzz=FuzzMatchHTU   -fuzztime=$(FUZZTIME)
+
+# Soak/load harness: drives synthetic traffic through Door A (HTTP) and Door B (gRPC)
+# against an apikey + rbac + decision-cache config. Build-tag-gated so default
+# `go test ./...` stays fast. Tunables: SOAK_RPS, SOAK_DURATION, SOAK_P99_MS, SOAK_WORKERS.
+# CI default is 1k RPS for 10s; nightly should override SOAK_DURATION=30m SOAK_RPS=10000.
+soak:
+	$(GO) test -tags soak ./tests/soak/... -count=1 -timeout 120s
 
 clean:
 	rm -rf $(BIN)
