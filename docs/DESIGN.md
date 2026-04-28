@@ -625,7 +625,8 @@ for performance — see §5.
 > revocation by the IdP is invisible until the cached entry's TTL
 > expires (default ≤ token `exp`). The "short TTLs + refresh rotation"
 > story handles this for most deployments; operators who need stronger
-> guarantees can opt into the revocation surface in **M14** (§7).
+> guarantees can opt into the revocation surface in
+> **M14-REVOCATION** (§7, Tier C).
 
 ---
 
@@ -1489,52 +1490,13 @@ by dependency, not by calendar.
     the scan against the repo's pinned toolchain so contributors
     can replay the v1.0 result locally.
 
-15. **M13 – Supply-chain hardening.** Deferred to *after* v1.0
-    deliberately: M12 freezes the API and ships a reviewed,
-    well-tested release using the standard `golang:alpine` base, so
-    the supply-chain story can move on its own cadence without
-    blocking users on dhi.io entitlement.
-    - Docker Hardened Image bases (`dhi.io/golang`, `dhi.io/alpine`,
-      `dhi.io/envoy`).
-    - Cosign-signed releases verified by Kyverno / Sigstore policy.
-    - SBOM publication (`syft`) on every release.
-    - Mirrored images for air-gapped deployments.
-    - Originally deferred from M2 to keep the early build pipeline
-      accessible to contributors without dhi.io entitlement; now
-      deferred again past v1.0 because none of it is on the user-
-      visible runtime path.
-
-16. **M14 – Revocation (optional).** Until M14, lwauth is *short-TTL
-    by design*: revocation = let things expire. M14 adds three opt-in
-    surfaces for operators who need stronger guarantees:
-
-    - **Token revocation list** (RFC 7009 client-facing helper). New
-      `pkg/identity/revocation` consults a shared store keyed by
-      `jti` (for JWTs) or `sha256(token)` (for opaque bearers) before
-      accepting a credential. Backed by the same `cache.Backend`
-      registry as M7 (Valkey by default) so revocations propagate to
-      every replica via `SET <key> "1" PX <remaining-exp>`. The IdP
-      writes; lwauth reads. A short Bloom-filter pre-check keeps the
-      fast path at one in-process lookup when the list is empty.
-    - **Decision-cache invalidation API.** New `lwauthctl revoke`
-      command and authenticated `POST /v1/admin/revoke` endpoint that
-      delete cached decisions by `(tenant, sub)` or full key prefix.
-      This is what an operator runs *right now* to drop access
-      without waiting for M5's positive TTL. Already partially
-      possible since M7 (`DEL` on Valkey); M14 wraps it in a stable
-      CLI + audited HTTP surface.
-    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
-      already implemented for M3's `MemoryStore`; M14 extends it to
-      a shared `valkey` session store and wires
-      `/oauth2/logout` + admin revoke through it so a logout on one
-      replica is honored by all of them.
-
-    Why optional: the bearer story works fine with short access-token
-    TTLs (≤ 5 min) and refresh rotation (M6) for most deployments.
-    Revocation is mandatory only when (a) you can't shorten TTLs (UX
-    constraints), (b) you have regulatory "kill switch" requirements,
-    or (c) you ship long-lived API keys. Operators who don't need it
-    pay zero cost.
+Items previously numbered 15 (M13 – Supply-chain hardening) and 16
+(M14 – Revocation) have been relocated into the tiered post-v1.0
+queue below — see **B4. M13-SUPPLY-CHAIN** and **C3. M14-REVOCATION**.
+The relocation reflects that neither item is on a v1.0.x patch line
+nor a Tier-A hardening slice: M13 is operator-trust quality work that
+can ship on its own cadence, and M14 is net-new opt-in feature
+surface area.
 
 ### Post-v1.0 queue (reprioritized 2026-04-28)
 
@@ -1696,6 +1658,27 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     `buf.build` module so consumers can codegen clients without
     vendoring.
 
+B4. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
+    Operator-trust posture work that does not change the user-
+    visible runtime path, so it ships on its own cadence rather
+    than gating a release. Scope:
+    - Docker Hardened Image bases (`dhi.io/golang`,
+      `dhi.io/alpine`, `dhi.io/envoy`) as an opt-in build profile,
+      with the standard `golang:alpine` images remaining the
+      default so contributors without dhi.io entitlement keep a
+      working pipeline.
+    - Cosign-signed releases verified by Kyverno / Sigstore
+      policy.
+    - SBOM publication (`syft`) on every release.
+    - Mirrored images for air-gapped deployments.
+
+    Complements but does not overlap K-CRYPTO-2 (Tier A), which
+    is the FIPS 140-3 build mode. M13 is about the *image* and
+    *release* trust chain; K-CRYPTO-2 is about the *crypto
+    primitive* trust chain. Originally deferred from M2 for the
+    same reason it lands here: it is a quality investment, not a
+    correctness blocker.
+
 #### Tier C — new features (v1.1+)
 
 These add user-visible capability rather than closing a gap. They
@@ -1713,6 +1696,40 @@ C2. **DOC-COOKBOOK-1 (was 27) — Cookbook recipes + hosted docs.**
     Envoy deployment", "rotate HMAC secrets without downtime")
     plus a static-site build (likely `mkdocs-material` or Hugo)
     of the per-module references already in `docs/modules/`.
+
+C3. **M14-REVOCATION (was 16) — Optional revocation surface.**
+    Until M14, lwauth is *short-TTL by design*: revocation = let
+    things expire. The bearer story works fine with short access-
+    token TTLs (≤ 5 min) and refresh rotation (M6) for most
+    deployments. M14 is mandatory only when (a) operators cannot
+    shorten TTLs (UX constraints), (b) regulatory "kill switch"
+    requirements apply, or (c) the deployment ships long-lived
+    API keys. Three opt-in surfaces:
+
+    - **Token revocation list** (RFC 7009 client-facing helper).
+      New `pkg/identity/revocation` consults a shared store keyed
+      by `jti` (for JWTs) or `sha256(token)` (for opaque bearers)
+      before accepting a credential. Backed by the same
+      `cache.Backend` registry as M7 (Valkey by default) so
+      revocations propagate to every replica via
+      `SET <key> "1" PX <remaining-exp>`. The IdP writes; lwauth
+      reads. A short Bloom-filter pre-check keeps the fast path
+      at one in-process lookup when the list is empty.
+    - **Decision-cache invalidation API.** New `lwauthctl revoke`
+      command and authenticated `POST /v1/admin/revoke` endpoint
+      that delete cached decisions by `(tenant, sub)` or full
+      key prefix. Already partially possible since M7 (`DEL` on
+      Valkey); M14 wraps it in a stable CLI + audited HTTP
+      surface.
+    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
+      already implemented for M3's `MemoryStore`; M14 extends it
+      to a shared `valkey` session store and wires
+      `/oauth2/logout` + admin revoke through it so a logout on
+      one replica is honored by all of them.
+
+    Lives in Tier C rather than Tier A because operators who
+    don't need it pay zero cost — the v1.0 short-TTL story
+    remains the supported default.
 
 #### Tier X — experimental (no firm target)
 
