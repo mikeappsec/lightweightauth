@@ -1181,25 +1181,86 @@ by dependency, not by calendar.
 
 ### Next
 
-13. **M11 – Multi-tenancy hardening + xDS push.**
-    - Replace ConfigMap+SIGHUP with a controller-pushed gRPC stream
-      (xDS-style) for clusters with many `AuthConfig`s.
-    - Per-tenant rate limits (token-bucket).
-    - Per-tenant key-material isolation; cluster-scoped
-      `IdentityProvider` with tenant overrides.
-    - **Outbound resilience.** Per-upstream circuit breaker (Hystrix-style
-      half-open trial after a configurable cool-down) and retry budgets
-      for every network-touching module (`oauth2-introspection`, `jwt`
-      JWKS fetch, `openfga` Check, IdP token endpoint, Valkey backend).
-      Today each module has its own timeout but no shared breaker, so a
-      slow IdP can chew up worker goroutines under load. Centralized in
-      a small `pkg/upstream` helper consumed by all built-ins.
-    - **`lwauthctl` dev-loop expansion**: `lwauthctl validate` (compile
-      an AuthConfig YAML offline and surface module errors), `lwauthctl
-      diff` (show what would change vs. the running engine), `lwauthctl
-      explain` (dry-run a request through the pipeline and dump each
-      stage's verdict). The CLI exists in M0 as a stub; M11 makes it
-      genuinely useful for debugging multi-tenant configs.
+13. **M11 – Multi-tenancy hardening + xDS push ✅** _(branch
+    `m11-multitenancy-xds`, merged in #8)._
+    - **Outbound resilience** (`pkg/upstream`). Centralized circuit
+      breaker (closed → open → half-open after a configurable
+      cool-down) plus a token-bucket retry budget, composed by
+      `Guard.Do(ctx, fn)` with bounded exponential back-off. Wired
+      into every network-touching built-in: `openfga` Check,
+      `oauth2-introspection`, `clientauth` token fetch, and the
+      `valkey` cache backend (Get/Set/Delete each guarded). Each
+      module exposes a uniform `resilience: { breaker: {...}, retries:
+      {...} }` block parsed by `upstream.FromMap`. Sentinel errors
+      `ErrCircuitOpen` / `ErrRetryBudgetExceeded` map to
+      `module.ErrUpstream` so the pipeline returns deterministic
+      503-class denies under upstream pressure rather than chewing
+      worker goroutines.
+    - **Per-tenant rate limits** (`pkg/ratelimit`). Token-bucket keyed
+      by `Request.TenantID` with per-tenant overrides and a Default
+      bucket. Wired into `pipeline.Engine` via `Options.RateLimiter`
+      so the limit check fires *before* identifier work — exhausted
+      tenants short-circuit to a `429` deny without spending JWKS
+      fetches or OPA evaluations. Disabled by default; the limiter is
+      a typed nil when `rateLimit:` is absent so cost is one branch
+      per request.
+    - **Per-tenant key-material isolation.** Cluster-scoped
+      `IdentityProvider` CR (now carrying `header`, `scheme`,
+      `minRefreshInterval` in addition to issuer/jwks/audiences). A
+      tenant `AuthConfig` references one with `idpRef: <name>` on a
+      jwt identifier; the controller's `ResolveIdPRefs` expands the
+      reference before `Compile` so the identifier sees a
+      fully-materialized config. Tenant-set scalar fields win;
+      `audiences` is a deduplicated set-union so an API gateway
+      shared between two services can extend the cluster list
+      without forking. Reconciler now `Watches` `IdentityProvider`
+      and re-enqueues the AuthConfig on every change, so a
+      cluster-wide JWKS rotation propagates without touching tenant
+      CRs.
+    - **xDS-style push** (`pkg/configstream`). A `Broker` fans
+      compiled snapshots to many subscribers with latest-wins
+      conflation (slow consumers can never block `Publish`); late
+      subscribers are primed with the current snapshot so a
+      mid-flight pod restart catches up immediately. Wrapped by the
+      `lightweightauth.v1.ConfigDiscovery` gRPC service — one
+      server-streaming RPC `StreamAuthConfig` that pushes
+      JSON-encoded snapshots tagged with a monotonic version. The
+      reconciler optionally publishes to a `Broker` after each
+      successful Compile-and-Swap; a `Stream(ctx, conn, nodeID,
+      handler)` client helper drives any embedder's
+      Compile-and-Swap path. JSON over the wire (rather than a
+      schemafull message) is deliberate: module-specific free-form
+      `config` maps round-trip cleanly through it but not through
+      protobuf's struct/Any. Bufconn round-trip tests cover
+      initial-snapshot delivery, mid-stream updates, and
+      multi-client fan-out.
+    - **`lwauthctl` dev-loop**. `lwauthctl validate --config <f>`
+      compiles a YAML offline and prints a one-line summary
+      (`OK hosts=… identifiers=N authorizers=N mutators=N
+      cache=bool rateLimit=bool`). `lwauthctl diff --from --to`
+      surfaces module-level structural diffs (`+` / `-` / `~`) plus
+      scalar / cache / rateLimit changes; both files are `Compile()`d
+      first so unparsable inputs are rejected before diff. `lwauthctl
+      explain --config --request` dry-runs a request through the
+      pipeline and prints `✓` / `·` / `✗` markers for each stage's
+      verdict. Six binary-level tests boot the actual `lwauthctl` so
+      the integration with `cmd/`'s flag wiring stays honest.
+    - Bug fix uncovered late: `audit.Discard` was a `SinkFunc` (a
+      function type, uncomparable in Go), and `lwauthd.Run` does
+      `audit.Default() == audit.Discard` to detect operator overrides.
+      Process boot panicked with `comparing uncomparable type
+      audit.SinkFunc`, killing the lwauth container in
+      `compose up --wait`. Replaced with a named zero-sized struct
+      so interface-wrapped equality is well-defined; regression test
+      pinned in `pkg/observability/audit/audit_test.go`.
+
+      Tests: every new package ships a `_test.go` (race-clean) and
+      the suite remained 30/30 green at every slice. The
+      `pkg/configstream` tests in particular cover slow-subscriber
+      conflation under N=16 concurrent goroutines and full bufconn
+      gRPC round-trips against the generated stubs.
+
+### Next
 
 14. **M12 – Supply-chain hardening.**
     - Docker Hardened Image bases (`dhi.io/golang`, `dhi.io/alpine`,
