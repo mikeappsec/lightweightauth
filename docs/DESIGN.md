@@ -982,8 +982,6 @@ by dependency, not by calendar.
    already routes through `cache.Backend`, so opting into Valkey
    makes it shared across replicas for free.
 
-### Next
-
 10. **M8 – Native gRPC (Door B) + SDKs ✅** _(branch
     `m8-native-grpc-and-sdks`)_.
 
@@ -1128,7 +1126,9 @@ by dependency, not by calendar.
     are recorded inside `identify` so the `lwauth_identifier_total`
     counter reflects every probe across `firstMatch`/`allMust`.
 
-12. **M10 – Sibling repos + plugin runtime.**
+12. **M10 – Sibling repos + plugin runtime ✅** _(branch
+    `m10-plugin-host-runtime`, sibling repos `lightweightauth-proxy`,
+    `lightweightauth-idp`, `lightweightauth-plugins`)_.
     - Bootstrap `lightweightauth-proxy` (Mode B reverse proxy importing
       the core as a library) with its own Dockerfile + Helm chart.
     - Bootstrap `lightweightauth-idp` (OIDC issuer, token endpoint,
@@ -1178,6 +1178,8 @@ by dependency, not by calendar.
       Tests: `pkg/plugin/grpc/grpc_test.go` boots a bufconn fake
       implementing all three plugin services and round-trips OK /
       no_match / plugin-error / RPC-error / config-error paths.
+
+### Next
 
 13. **M11 – Multi-tenancy hardening + xDS push.**
     - Replace ConfigMap+SIGHUP with a controller-pushed gRPC stream
