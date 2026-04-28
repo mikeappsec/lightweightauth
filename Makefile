@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln fips fips-test fips-verify docker-fips
 
 GO     ?= go
 BIN    ?= bin
@@ -6,14 +6,26 @@ PKG    := ./...
 IMAGE  ?= lightweightauth
 TAG    ?= dev
 
+# K-CRYPTO-2 (Tier A5): the FIPS targets below build with the Go
+# 1.24+ in-tree FIPS 140-3 module selected via GOFIPS140. The
+# variable defaults to v1.0.0 (the first cert profile shipped with
+# the toolchain); operators on a different cert revision override
+# `make fips GOFIPS140_VER=vX.Y.Z`. Setting GOFIPS140 alone is
+# sufficient — no GOEXPERIMENT or build tag is required on Go ≥ 1.24.
+# CGO is not required (the FIPS module is in-tree pure Go).
+GOFIPS140_VER ?= v1.0.0
+LDFLAGS_VERSION ?= -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=$(TAG) \
+                   -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown) \
+                   -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
 # envtest binaries live under .envtest-bin/ (gitignored). The path
 # printed by setup-envtest is exported as KUBEBUILDER_ASSETS for the
 # envtest-tagged tests in tests/envtest/.
 ENVTEST_BIN_DIR ?= .envtest-bin
 
 build:
-	$(GO) build -o $(BIN)/lwauth ./cmd/lwauth
-	$(GO) build -o $(BIN)/lwauthctl ./cmd/lwauthctl
+	$(GO) build -trimpath -ldflags "-s -w $(LDFLAGS_VERSION)" -o $(BIN)/lwauth ./cmd/lwauth
+	$(GO) build -trimpath -ldflags "-s -w $(LDFLAGS_VERSION)" -o $(BIN)/lwauthctl ./cmd/lwauthctl
 
 test:
 	$(GO) test $(PKG)
@@ -78,6 +90,55 @@ chaos:
 # repo's Go toolchain so vendored stdlib paths resolve correctly.
 vuln:
 	GOTOOLCHAIN=go1.26.2 $(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+# ---- K-CRYPTO-2 (Tier A5): FIPS 140-3 build mode ---------------------
+#
+# `make fips` produces lwauth + lwauthctl binaries that link against
+# Go's in-tree FIPS 140-3 module. Operators verify the artifact via
+# `make fips-verify` (asserts buildinfo.FIPSEnabled() at runtime) or
+# by scraping `lwauth_fips_enabled` from the Prometheus surface.
+#
+# Outputs land under bin/fips/ to keep them isolated from the stock
+# bin/ artifacts; mixing the two in a single image is a footgun (a
+# release pipeline that pushes both must use distinct tags — see
+# `make docker-fips` and Dockerfile.fips).
+fips:
+	mkdir -p $(BIN)/fips
+	GOFIPS140=$(GOFIPS140_VER) $(GO) build -trimpath \
+		-ldflags "-s -w $(LDFLAGS_VERSION)" \
+		-o $(BIN)/fips/lwauth ./cmd/lwauth
+	GOFIPS140=$(GOFIPS140_VER) $(GO) build -trimpath \
+		-ldflags "-s -w $(LDFLAGS_VERSION)" \
+		-o $(BIN)/fips/lwauthctl ./cmd/lwauthctl
+	@echo "FIPS binaries written to $(BIN)/fips/. Verify with: make fips-verify"
+
+# Run the full test suite under the FIPS module so a primitive that
+# only differs in FIPS mode (e.g. an RSA key < 2048 bits, an MD5
+# fallback) surfaces as a test failure, not a production incident.
+fips-test:
+	GOFIPS140=$(GOFIPS140_VER) $(GO) test -race -count=1 $(PKG)
+
+# Probe a built FIPS binary at runtime. Asserts that
+# buildinfo.FIPSEnabled() is true; exits non-zero otherwise. Wired
+# into CI so a misconfigured matrix entry (GOFIPS140 unset, wrong
+# toolchain, etc.) is caught at build time rather than at promotion.
+fips-verify:
+	@if [ ! -x $(BIN)/fips/lwauth ]; then \
+		echo "missing $(BIN)/fips/lwauth; run 'make fips' first" >&2; exit 1; \
+	fi
+	$(BIN)/fips/lwauth --print-build-info | tee /dev/stderr | grep -q 'fips_enabled=true'
+
+# Build a separately tagged FIPS image. Default tag is
+# `lightweightauth:$(TAG)-fips`, chosen so a stock-image deploy that
+# accidentally lands in a FIPS-only namespace fails the image-policy
+# admission webhook (a registry-prefix or label match) rather than
+# silently serving from the wrong crypto module.
+docker-fips:
+	docker build -f Dockerfile.fips \
+		--build-arg VERSION=$(TAG) \
+		--build-arg COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown) \
+		--build-arg GOFIPS140_VER=$(GOFIPS140_VER) \
+		-t $(IMAGE):$(TAG)-fips .
 
 clean:
 	rm -rf $(BIN)

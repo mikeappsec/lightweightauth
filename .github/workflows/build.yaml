@@ -38,6 +38,35 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  # K-CRYPTO-2 (Tier A5): FIPS 140-3 matrix entry.
+  #
+  # Builds the binaries with GOFIPS140 set so Go's in-tree FIPS module is
+  # linked, runs the full test suite under the same module so a primitive
+  # that only differs in FIPS mode (e.g. an RSA key < 2048 bits, an MD5
+  # fallback) surfaces as a test failure here rather than at promotion.
+  # `make fips-verify` exec's the artifact and asserts buildinfo.FIPSEnabled
+  # is true — catches a misconfigured matrix entry (wrong toolchain,
+  # GOFIPS140 unset, env stripped by a downstream action) before the
+  # image is ever pushed.
+  fips-test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+      - name: vet (FIPS)
+        run: GOFIPS140=v1.0.0 go vet ./...
+      - name: test (FIPS, race)
+        run: GOFIPS140=v1.0.0 go test -race -count=1 ./...
+      - name: build FIPS binaries
+        run: make fips
+      - name: verify FIPS binary self-reports fips_enabled=true
+        run: make fips-verify
+
   build:
     runs-on: ubuntu-24.04
     needs: test
@@ -78,6 +107,56 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
+
+  # K-CRYPTO-2 (Tier A5): publish a separately-tagged FIPS image. The
+  # tag suffix `-fips` and the `org.lightweightauth.fips140` label set
+  # in Dockerfile.fips give image-policy admission webhooks two
+  # independent ways to match the artifact, so a stock-image deploy
+  # that lands in a regulated namespace fails closed instead of
+  # silently serving from the wrong crypto module. The Dockerfile's
+  # build stage runs `--print-build-info | grep fips_enabled=true` so a
+  # toolchain regression that drops FIPS support breaks the image
+  # build, not a downstream incident.
+  build-fips:
+    runs-on: ubuntu-24.04
+    needs: fips-test
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          flavor: |
+            suffix=-fips,onlatest=true
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.fips
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags:   ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            GOFIPS140_VER=v1.0.0
 
   e2e:
     runs-on: ubuntu-24.04

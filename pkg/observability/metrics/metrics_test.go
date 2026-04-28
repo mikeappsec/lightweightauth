@@ -76,6 +76,31 @@ func TestNilRecorderTolerated(t *testing.T) {
 	r.RegisterCacheStats("x", func() uint64 { return 0 }, func() uint64 { return 0 }, func() uint64 { return 0 })
 }
 
+func TestRecorder_FIPSAndBuildInfoExposed(t *testing.T) {
+	t.Parallel()
+	r := New()
+	body := scrape(t, r)
+
+	// lwauth_fips_enabled is always present (gauge value 0 or 1
+	// depending on toolchain). Operators alert on
+	// `lwauth_fips_enabled == 0` in regulated namespaces, so the
+	// metric must exist on every build flavour.
+	if !strings.Contains(body, "lwauth_fips_enabled ") {
+		t.Errorf("lwauth_fips_enabled gauge missing:\n%s", body)
+	}
+	// lwauth_build_info is a constant gauge labelled with version /
+	// commit / go_version / fips. The label set must always be
+	// present even when the binary was not built with -ldflags.
+	if !strings.Contains(body, `lwauth_build_info{`) {
+		t.Errorf("lwauth_build_info gauge missing:\n%s", body)
+	}
+	for _, lbl := range []string{`version="`, `commit="`, `go_version="`, `fips="`} {
+		if !strings.Contains(body, lbl) {
+			t.Errorf("lwauth_build_info missing label %s:\n%s", lbl, body)
+		}
+	}
+}
+
 func scrape(t *testing.T, r *Recorder) string {
 	t.Helper()
 	srv := httptest.NewServer(r.Handler())

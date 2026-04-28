@@ -39,6 +39,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/config"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/pkg/buildinfo"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 )
@@ -132,6 +133,16 @@ func Run(opts Options) error {
 	if log == nil {
 		log = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	}
+	// K-CRYPTO-2: surface the build identity (version, commit, go
+	// runtime, FIPS status) at startup. Operators alerting on a
+	// FIPS-only namespace cross-check this against the
+	// `lwauth_fips_enabled` Prometheus gauge.
+	log.Info("lwauth starting",
+		"version", buildinfo.Version,
+		"commit", buildinfo.Commit,
+		"go_version", buildinfo.GoVersion(),
+		"fips_enabled", buildinfo.FIPSEnabled(),
+	)
 	if opts.HTTPAddr == "" {
 		opts.HTTPAddr = ":8080"
 	}
@@ -307,7 +318,16 @@ func Main() {
 	disableAuthorize := flag.Bool("disable-http-authorize", false, "remove /v1/authorize from the HTTP mux")
 	disableMetrics := flag.Bool("disable-http-metrics", false, "remove /metrics from the HTTP mux")
 	maxBody := flag.Int64("max-request-bytes", 0, "cap on /v1/authorize body bytes (0 -> 1 MiB)")
+	printBuildInfo := flag.Bool("print-build-info", false, "print build attributes (version, commit, go runtime, FIPS mode) and exit")
 	flag.Parse()
+	if *printBuildInfo {
+		// Stable single-line format `version=... commit=... go_version=... fips_enabled=...`,
+		// chosen so the Makefile's `make fips-verify` target can grep for
+		// `fips_enabled=true` portably (no JSON parser needed in CI).
+		fmt.Printf("version=%s commit=%s go_version=%s fips_enabled=%t\n",
+			buildinfo.Version, buildinfo.Commit, buildinfo.GoVersion(), buildinfo.FIPSEnabled())
+		return
+	}
 	if err := Run(Options{
 		ConfigPath:           *cfgPath,
 		HTTPAddr:             *httpAddr,

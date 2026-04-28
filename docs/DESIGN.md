@@ -1644,12 +1644,34 @@ A4. **M10-PLUGIN-LIFECYCLE (supervisor half, was 25) — Plugin
     `ErrConfig` at boot.
 
 A5. **K-CRYPTO-2 (was 21) — FIPS 140-3 build mode.** Optional
-    `make fips` target that builds with
-    `GOEXPERIMENT=boringcrypto` and the matching toolchain so
-    regulated deployments can ship a FIPS-validated lwauth
-    binary. No code change expected — CI matrix entry, published
-    image tag, and a docs note on which primitives switch
-    backends.
+    `make fips` target so regulated deployments can ship a
+    FIPS-validated lwauth binary alongside the stock image.
+
+    ✅ v1.1 ships on `v1.1-tier-a`. Build path uses Go 1.24+'s
+    in-tree FIPS module (selected via `GOFIPS140=v1.0.0`) rather
+    than the older `GOEXPERIMENT=boringcrypto` route — pure-Go,
+    no CGO, ~3 % overhead instead of the legacy 10–20 %. New
+    Makefile targets `fips`, `fips-test`, `fips-verify`,
+    `docker-fips`. New [Dockerfile.fips](../Dockerfile.fips)
+    publishes `<image>:<tag>-fips` with the
+    `org.lightweightauth.fips140=enabled` OCI label so
+    image-policy admission webhooks have two independent ways
+    (tag suffix + label) to refuse a stock image landing in a
+    regulated namespace. New [pkg/buildinfo](../pkg/buildinfo/)
+    surfaces `Version`, `Commit`, `GoVersion()`, `FIPSEnabled()`;
+    the metrics recorder exposes `lwauth_fips_enabled` (always
+    present, value 0/1) and `lwauth_build_info` (constant
+    labelled gauge). lwauthd logs the build identity at startup
+    and accepts `--print-build-info` for a deterministic
+    single-line probe; the FIPS Dockerfile self-asserts
+    `fips_enabled=true` at build time so a toolchain regression
+    fails the image build instead of a deployment. CI gains
+    `fips-test` and `build-fips` jobs in
+    [.github/workflows/build.yaml](../.github/workflows/build.yaml).
+    Operator-facing docs:
+    [docs/operations/fips.md](operations/fips.md) lists which
+    primitives switch backends and gives admission-webhook /
+    Prometheus / runtime verification recipes.
 
 #### Tier B — quality / coverage (v1.1)
 
