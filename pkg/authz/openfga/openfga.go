@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
 
 const defaultTimeout = 2 * time.Second
@@ -72,6 +73,7 @@ type authorizer struct {
 	objectTpl   *template.Template
 
 	client HTTPDoer
+	guard  *upstream.Guard
 }
 
 // templateInput is the value passed into the user/relation/object
@@ -177,21 +179,32 @@ func (a *authorizer) check(ctx context.Context, user, relation, object string) (
 		req.Header.Set("Authorization", "Bearer "+a.apiToken)
 	}
 
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("%w: openfga check: %v", module.ErrUpstream, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Drain a small amount of the body for diagnostics.
-		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return false, fmt.Errorf("%w: openfga check: status %d: %s", module.ErrUpstream, resp.StatusCode, bytes.TrimSpace(preview))
-	}
-
 	var out checkResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return false, fmt.Errorf("%w: openfga decode: %v", module.ErrUpstream, err)
+	err = a.guard.Do(ctx, func(ctx context.Context) error {
+		// Re-build the request per attempt so the body reader is fresh
+		// and ctx (which may be the per-attempt timeout we cloned
+		// earlier) propagates correctly.
+		attemptReq := req.Clone(ctx)
+		attemptReq.Body = io.NopCloser(bytes.NewReader(body))
+		resp, err := a.client.Do(attemptReq)
+		if err != nil {
+			return fmt.Errorf("%w: openfga check: %v", module.ErrUpstream, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return fmt.Errorf("%w: openfga check: status %d: %s", module.ErrUpstream, resp.StatusCode, bytes.TrimSpace(preview))
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return fmt.Errorf("%w: openfga decode: %v", module.ErrUpstream, err)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, upstream.ErrCircuitOpen) {
+			return false, fmt.Errorf("%w: openfga: circuit open", module.ErrUpstream)
+		}
+		return false, err
 	}
 	return out.Allowed, nil
 }
@@ -293,6 +306,11 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 		return nil, err
 	}
 
+	guardCfg, err := upstream.FromMap(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: openfga %q: %v", module.ErrConfig, name, err)
+	}
+
 	return &authorizer{
 		name:        name,
 		apiURL:      strings.TrimRight(apiURL, "/"),
@@ -304,6 +322,7 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 		relationTpl: relTpl,
 		objectTpl:   objTpl,
 		client:      &http.Client{Timeout: timeout + time.Second},
+		guard:       upstream.NewGuard(guardCfg),
 	}, nil
 }
 

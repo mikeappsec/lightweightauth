@@ -27,6 +27,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
 
 type Config struct {
@@ -55,6 +57,7 @@ type identifier struct {
 	posCache *cache.LRU
 	negCache *cache.LRU
 	sf       singleflight
+	guard    *upstream.Guard
 }
 
 func (i *identifier) Name() string { return i.name }
@@ -103,26 +106,36 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 
 func (i *identifier) callIntrospection(ctx context.Context, tok string) (map[string]any, error) {
 	form := url.Values{"token": {tok}, "token_type_hint": {"access_token"}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, i.cfg.URL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("%w: introspection request: %v", module.ErrUpstream, err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	if i.cfg.ClientID != "" || i.cfg.ClientSecret != "" {
-		req.SetBasicAuth(i.cfg.ClientID, i.cfg.ClientSecret)
-	}
-	resp, err := i.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%w: introspection: %v", module.ErrUpstream, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: introspection returned status %d", module.ErrUpstream, resp.StatusCode)
-	}
 	var claims map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&claims); err != nil {
-		return nil, fmt.Errorf("%w: introspection decode: %v", module.ErrUpstream, err)
+	err := i.guard.Do(ctx, func(ctx context.Context) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, i.cfg.URL, strings.NewReader(form.Encode()))
+		if err != nil {
+			return fmt.Errorf("%w: introspection request: %v", module.ErrUpstream, err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "application/json")
+		if i.cfg.ClientID != "" || i.cfg.ClientSecret != "" {
+			req.SetBasicAuth(i.cfg.ClientID, i.cfg.ClientSecret)
+		}
+		resp, err := i.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("%w: introspection: %v", module.ErrUpstream, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("%w: introspection returned status %d", module.ErrUpstream, resp.StatusCode)
+		}
+		claims = nil
+		if err := json.NewDecoder(resp.Body).Decode(&claims); err != nil {
+			return fmt.Errorf("%w: introspection decode: %v", module.ErrUpstream, err)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, upstream.ErrCircuitOpen) {
+			return nil, fmt.Errorf("%w: introspection: circuit open", module.ErrUpstream)
+		}
+		return nil, err
 	}
 	return claims, nil
 }
@@ -232,12 +245,17 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: introspection %q neg-cache: %v", module.ErrConfig, name, err)
 	}
+	guardCfg, err := upstream.FromMap(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: introspection %q: %v", module.ErrConfig, name, err)
+	}
 	return &identifier{
 		name:     name,
 		cfg:      cfg,
 		http:     &http.Client{Timeout: 5 * time.Second},
 		posCache: pos,
 		negCache: neg,
+		guard:    upstream.NewGuard(guardCfg),
 	}, nil
 }
 
