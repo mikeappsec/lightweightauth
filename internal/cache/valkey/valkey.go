@@ -30,6 +30,7 @@ import (
 	"github.com/valkey-io/valkey-go"
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
 
 // Backend is the cache.Backend implementation. It holds a single
@@ -38,12 +39,13 @@ import (
 type Backend struct {
 	client    valkey.Client
 	keyPrefix string
+	guard     *upstream.Guard
 }
 
 // New constructs a Valkey backend. Exposed for tests that want to feed
 // a pre-built valkey.Client (e.g. miniredis).
 func New(client valkey.Client, keyPrefix string) *Backend {
-	return &Backend{client: client, keyPrefix: keyPrefix}
+	return &Backend{client: client, keyPrefix: keyPrefix, guard: upstream.NewGuard(upstream.GuardConfig{})}
 }
 
 func (b *Backend) prefixed(key string) string {
@@ -56,15 +58,30 @@ func (b *Backend) prefixed(key string) string {
 // Get returns the stored bytes or ok=false on miss. valkey.IsValkeyNil
 // distinguishes a real miss from a transport error.
 func (b *Backend) Get(ctx context.Context, key string) ([]byte, bool, error) {
-	resp := b.client.Do(ctx, b.client.B().Get().Key(b.prefixed(key)).Build())
-	v, err := resp.AsBytes()
-	if err != nil {
-		if valkey.IsValkeyNil(err) {
-			return nil, false, nil
+	var (
+		out []byte
+		hit bool
+	)
+	err := b.guard.Do(ctx, func(ctx context.Context) error {
+		resp := b.client.Do(ctx, b.client.B().Get().Key(b.prefixed(key)).Build())
+		v, err := resp.AsBytes()
+		if err != nil {
+			if valkey.IsValkeyNil(err) {
+				out, hit = nil, false
+				return nil // miss is not a failure
+			}
+			return fmt.Errorf("valkey get %s: %w", key, err)
 		}
-		return nil, false, fmt.Errorf("valkey get %s: %w", key, err)
+		out, hit = v, true
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, upstream.ErrCircuitOpen) {
+			return nil, false, fmt.Errorf("valkey get %s: circuit open", key)
+		}
+		return nil, false, err
 	}
-	return v, true, nil
+	return out, hit, nil
 }
 
 // Set stores value with the given TTL. ttl <= 0 stores without
@@ -78,8 +95,17 @@ func (b *Backend) Set(ctx context.Context, key string, value []byte, ttl time.Du
 	} else {
 		built = cmd.Build()
 	}
-	if err := b.client.Do(ctx, built).Error(); err != nil {
-		return fmt.Errorf("valkey set %s: %w", key, err)
+	err := b.guard.Do(ctx, func(ctx context.Context) error {
+		if err := b.client.Do(ctx, built).Error(); err != nil {
+			return fmt.Errorf("valkey set %s: %w", key, err)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, upstream.ErrCircuitOpen) {
+			return fmt.Errorf("valkey set %s: circuit open", key)
+		}
+		return err
 	}
 	return nil
 }
@@ -87,8 +113,17 @@ func (b *Backend) Set(ctx context.Context, key string, value []byte, ttl time.Du
 // Delete removes a key. Missing keys are NOT an error so the surface
 // matches the in-process LRU's semantics.
 func (b *Backend) Delete(ctx context.Context, key string) error {
-	if err := b.client.Do(ctx, b.client.B().Del().Key(b.prefixed(key)).Build()).Error(); err != nil {
-		return fmt.Errorf("valkey del %s: %w", key, err)
+	err := b.guard.Do(ctx, func(ctx context.Context) error {
+		if err := b.client.Do(ctx, b.client.B().Del().Key(b.prefixed(key)).Build()).Error(); err != nil {
+			return fmt.Errorf("valkey del %s: %w", key, err)
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, upstream.ErrCircuitOpen) {
+			return fmt.Errorf("valkey del %s: circuit open", key)
+		}
+		return err
 	}
 	return nil
 }
@@ -131,5 +166,10 @@ func factory(spec cache.BackendSpec, _ *cache.Stats) (cache.Backend, error) {
 		client.Close()
 		return nil, fmt.Errorf("valkey: ping %s: %w", spec.Addr, err)
 	}
-	return &Backend{client: client, keyPrefix: spec.KeyPrefix}, nil
+	guardCfg, gerr := upstream.FromMap(spec.Extra)
+	if gerr != nil {
+		client.Close()
+		return nil, fmt.Errorf("valkey: %w", gerr)
+	}
+	return &Backend{client: client, keyPrefix: spec.KeyPrefix, guard: upstream.NewGuard(guardCfg)}, nil
 }

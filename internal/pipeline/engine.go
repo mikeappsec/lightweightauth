@@ -22,6 +22,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/tracing"
+	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
 )
 
 // Engine is the per-request entry point. Construct via New and never
@@ -36,6 +37,10 @@ type Engine struct {
 
 	// decisionCache is optional; nil means "no caching".
 	decisionCache *cache.Decision
+
+	// rateLimiter is optional; nil means "no rate limiting". Applied
+	// at the entry of Evaluate (M11 multi-tenancy hardening).
+	rateLimiter *ratelimit.Limiter
 }
 
 // IdentifierMode controls multi-identifier composition. See DESIGN.md §2.
@@ -59,6 +64,11 @@ type Options struct {
 	// DecisionCache is optional; when non-nil the engine consults it
 	// before invoking the authorizer and caches the result.
 	DecisionCache *cache.Decision
+	// RateLimiter is optional; nil disables rate limiting. The engine
+	// calls RateLimiter.Allow(r.TenantID) before any module work; on
+	// rejection it returns a 429 deny without consulting modules or
+	// the decision cache.
+	RateLimiter *ratelimit.Limiter
 }
 
 // New builds an Engine. Returns an error if required components are missing.
@@ -75,6 +85,7 @@ func New(o Options) (*Engine, error) {
 		mutators:       o.Mutators,
 		identifierMode: o.IdentifierMode,
 		decisionCache:  o.DecisionCache,
+		rateLimiter:    o.RateLimiter,
 	}, nil
 }
 
@@ -124,6 +135,13 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 // evaluate is the stage runner; Evaluate wraps it with observability
 // emission. Returns (decision, identity, cacheHit, error).
 func (e *Engine) evaluate(ctx context.Context, r *module.Request) (*module.Decision, *module.Identity, bool, error) {
+	if e.rateLimiter != nil && !e.rateLimiter.Allow(r.TenantID) {
+		return &module.Decision{
+			Allow:  false,
+			Status: 429,
+			Reason: "rate limit exceeded",
+		}, nil, false, nil
+	}
 	id, err := e.identifyWithSpan(ctx, r)
 	if err != nil {
 		return denyFromError(err), nil, false, err
