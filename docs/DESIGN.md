@@ -1687,6 +1687,42 @@ B1. **M12-CONF-MATRIX (was 20) — Full conformance matrix.** Slice
     `openfga`) so a transport-level regression in any module is
     caught at PR time.
 
+    *Status: shipped on `v1.1-tier-b`* —
+    [internal/server/matrix_test.go](../internal/server/matrix_test.go)
+    walks an 8-cell matrix:
+    - `apikey` × {`rbac`, `cel`, `opa`, `composite-allOf`,
+      `openfga`} — every shipped authorizer, exercised under
+    a stable identity transport;
+    - {`jwt`, `oauth2-introspection`} × `rbac` — additional
+    identifiers whose transports (Bearer + JWKS, Bearer +
+    introspection endpoint) round-trip cleanly through both
+    Door A and Door B.
+
+    Each cell compiles a real engine, boots both doors over a
+    single bufconn gRPC server, and asserts allow/deny + HTTP
+    status parity for one allow input and one deny input.
+
+    The matrix immediately surfaced two real findings, recorded
+    here so they can't drift unnoticed:
+    1. **M12-PROTO-HOST (new follow-up).** HMAC and other
+       request-binding identifiers cannot achieve Door A vs
+       Door B parity until `lightweightauth.v1.AuthorizeRequest`
+       gains `host` and `body_sha256` fields. Door A receives
+       Host via `envoy.AttributeContext_HttpRequest.Host`; Door
+       B today plumbs only the gRPC peer's remote address into
+       `module.Request.Host`, so any signature bound to the
+       HTTP Host header verifies on Door A and fails on Door B.
+       Until the proto extension lands, HMAC remains a
+       Door A-only identifier and is excluded from the matrix
+       with a TODO at the cell site.
+    2. **mtls / dpop / oauth2 deferred.** mTLS needs XFCC
+       header injection on Door A vs `PeerCerts` on Door B;
+       DPoP wraps an inner identifier so a parity cell needs
+       inner-fixture composition; OAuth2 redirect flow needs a
+       full IdP. Tracked in the file-level TODO of
+       `matrix_test.go` so the next slice has a concrete
+       starting point.
+
 B2. **M12-BROKER-MW (was 19) — Multi-writer `configstream.Broker`.**
     Lift the implicit single-writer contract on `Broker.Publish`
     so per-tenant publishers and federated control planes can
