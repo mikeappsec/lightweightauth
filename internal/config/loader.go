@@ -84,7 +84,11 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	}
 	var lim *ratelimit.Limiter
 	if ac.RateLimit != nil {
-		lim = ratelimit.New(*ac.RateLimit)
+		var err error
+		lim, err = ratelimit.New(*ac.RateLimit)
+		if err != nil {
+			return nil, fmt.Errorf("%w: rateLimit: %v", module.ErrConfig, err)
+		}
 	}
 	return pipeline.New(pipeline.Options{
 		Identifiers:    idents,

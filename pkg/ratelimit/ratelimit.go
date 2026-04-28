@@ -18,6 +18,7 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -31,6 +32,13 @@ type Spec struct {
 	// deployments, or tenants that haven't been stamped). Zero RPS
 	// disables it.
 	Default Bucket `json:"default,omitempty" yaml:"default,omitempty"`
+	// Distributed opts into cluster-wide aggregation for the per-
+	// tenant bucket (K-DOS-1). nil = per-replica only (v1.0 default);
+	// non-nil = the named backend caps per-tenant requests across
+	// every lwauth replica in the deployment. The local bucket
+	// continues to act as a per-replica floor; see [DistributedSpec]
+	// for details.
+	Distributed *DistributedSpec `json:"distributed,omitempty" yaml:"distributed,omitempty"`
 }
 
 // Bucket configures one token bucket: RPS is the steady-state refill
@@ -52,34 +60,117 @@ type Limiter struct {
 	buckets map[string]*bucket // keyed by tenant ID; "" → default bucket
 
 	now func() time.Time
+
+	// Distributed aggregator (K-DOS-1). nil = per-replica only.
+	dist          DistributedBackend
+	distWindow    time.Duration
+	distTimeout   time.Duration
+	distFailOpen  bool
+	distKeyPrefix string
+	distLimit     int // computed once: PerTenant.Burst or RPS*window/1s
 }
 
 // New returns a Limiter that enforces spec. If neither PerTenant nor
-// Default has RPS > 0, returns nil (a no-op limiter the caller can pass
-// through).
-func New(spec Spec) *Limiter {
-	if !spec.PerTenant.enabled() && !spec.Default.enabled() {
-		return nil
+// Default has RPS > 0 AND no distributed backend is configured,
+// returns nil (a no-op limiter the caller can pass through).
+//
+// When spec.Distributed is set, New dispatches to the registered
+// backend factory. A factory failure surfaces as an error; the engine
+// fails compile so misconfiguration is caught at boot.
+func New(spec Spec) (*Limiter, error) {
+	if !spec.PerTenant.enabled() && !spec.Default.enabled() && spec.Distributed == nil {
+		return nil, nil
 	}
-	return &Limiter{
+	l := &Limiter{
 		spec:    spec,
 		buckets: map[string]*bucket{},
 		now:     time.Now,
 	}
+	if spec.Distributed != nil {
+		back, err := BuildBackend(spec.Distributed)
+		if err != nil {
+			return nil, err
+		}
+		l.dist = back
+		l.distWindow = spec.Distributed.Window
+		if l.distWindow <= 0 {
+			l.distWindow = time.Second
+		}
+		l.distTimeout = spec.Distributed.Timeout
+		if l.distTimeout <= 0 {
+			l.distTimeout = 50 * time.Millisecond
+		}
+		l.distFailOpen = spec.Distributed.FailOpen
+		l.distKeyPrefix = spec.Distributed.KeyPrefix
+		// Cluster-wide cap: explicit Burst, else RPS scaled to window.
+		if spec.PerTenant.Burst > 0 {
+			l.distLimit = int(spec.PerTenant.Burst)
+		} else if spec.PerTenant.RPS > 0 {
+			l.distLimit = int(spec.PerTenant.RPS * l.distWindow.Seconds())
+			if l.distLimit < 1 {
+				l.distLimit = 1
+			}
+		}
+	}
+	return l, nil
+}
+
+// MustNew is the panicking variant for tests and tightly-scoped
+// callers that have already validated spec.
+func MustNew(spec Spec) *Limiter {
+	l, err := New(spec)
+	if err != nil {
+		panic(err)
+	}
+	return l
 }
 
 // Allow reports whether a request from tenantID may proceed. nil
 // receiver = always allow. The empty tenantID falls through to
 // spec.Default; if Default is disabled, the empty tenant always passes.
+//
+// When a distributed backend is configured AND tenantID is non-empty,
+// the backend is consulted first with a per-call deadline. On success
+// the local bucket is also charged so a single replica still cannot
+// exceed its configured RPS during a burst the cluster-wide cap
+// allowed. On backend error the limiter falls back to the local
+// bucket (or, with failOpen, allows unconditionally).
 func (l *Limiter) Allow(tenantID string) bool {
 	if l == nil {
 		return true
+	}
+	if l.dist != nil && tenantID != "" && l.distLimit > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), l.distTimeout)
+		ok, err := l.dist.Allow(ctx, l.distKeyPrefix+tenantID, l.distLimit, l.distWindow, l.now())
+		cancel()
+		switch {
+		case err != nil:
+			if l.distFailOpen {
+				return true
+			}
+			// Fall through to local bucket as a per-replica floor.
+		case !ok:
+			return false
+		default:
+			// Distributed allowed; still charge the local bucket so a
+			// single replica's RPS stays bounded even if the cluster
+			// cap had headroom.
+		}
 	}
 	bk := l.bucketFor(tenantID)
 	if bk == nil {
 		return true
 	}
 	return bk.take(l.now())
+}
+
+// Close releases any resources held by a configured distributed
+// backend. Safe to call on a nil receiver.
+func (l *Limiter) Close() {
+	if l == nil || l.dist == nil {
+		return
+	}
+	l.dist.Close()
 }
 
 func (l *Limiter) bucketFor(tenantID string) *bucket {

@@ -14,14 +14,18 @@ func TestNil_IsAlwaysAllow(t *testing.T) {
 }
 
 func TestNew_DisabledWhenNoRPS(t *testing.T) {
-	if l := New(Spec{}); l != nil {
+	l, err := New(Spec{})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if l != nil {
 		t.Fatal("expected nil limiter when spec disables both buckets")
 	}
 }
 
 func TestPerTenant_BurstThenRefill(t *testing.T) {
 	now := time.Unix(0, 0)
-	l := New(Spec{PerTenant: Bucket{RPS: 10, Burst: 3}})
+	l := MustNew(Spec{PerTenant: Bucket{RPS: 10, Burst: 3}})
 	l.now = func() time.Time { return now }
 
 	for i := 0; i < 3; i++ {
@@ -44,7 +48,7 @@ func TestPerTenant_BurstThenRefill(t *testing.T) {
 
 func TestTenantsAreIsolated(t *testing.T) {
 	now := time.Unix(0, 0)
-	l := New(Spec{PerTenant: Bucket{RPS: 1, Burst: 1}})
+	l := MustNew(Spec{PerTenant: Bucket{RPS: 1, Burst: 1}})
 	l.now = func() time.Time { return now }
 
 	if !l.Allow("a") {
@@ -60,7 +64,7 @@ func TestTenantsAreIsolated(t *testing.T) {
 
 func TestDefaultBucketUsedForEmptyTenant(t *testing.T) {
 	now := time.Unix(0, 0)
-	l := New(Spec{Default: Bucket{RPS: 5, Burst: 2}})
+	l := MustNew(Spec{Default: Bucket{RPS: 5, Burst: 2}})
 	l.now = func() time.Time { return now }
 
 	if !l.Allow("") || !l.Allow("") {
@@ -78,7 +82,7 @@ func TestDefaultBucketUsedForEmptyTenant(t *testing.T) {
 }
 
 func TestConcurrent(t *testing.T) {
-	l := New(Spec{PerTenant: Bucket{RPS: 1_000_000, Burst: 1_000_000}})
+	l := MustNew(Spec{PerTenant: Bucket{RPS: 1_000_000, Burst: 1_000_000}})
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
 		wg.Add(1)

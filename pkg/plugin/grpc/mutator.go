@@ -3,9 +3,13 @@ package grpc
 import (
 	"context"
 
+	grpc "google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
 	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	pluginv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/plugin/v1"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/plugin/sign"
 )
 
 // remoteMutator satisfies module.ResponseMutator by calling
@@ -32,6 +36,7 @@ func (m *remoteMutator) Mutate(ctx context.Context, r *module.Request, id *modul
 	ctx, cancel := context.WithTimeout(ctx, m.cfg.Timeout)
 	defer cancel()
 
+	var trailer metadata.MD
 	resp, err := m.client.Mutate(ctx, &pluginv1.MutateRequest{
 		Request:  reqToProto(r),
 		Identity: idToProto(id),
@@ -43,9 +48,15 @@ func (m *remoteMutator) Mutate(ctx context.Context, r *module.Request, id *modul
 			DenyReason:      d.Reason,
 			Identity:        idToProto(id),
 		},
-	})
+	}, grpc.Trailer(&trailer))
 	if err != nil {
 		return errPluginRPC(m.name, err)
+	}
+	if err := m.cfg.Signing.verifyTrailer(
+		m.name, trailer,
+		sign.CanonicalMutateResponse(trailerAlg(trailer), trailerKeyID(trailer), resp),
+	); err != nil {
+		return err
 	}
 	if msg := resp.GetError(); msg != "" {
 		return errPluginTransport(m.name, msg)
@@ -62,6 +73,9 @@ func mutatorFactory(name string, raw map[string]any) (module.ResponseMutator, er
 	}
 	cc, err := dial(name, cfg)
 	if err != nil {
+		return nil, err
+	}
+	if err := startSupervisorIfConfigured(name, cfg, cfg.Lifecycle); err != nil {
 		return nil, err
 	}
 	return &remoteMutator{

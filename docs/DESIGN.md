@@ -625,7 +625,8 @@ for performance — see §5.
 > revocation by the IdP is invisible until the cached entry's TTL
 > expires (default ≤ token `exp`). The "short TTLs + refresh rotation"
 > story handles this for most deployments; operators who need stronger
-> guarantees can opt into the revocation surface in **M14** (§7).
+> guarantees can opt into the revocation surface in
+> **M14-REVOCATION** (§7, Tier C).
 
 ---
 
@@ -1489,52 +1490,13 @@ by dependency, not by calendar.
     the scan against the repo's pinned toolchain so contributors
     can replay the v1.0 result locally.
 
-15. **M13 – Supply-chain hardening.** Deferred to *after* v1.0
-    deliberately: M12 freezes the API and ships a reviewed,
-    well-tested release using the standard `golang:alpine` base, so
-    the supply-chain story can move on its own cadence without
-    blocking users on dhi.io entitlement.
-    - Docker Hardened Image bases (`dhi.io/golang`, `dhi.io/alpine`,
-      `dhi.io/envoy`).
-    - Cosign-signed releases verified by Kyverno / Sigstore policy.
-    - SBOM publication (`syft`) on every release.
-    - Mirrored images for air-gapped deployments.
-    - Originally deferred from M2 to keep the early build pipeline
-      accessible to contributors without dhi.io entitlement; now
-      deferred again past v1.0 because none of it is on the user-
-      visible runtime path.
-
-16. **M14 – Revocation (optional).** Until M14, lwauth is *short-TTL
-    by design*: revocation = let things expire. M14 adds three opt-in
-    surfaces for operators who need stronger guarantees:
-
-    - **Token revocation list** (RFC 7009 client-facing helper). New
-      `pkg/identity/revocation` consults a shared store keyed by
-      `jti` (for JWTs) or `sha256(token)` (for opaque bearers) before
-      accepting a credential. Backed by the same `cache.Backend`
-      registry as M7 (Valkey by default) so revocations propagate to
-      every replica via `SET <key> "1" PX <remaining-exp>`. The IdP
-      writes; lwauth reads. A short Bloom-filter pre-check keeps the
-      fast path at one in-process lookup when the list is empty.
-    - **Decision-cache invalidation API.** New `lwauthctl revoke`
-      command and authenticated `POST /v1/admin/revoke` endpoint that
-      delete cached decisions by `(tenant, sub)` or full key prefix.
-      This is what an operator runs *right now* to drop access
-      without waiting for M5's positive TTL. Already partially
-      possible since M7 (`DEL` on Valkey); M14 wraps it in a stable
-      CLI + audited HTTP surface.
-    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
-      already implemented for M3's `MemoryStore`; M14 extends it to
-      a shared `valkey` session store and wires
-      `/oauth2/logout` + admin revoke through it so a logout on one
-      replica is honored by all of them.
-
-    Why optional: the bearer story works fine with short access-token
-    TTLs (≤ 5 min) and refresh rotation (M6) for most deployments.
-    Revocation is mandatory only when (a) you can't shorten TTLs (UX
-    constraints), (b) you have regulatory "kill switch" requirements,
-    or (c) you ship long-lived API keys. Operators who don't need it
-    pay zero cost.
+Items previously numbered 15 (M13 – Supply-chain hardening) and 16
+(M14 – Revocation) have been relocated into the tiered post-v1.0
+queue below — see **B4. M13-SUPPLY-CHAIN** and **C3. M14-REVOCATION**.
+The relocation reflects that neither item is on a v1.0.x patch line
+nor a Tier-A hardening slice: M13 is operator-trust quality work that
+can ship on its own cadence, and M14 is net-new opt-in feature
+surface area.
 
 ### Post-v1.0 queue (reprioritized 2026-04-28)
 
@@ -1611,39 +1573,105 @@ A1. **F-PLUGIN-2 (was 24) — Signature on plugin replies.** Slice 8
     a pre-shared key (HMAC) or X.509 cert; the host verifies
     before surfacing the result to the pipeline.
 
+    ✅ v1.1 ships the HMAC half on `v1.1-tier-a`. Application-layer
+    signature carried as gRPC trailing metadata
+    (`lwauth-sig` / `lwauth-kid` / `lwauth-alg`) over a deterministic
+    length-prefixed canonical encoding of the response. Modes:
+    `disabled` (v1.0 default — zero-config compat), `verify` (accept
+    signed or unsigned, reject *bad* signatures), `require` (every
+    response must be signed). Alg/kid are bound into the protected
+    bytes so a downgrade attempt invalidates the signature instead of
+    silently degrading. X.509 / asymmetric is a forward-compatible
+    follow-up; the trailer scheme already routes alg through to the
+    host. New package
+    [pkg/plugin/sign](../pkg/plugin/sign/) and the
+    [signing config block](../pkg/plugin/grpc/sign.go) on every
+    `grpc-plugin` factory.
+
 A2. **K-AUTHN-2 (was 22) — Negative-cache invalid introspection.**
-    The `oauth2-introspection` identifier negative-caches
-    `active=false` today, but a malformed or non-2xx introspection
-    response surfaces as `ErrUpstream` and is re-attempted every
-    request. A misbehaving IdP can therefore be turned into a
-    per-request DoS amplifier. Add a small short-TTL negative
-    cache for the upstream-error case keyed on a digest of the
-    inbound credential.
+    ✅ shipped on `v1.1-tier-a`. The `oauth2-introspection`
+    identifier already negative-cached `active=false`; v1.1 adds
+    a third cache line for `ErrUpstream` outcomes (network
+    failure, 5xx, circuit-open) keyed on `sha256(token)`,
+    TTL = `errorTtl` (default 5s, set to 0 to disable). A flood
+    of identical-token retries during an IdP blip now coalesces
+    to one upstream call per token per window instead of fanning
+    out. The Guard circuit-breaker still owns the per-(tenant,
+    upstream) coarse policy; this cache adds per-credential
+    coalescing on top. See
+    [pkg/identity/introspection/introspection.go](../pkg/identity/introspection/introspection.go).
 
 A3. **K-DOS-1 (was 23) — Distributed rate-limit aggregation.**
-    `pkg/ratelimit` is per-replica; under N pods a tenant can
-    spend `N × limit` before any replica trips. v1.1 adds an
-    optional Valkey-backed aggregator (the `cache.Backend`
-    registry already provides the connection) keyed by
-    `(tenant, bucket)` with a sliding window. Per-replica
-    buckets stay the default — distributed mode is opt-in for
-    operators who actually need cluster-wide limits.
+    `pkg/ratelimit` was per-replica through v1.0; under N pods a
+    tenant could spend `N × limit` before any replica tripped.
+
+    ✅ v1.1 ships the optional Valkey-backed aggregator on
+    `v1.1-tier-a`. New `rateLimit.distributed:` block selects a
+    registered backend (v1.1 ships `valkey`); per-tenant bucket
+    becomes a sliding-window counter atomic across the fleet via
+    Lua `ZREMRANGEBYSCORE` → `ZCARD` → `ZADD` → `PEXPIRE`.
+    Per-replica buckets stay the default and continue to act as a
+    safety floor: on backend success the local bucket is also
+    charged so a single replica still can't exceed its `rps`; on
+    backend error the limiter falls back to local (or, with
+    `failOpen: true`, allows). New backend abstraction
+    [pkg/ratelimit/backend.go](../pkg/ratelimit/backend.go) keeps
+    the core package dependency-free; concrete impl in
+    [pkg/ratelimit/valkey](../pkg/ratelimit/valkey/) registers via
+    `init()` from the `pkg/builtins` blank-import.
 
 A4. **M10-PLUGIN-LIFECYCLE (supervisor half, was 25) — Plugin
     process supervision.** Slice 8 closed the dial-credentials
     half (TLS / mTLS / fail-closed for non-loopback plaintext);
-    the supervisor half remains. Add an opt-in mode: process
-    exec, periodic `grpc.health.v1.Health.Check`, exponential-
-    backoff restart. Operators on Kubernetes / systemd keep the
-    current "platform restarts the sidecar" model by default.
+    the supervisor half ships in v1.1.
+
+    ✅ v1.1 ships the opt-in supervisor on `v1.1-tier-a`. New
+    package [pkg/plugin/supervisor](../pkg/plugin/supervisor/)
+    spawns the child via `os/exec`, probes
+    `grpc.health.v1.Health.Check` every `interval` over the same
+    transport credentials the data plane uses, and after
+    `failureThreshold` consecutive failures sends SIGTERM (Kill on
+    Windows), waits up to `gracefulTimeout`, then SIGKILL. Restart
+    is exponential backoff (`initial * 2^n` capped at `maxBackoff`)
+    with uniform ±`jitter`; `maxRestarts: 0` = unlimited. New
+    `lifecycle:` block on the `grpc-plugin` config opts in;
+    operators on Kubernetes / systemd leave it unset and the v1.0
+    "platform owns the sidecar" model is unchanged. Supervisor and
+    connection pool share the same `poolKey` so multiple modules
+    pointed at one plugin reuse one child. Config-time readiness:
+    `startTimeout` bounds how long engine construction waits for
+    the first successful health probe; failure surfaces as
+    `ErrConfig` at boot.
 
 A5. **K-CRYPTO-2 (was 21) — FIPS 140-3 build mode.** Optional
-    `make fips` target that builds with
-    `GOEXPERIMENT=boringcrypto` and the matching toolchain so
-    regulated deployments can ship a FIPS-validated lwauth
-    binary. No code change expected — CI matrix entry, published
-    image tag, and a docs note on which primitives switch
-    backends.
+    `make fips` target so regulated deployments can ship a
+    FIPS-validated lwauth binary alongside the stock image.
+
+    ✅ v1.1 ships on `v1.1-tier-a`. Build path uses Go 1.24+'s
+    in-tree FIPS module (selected via `GOFIPS140=v1.0.0`) rather
+    than the older `GOEXPERIMENT=boringcrypto` route — pure-Go,
+    no CGO, ~3 % overhead instead of the legacy 10–20 %. New
+    Makefile targets `fips`, `fips-test`, `fips-verify`,
+    `docker-fips`. New [Dockerfile.fips](../Dockerfile.fips)
+    publishes `<image>:<tag>-fips` with the
+    `org.lightweightauth.fips140=enabled` OCI label so
+    image-policy admission webhooks have two independent ways
+    (tag suffix + label) to refuse a stock image landing in a
+    regulated namespace. New [pkg/buildinfo](../pkg/buildinfo/)
+    surfaces `Version`, `Commit`, `GoVersion()`, `FIPSEnabled()`;
+    the metrics recorder exposes `lwauth_fips_enabled` (always
+    present, value 0/1) and `lwauth_build_info` (constant
+    labelled gauge). lwauthd logs the build identity at startup
+    and accepts `--print-build-info` for a deterministic
+    single-line probe; the FIPS Dockerfile self-asserts
+    `fips_enabled=true` at build time so a toolchain regression
+    fails the image build instead of a deployment. CI gains
+    `fips-test` and `build-fips` jobs in
+    [.github/workflows/build.yaml](../.github/workflows/build.yaml).
+    Operator-facing docs:
+    [docs/operations/fips.md](operations/fips.md) lists which
+    primitives switch backends and gives admission-webhook /
+    Prometheus / runtime verification recipes.
 
 #### Tier B — quality / coverage (v1.1)
 
@@ -1677,6 +1705,27 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     `buf.build` module so consumers can codegen clients without
     vendoring.
 
+B4. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
+    Operator-trust posture work that does not change the user-
+    visible runtime path, so it ships on its own cadence rather
+    than gating a release. Scope:
+    - Docker Hardened Image bases (`dhi.io/golang`,
+      `dhi.io/alpine`, `dhi.io/envoy`) as an opt-in build profile,
+      with the standard `golang:alpine` images remaining the
+      default so contributors without dhi.io entitlement keep a
+      working pipeline.
+    - Cosign-signed releases verified by Kyverno / Sigstore
+      policy.
+    - SBOM publication (`syft`) on every release.
+    - Mirrored images for air-gapped deployments.
+
+    Complements but does not overlap K-CRYPTO-2 (Tier A), which
+    is the FIPS 140-3 build mode. M13 is about the *image* and
+    *release* trust chain; K-CRYPTO-2 is about the *crypto
+    primitive* trust chain. Originally deferred from M2 for the
+    same reason it lands here: it is a quality investment, not a
+    correctness blocker.
+
 #### Tier C — new features (v1.1+)
 
 These add user-visible capability rather than closing a gap. They
@@ -1694,6 +1743,40 @@ C2. **DOC-COOKBOOK-1 (was 27) — Cookbook recipes + hosted docs.**
     Envoy deployment", "rotate HMAC secrets without downtime")
     plus a static-site build (likely `mkdocs-material` or Hugo)
     of the per-module references already in `docs/modules/`.
+
+C3. **M14-REVOCATION (was 16) — Optional revocation surface.**
+    Until M14, lwauth is *short-TTL by design*: revocation = let
+    things expire. The bearer story works fine with short access-
+    token TTLs (≤ 5 min) and refresh rotation (M6) for most
+    deployments. M14 is mandatory only when (a) operators cannot
+    shorten TTLs (UX constraints), (b) regulatory "kill switch"
+    requirements apply, or (c) the deployment ships long-lived
+    API keys. Three opt-in surfaces:
+
+    - **Token revocation list** (RFC 7009 client-facing helper).
+      New `pkg/identity/revocation` consults a shared store keyed
+      by `jti` (for JWTs) or `sha256(token)` (for opaque bearers)
+      before accepting a credential. Backed by the same
+      `cache.Backend` registry as M7 (Valkey by default) so
+      revocations propagate to every replica via
+      `SET <key> "1" PX <remaining-exp>`. The IdP writes; lwauth
+      reads. A short Bloom-filter pre-check keeps the fast path
+      at one in-process lookup when the list is empty.
+    - **Decision-cache invalidation API.** New `lwauthctl revoke`
+      command and authenticated `POST /v1/admin/revoke` endpoint
+      that delete cached decisions by `(tenant, sub)` or full
+      key prefix. Already partially possible since M7 (`DEL` on
+      Valkey); M14 wraps it in a stable CLI + audited HTTP
+      surface.
+    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
+      already implemented for M3's `MemoryStore`; M14 extends it
+      to a shared `valkey` session store and wires
+      `/oauth2/logout` + admin revoke through it so a logout on
+      one replica is honored by all of them.
+
+    Lives in Tier C rather than Tier A because operators who
+    don't need it pay zero cost — the v1.0 short-TTL story
+    remains the supported default.
 
 #### Tier X — experimental (no firm target)
 

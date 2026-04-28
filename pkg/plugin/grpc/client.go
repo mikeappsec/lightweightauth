@@ -32,6 +32,18 @@ type commonConfig struct {
 	// and unix sockets co-located in the same pod.
 	TLS      tlsConfig
 	Insecure bool
+
+	// Signing is the F-PLUGIN-2 application-layer signature policy:
+	// HMAC-SHA256 over a canonical encoding of the plugin's response,
+	// carried as gRPC trailing metadata. Independent of TLS — a
+	// well-configured deployment uses both.
+	Signing signingConfig
+
+	// Lifecycle is the M10-PLUGIN-LIFECYCLE supervisor policy. nil
+	// when the operator owns the plugin process externally (the v1.0
+	// default). Non-nil when the lwauth process should spawn,
+	// health-check, and restart the plugin itself.
+	Lifecycle *lifecycleConfig
 }
 
 // tlsConfig captures the optional credentials a gRPC plugin client
@@ -107,6 +119,18 @@ func parseCommon(name string, raw map[string]any) (commonConfig, error) {
 	if !tlsConfigured && !c.Insecure && requiresTLS(c.Address) {
 		return c, fmt.Errorf("%w: grpc-plugin %q: address %q requires TLS (set tls.caFile/certFile/keyFile) or explicit insecure: true for loopback/dev use", module.ErrConfig, name, c.Address)
 	}
+
+	sigCfg, err := parseSigning(name, raw)
+	if err != nil {
+		return c, err
+	}
+	c.Signing = sigCfg
+
+	lc, err := parseLifecycle(name, raw)
+	if err != nil {
+		return c, err
+	}
+	c.Lifecycle = lc
 	return c, nil
 }
 

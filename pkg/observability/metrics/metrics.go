@@ -25,6 +25,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/mikeappsec/lightweightauth/pkg/buildinfo"
 )
 
 // Recorder bundles the lwauth metric set. The zero value is unusable;
@@ -60,7 +62,42 @@ func New() *Recorder {
 		}, []string{"identifier", "outcome"}),
 	}
 	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal)
+
+	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
+	// running binary is using a FIPS 140-3 validated cryptographic
+	// module, 0 = it is not). Operators alert on
+	// `lwauth_fips_enabled{job="lwauth"} == 0` in regulated clusters
+	// to catch a stock-image deploy slipping into a FIPS-only namespace.
+	// Also exposes lwauth_build_info as a constant labelled gauge so
+	// version / commit / go runtime are queryable via PromQL.
+	fipsVal := 0.0
+	if buildinfo.FIPSEnabled() {
+		fipsVal = 1.0
+	}
+	fipsGauge := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "lwauth_fips_enabled",
+		Help: "1 if the running binary uses a FIPS 140-3 validated cryptographic module (GOFIPS140 or GOEXPERIMENT=boringcrypto build), 0 otherwise.",
+	})
+	fipsGauge.Set(fipsVal)
+	buildGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "lwauth_build_info",
+		Help: "Constant 1 with build attributes as labels.",
+	}, []string{"version", "commit", "go_version", "fips"})
+	buildGauge.WithLabelValues(
+		buildinfo.Version,
+		buildinfo.Commit,
+		buildinfo.GoVersion(),
+		boolLabel(buildinfo.FIPSEnabled()),
+	).Set(1)
+	reg.MustRegister(fipsGauge, buildGauge)
 	return r
+}
+
+func boolLabel(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // Registry returns the underlying Prometheus registry. Useful for tests
