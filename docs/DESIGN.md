@@ -1544,6 +1544,111 @@ by dependency, not by calendar.
     operation.
 17. **WASM plugins** via `wazero`. Defer until the auth-library
     ecosystem in WASM matures (§2).
+18. **OpenAPI / Protobuf-driven API surface description.** Ship a
+    machine-readable contract for every endpoint lwauth exposes:
+    - **HTTP** (`POST /v1/authorize`, `/healthz`, `/readyz`, `/metrics`,
+      and any `module.HTTPMounter` prefixes such as `/oauth2/*`) as an
+      OpenAPI 3.1 document checked into `api/openapi/lwauth.yaml`,
+      generated from the request/response Go structs (`kin-openapi` or
+      `swaggo` + a `go generate` step) and served at
+      `GET /openapi.json` behind the same admin gate as `/metrics`.
+    - **gRPC** (`envoy.service.auth.v3.Authorization`,
+      `lightweightauth.v1.Auth`, `lightweightauth.v1.ConfigDiscovery`,
+      `grpc.health.v1.Health`) as the existing `.proto` files plus a
+      published `buf.build` module so consumers can codegen clients
+      without vendoring our tree.
+
+    Why post-v1: the wire shapes are stable in v1.0 (frozen by the
+    conformance suite, M12 slice 2), so a generated spec can't drift
+    from reality — but generation, doc hosting, and the admin-gate
+    plumbing for `/openapi.json` are themselves a slice of work, and
+    no v1.0 user is blocked on it. Promote to v1.1 once a contributor
+    picks it up; track as `DOC-OPENAPI-1`.
+
+19. **Multi-writer `configstream.Broker`.** Lift the implicit
+    single-writer contract on `Broker.Publish` so per-tenant
+    publishers and federated control planes can fan in safely.
+    Implementation is small — compare versions in
+    `subscription.deliver` so a slow subscriber's pending slot
+    only ever moves forwards — but it changes a documented
+    invariant, so it's a v1.1 surface change rather than a v1.0
+    patch. Tracked as `M12-BROKER-MW`. (Originally noted in M12
+    §15 "Known follow-up: multi-writer `configstream.Broker`".)
+
+20. **Conformance coverage for all identifiers.** M12 slice 2
+    landed the Door A vs Door B parity harness using `apikey + rbac`
+    as the single fixture. Promote it to a fixture matrix that walks
+    every shipped identifier (`jwt`, `oauth2-introspection`, `mtls`,
+    `hmac`, `dpop` wrapper, `oauth2`) and authorizer (`opa`, `cel`,
+    `composite`, `openfga`) so a transport-level regression in any
+    module is caught at PR time. The harness is already extracted
+    in `pkg/module/conformance` for plugin authors — this is the
+    same idea applied internally. Tracked as `M12-CONF-MATRIX`.
+
+21. **FIPS 140-3 build mode (`boringcrypto`).** Optional `make
+    fips` target that builds with `GOEXPERIMENT=boringcrypto` and
+    the matching toolchain so regulated deployments can ship a
+    FIPS-validated lwauth binary. No code change expected; what's
+    needed is a CI matrix entry, a published image tag, and a
+    docs note on which crypto primitives switch backends. Security
+    review tracks as `K-CRYPTO-2`.
+
+22. **Negative-cache invalid OAuth2 introspection responses.** The
+    `oauth2-introspection` identifier negative-caches `active=false`
+    today, but a malformed / non-2xx introspection response surfaces
+    as `ErrUpstream` and is re-attempted every request. Add a small
+    short-TTL negative cache for the latter so a misbehaving IdP
+    can't be turned into a per-request DoS. Security review tracks
+    as `K-AUTHN-2`.
+
+23. **Distributed (cross-replica) rate-limit aggregation.** M11's
+    `pkg/ratelimit` is per-replica; under N pods a tenant can spend
+    `N × limit` before any replica trips. v1.1 adds an optional
+    Valkey-backed aggregator (the `cache.Backend` registry already
+    provides the connection) keyed by `(tenant, bucket)` with a
+    sliding window. Per-replica buckets stay the default — the
+    distributed mode is opt-in for operators who actually need
+    cluster-wide limits. Security review tracks as `K-DOS-1`.
+
+24. **Signature on plugin replies.** The `grpc-plugin` adapter
+    trusts the plugin's reply payload by virtue of having dialed
+    it; on a shared host or a multi-tenant plugin sidecar that's a
+    weaker boundary than we'd like. Add an optional
+    `plugin/v1.1` extension that lets a plugin sign its
+    `IdentifyResponse` / `AuthorizePluginResponse` body with a
+    pre-shared key (HMAC) or X.509 cert; the host verifies before
+    surfacing the result to the pipeline. Security review tracks
+    as `F-PLUGIN-2`.
+
+25. **Plugin lifecycle + mTLS to plugin host.** M10 explicitly
+    deferred plugin spawn / health-check / restart to M11, and TLS
+    on the plugin dial to "M11 alongside circuit-breaking". M11
+    shipped outbound resilience (`pkg/upstream`) for *core*
+    upstreams but did not extend it to plugin processes; today
+    operators run plugins as sidecar containers / systemd units
+    and let the platform restart them. v1.1 closes both: an opt-in
+    supervisor mode (process exec, periodic
+    `grpc.health.v1.Health.Check`, exponential-backoff restart)
+    and mTLS dial credentials on the existing
+    `address` config knob. Tracked as `M10-PLUGIN-LIFECYCLE`.
+
+26. **SpiceDB adapter.** M7 shipped `openfga` first because of its
+    simpler HTTP `Check` API and CNCF sandbox status, and explicitly
+    flagged SpiceDB as "a future adapter at the same surface".
+    Land it as `pkg/authz/spicedb` registered as `spicedb`,
+    composing under `composite` exactly like `openfga` does. The
+    decision-cache + `pkg/upstream` Guard wiring is reused
+    verbatim. Tracked as `M7-SPICEDB`.
+
+27. **Cookbook recipes + hosted docs site.** M12 §15 promised a
+    `docs/cookbook/` of end-to-end recipes ("protect a gRPC
+    service with Istio + lwauth + RBAC", "add OpenFGA to an
+    existing Envoy deployment", "rotate HMAC secrets without
+    downtime") plus a hosted docs site built from the per-module
+    references in `docs/modules/`. The module references and
+    [QUICKSTART.md](QUICKSTART.md) landed in v1.0; the cookbook
+    and the static-site build (likely `mkdocs-material` or
+    Hugo) did not. Tracked as `DOC-COOKBOOK-1`.
 
 ### Explicit non-goals
 

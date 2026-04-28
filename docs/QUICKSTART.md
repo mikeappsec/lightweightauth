@@ -290,10 +290,14 @@ If any of those fail, check:
 
 ## Where to go next
 
+- **API reference:** [API.md](API.md) — every HTTP path and gRPC
+  service the daemon exposes, with wire shapes and verification
+  one-liners (`curl` + `grpcurl`).
 - **Module catalog:** [modules/README.md](modules/README.md) — every
   `type:` string and a YAML sample.
 - **Operations:** [DEPLOYMENT.md](DEPLOYMENT.md) — Envoy / Istio
   topologies, Helm values reference, hot reload, multi-tenant wiring.
 - **Architecture:** [DESIGN.md](DESIGN.md) — pipeline, trust
-  boundaries, the M0–M12 milestone log.
-- **Security posture:** [security/v1.0-review.md](security/v1.0-review.md).
+  boundaries, the M0–M12 milestone log, and the post-v1 roadmap.
+- **Security posture:** [security/v1.0-review.md](security/v1.0-review.md)
+  — the v1.0 self-review and the tracked post-v1 follow-ups.

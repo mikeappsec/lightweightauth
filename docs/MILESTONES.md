@@ -268,8 +268,13 @@ make vuln              # govulncheck ./... pinned to repo toolchain
 
 ## Where to go next
 
+- **Verifying it runs:** [QUICKSTART.md](QUICKSTART.md).
+- **Calling it:** [API.md](API.md) — every HTTP path + gRPC service.
 - **Operating it:** [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Designing against it:** [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md).
 - **Writing a plugin:** [modules/plugin-grpc.md](modules/plugin-grpc.md) +
   [pkg/module/conformance](../pkg/module/conformance/).
 - **Securing a deployment:** [security/v1.0-review.md](security/v1.0-review.md).
+- **What's planned after v1.0:** [DESIGN.md §7](DESIGN.md) — the
+  post-v1 roadmap (multi-writer Broker, OpenAPI doc, FIPS mode,
+  distributed rate-limit, plugin lifecycle, SpiceDB adapter, …).

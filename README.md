@@ -84,9 +84,10 @@ See [§9 of DESIGN.md](docs/DESIGN.md#9-repository-topology) for the full topolo
 | Doc | Purpose |
 |-----|---------|
 | [docs/QUICKSTART.md](docs/QUICKSTART.md) | Build & run locally, in Docker Compose, or in Kubernetes — with verification curls |
+| [docs/API.md](docs/API.md) | Centralized HTTP + gRPC endpoint reference (paths, ports, wire shapes, auth expectations) |
 | [docs/MILESTONES.md](docs/MILESTONES.md) | M0–M12 feature timeline with copy-paste YAML / Go samples |
 | [docs/modules/README.md](docs/modules/README.md) | Per-module reference (every `type:` string + sample) |
-| [docs/DESIGN.md](docs/DESIGN.md) | Requirements → recommended design + trade-offs |
+| [docs/DESIGN.md](docs/DESIGN.md) | Requirements → recommended design + trade-offs (incl. post-v1 roadmap) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component layout, request flow, plugin model |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Kubernetes, CRDs, Helm, Envoy integration |
 | [docs/security/v1.0-review.md](docs/security/v1.0-review.md) | v1.0 security self-review |
