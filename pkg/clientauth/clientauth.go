@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
 
 // ClientCredentialsConfig is the static side of the grant. Use mTLS to
@@ -66,6 +68,13 @@ type ClientCredentialsConfig struct {
 	// HTTPClient is used for the /token round trip. nil means
 	// http.DefaultClient. Plug in an mTLS client here.
 	HTTPClient *http.Client
+
+	// Resilience configures the circuit breaker + retry budget that
+	// guard the /token round trip. Zero value = pure circuit breaker
+	// with safe defaults (5 consecutive failures trip a 30s open
+	// state) and no retries. Callers wanting retries on a flaky IdP
+	// should set Resilience.MaxRetries.
+	Resilience upstream.GuardConfig
 }
 
 // AuthStyle mirrors `oauth2.AuthStyle` without forcing the dependency.
@@ -100,7 +109,8 @@ func (t *Token) Valid() bool {
 // provider. Get a fresh access token via Token; or wrap an http.Client
 // with HTTPClient() to inject Authorization on every outbound request.
 type ClientCredentialsSource struct {
-	cfg ClientCredentialsConfig
+	cfg   ClientCredentialsConfig
+	guard *upstream.Guard
 
 	mu  sync.Mutex
 	tok *Token
@@ -115,7 +125,7 @@ func NewClientCredentialsSource(cfg ClientCredentialsConfig) *ClientCredentialsS
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
 	}
-	return &ClientCredentialsSource{cfg: cfg}
+	return &ClientCredentialsSource{cfg: cfg, guard: upstream.NewGuard(cfg.Resilience)}
 }
 
 // Token returns a non-expired token, fetching/refreshing as needed.
@@ -126,7 +136,15 @@ func (s *ClientCredentialsSource) Token(ctx context.Context) (*Token, error) {
 	if s.tok.Valid() {
 		return s.tok, nil
 	}
-	tok, err := s.fetch(ctx)
+	var tok *Token
+	err := s.guard.Do(ctx, func(ctx context.Context) error {
+		t, ferr := s.fetch(ctx)
+		if ferr != nil {
+			return ferr
+		}
+		tok = t
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}

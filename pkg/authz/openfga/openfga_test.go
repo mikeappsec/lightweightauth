@@ -197,3 +197,74 @@ func TestOpenFGA_ConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenFGA_BreakerTripsAfterRepeatedFailures(t *testing.T) {
+	srv := newFakeOpenFGA(t)
+	srv.status = 500
+	cfg := baseConfig(srv.server.URL)
+	cfg["resilience"] = map[string]any{
+		"breaker": map[string]any{
+			"failureThreshold": 3,
+			"coolDown":         "1h", // never recover during the test
+		},
+	}
+	a := newAuthorizer(t, cfg)
+
+	r := &module.Request{Method: "GET", Path: "/docs/1"}
+	id := &module.Identity{Subject: "alice"}
+
+	// Hammer until the breaker trips. After 3 failures it should reject
+	// without making any further upstream calls.
+	for i := 0; i < 3; i++ {
+		_, err := a.Authorize(context.Background(), r, id)
+		if !errors.Is(err, module.ErrUpstream) {
+			t.Fatalf("call #%d: expected ErrUpstream, got %v", i, err)
+		}
+	}
+	callsBefore := srv.calls.Load()
+
+	_, err := a.Authorize(context.Background(), r, id)
+	if !errors.Is(err, module.ErrUpstream) {
+		t.Fatalf("post-trip call: expected ErrUpstream, got %v", err)
+	}
+	if got := srv.calls.Load(); got != callsBefore {
+		t.Fatalf("breaker did not short-circuit: calls before=%d after=%d", callsBefore, got)
+	}
+}
+
+func TestOpenFGA_RetriesUntilSuccess(t *testing.T) {
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stores/", func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n < 3 {
+			w.WriteHeader(503)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(checkResponse{Allowed: true})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	cfg := baseConfig(srv.URL)
+	cfg["resilience"] = map[string]any{
+		"retries": map[string]any{
+			"max":                3,
+			"backoffBase":        "0s",
+			"budgetCapacity":     10,
+			"budgetRefillPerSec": 10,
+		},
+	}
+	a := newAuthorizer(t, cfg)
+
+	d, err := a.Authorize(context.Background(), &module.Request{Method: "GET", Path: "/docs/9"}, &module.Identity{Subject: "u"})
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if !d.Allow {
+		t.Fatalf("expected allow after retry")
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
+	}
+}

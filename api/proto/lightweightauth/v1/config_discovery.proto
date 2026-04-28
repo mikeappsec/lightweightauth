@@ -1,0 +1,42 @@
+// ConfigDiscovery — the controller-to-pod push channel that replaces
+// ConfigMap+SIGHUP for distributing compiled AuthConfigs. It is the
+// transport for `pkg/configstream.Broker`; see docs/DESIGN.md §M11.
+//
+// Wire shape is deliberately minimal: a single bidi stream where the
+// server pushes `Snapshot`s and the client never sends application
+// payloads (the open stream itself is the subscription). The version
+// field is monotonically increasing per controller so subscribers can
+// trivially de-duplicate after a reconnect.
+syntax = "proto3";
+
+package lightweightauth.v1;
+
+option go_package = "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1;authv1";
+
+service ConfigDiscovery {
+  // Stream the latest AuthConfig snapshot whenever it changes. The
+  // server emits the current snapshot (if any) immediately on stream
+  // open, then one message per subsequent Publish. Slow consumers get
+  // the latest value only — older snapshots are dropped on the server.
+  rpc StreamAuthConfig(StreamAuthConfigRequest)
+      returns (stream AuthConfigSnapshot);
+}
+
+message StreamAuthConfigRequest {
+  // node_id identifies the lwauth pod for log/metrics purposes; it is
+  // NOT used for filtering today. Future revisions may use it to
+  // route per-node overrides.
+  string node_id = 1;
+}
+
+message AuthConfigSnapshot {
+  // Monotonic per-controller version. Subscribers may use it to
+  // de-duplicate across reconnects.
+  uint64 version = 1;
+
+  // The compiled AuthConfig spec, encoded as canonical JSON. We use
+  // JSON rather than a schemafull message because the spec carries
+  // module-specific free-form `config` maps (DESIGN.md §6) that don't
+  // round-trip cleanly through protobuf's struct/Any.
+  bytes spec_json = 2;
+}

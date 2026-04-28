@@ -6,6 +6,8 @@
 // docs/DESIGN.md §6.
 package config
 
+import "github.com/mikeappsec/lightweightauth/pkg/ratelimit"
+
 // AuthConfig is the top-level configuration unit. One YAML file or one
 // AuthConfig CRD instance maps to exactly one AuthConfig value, which the
 // Compiler turns into a pipeline.Engine.
@@ -27,6 +29,7 @@ type AuthConfig struct {
 	Authorizers []ModuleSpec   `json:"authorizers" yaml:"authorizers"`
 	Response    []ModuleSpec   `json:"response,omitempty" yaml:"response,omitempty"`
 	Cache       *CacheSpec     `json:"cache,omitempty" yaml:"cache,omitempty"`
+	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
 	Identifier  IdentifierMode `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
 }
 

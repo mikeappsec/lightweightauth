@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
 )
 
 // --- test doubles ----------------------------------------------------------
@@ -140,5 +141,41 @@ func TestEngine_RequiresIdentifierAndAuthorizer(t *testing.T) {
 	}
 	if _, err := New(Options{Identifiers: []module.Identifier{&fakeID{}}}); !errors.Is(err, module.ErrConfig) {
 		t.Errorf("missing authorizer: err = %v, want ErrConfig", err)
+	}
+}
+
+func TestEngine_RateLimitDeniesWith429(t *testing.T) {
+	t.Parallel()
+	az := &fakeAZ{dec: &module.Decision{Allow: true}}
+	id := &fakeID{name: "a", id: &module.Identity{Subject: "alice"}}
+	lim := ratelimit.New(ratelimit.Spec{
+		PerTenant: ratelimit.Bucket{RPS: 100, Burst: 2},
+	})
+	e, _ := New(Options{
+		Identifiers: []module.Identifier{id},
+		Authorizer:  az,
+		RateLimiter: lim,
+	})
+	r := func() *module.Request { return &module.Request{TenantID: "acme"} }
+
+	// Burst 2 allowed.
+	for i := 0; i < 2; i++ {
+		dec, _, err := e.Evaluate(context.Background(), r())
+		if err != nil || !dec.Allow {
+			t.Fatalf("call #%d: dec=%+v err=%v", i, dec, err)
+		}
+	}
+	// Third call exceeds burst.
+	dec, _, err := e.Evaluate(context.Background(), r())
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if dec.Allow || dec.Status != 429 {
+		t.Fatalf("expected 429 deny, got %+v", dec)
+	}
+	// Other tenants are unaffected.
+	r2 := &module.Request{TenantID: "globex"}
+	if dec, _, _ := e.Evaluate(context.Background(), r2); !dec.Allow {
+		t.Fatalf("tenant globex was throttled by tenant acme: %+v", dec)
 	}
 }

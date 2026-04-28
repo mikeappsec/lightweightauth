@@ -11,6 +11,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/cache"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
 )
 
 // Source produces successive AuthConfig snapshots. The server layer
@@ -81,12 +82,17 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	var lim *ratelimit.Limiter
+	if ac.RateLimit != nil {
+		lim = ratelimit.New(*ac.RateLimit)
+	}
 	return pipeline.New(pipeline.Options{
 		Identifiers:    idents,
 		Authorizer:     top,
 		Mutators:       muts,
 		IdentifierMode: mode,
 		DecisionCache:  dc,
+		RateLimiter:    lim,
 	})
 }
 

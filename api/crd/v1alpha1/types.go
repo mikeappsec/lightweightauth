@@ -197,10 +197,30 @@ type IdentityProvider struct {
 // IdentityProviderSpec captures the bits an Identifier needs to verify
 // tokens; full IdP shape (OAuth2 client creds, JWKS pinning, ...)
 // arrives with the M5/M6 modules.
+// IdentityProviderSpec captures the bits an Identifier needs to verify
+// tokens. Cluster-scoped so multiple tenants can share one IdP
+// definition without duplicating it in every namespace; tenant
+// AuthConfigs reference it via `idpRef: <name>` on a `jwt` identifier
+// and may override individual fields (extra audience, custom header).
+//
+// In M11 we extended this beyond the original (issuer / jwks /
+// audiences) triple to cover everything pkg/identity/jwt accepts, so an
+// operator can fully define an IdP once and have tenants point at it
+// with one line.
 type IdentityProviderSpec struct {
 	IssuerURL string   `json:"issuerUrl"`
 	JWKSURL   string   `json:"jwksUrl,omitempty"`
 	Audiences []string `json:"audiences,omitempty"`
+
+	// Header / Scheme name the request header tenants should expect
+	// the bearer token in. Defaults inherited from the identifier
+	// factory (Authorization / Bearer).
+	Header string `json:"header,omitempty"`
+	Scheme string `json:"scheme,omitempty"`
+
+	// MinRefreshInterval bounds how often the underlying jwx cache
+	// re-fetches the JWKS on kid misses. Empty = identifier default.
+	MinRefreshInterval string `json:"minRefreshInterval,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -225,6 +245,9 @@ func (in *IdentityProvider) DeepCopy() *IdentityProvider {
 	out.Spec.IssuerURL = in.Spec.IssuerURL
 	out.Spec.JWKSURL = in.Spec.JWKSURL
 	out.Spec.Audiences = append([]string(nil), in.Spec.Audiences...)
+	out.Spec.Header = in.Spec.Header
+	out.Spec.Scheme = in.Spec.Scheme
+	out.Spec.MinRefreshInterval = in.Spec.MinRefreshInterval
 	return out
 }
 

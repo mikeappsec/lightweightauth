@@ -1,0 +1,94 @@
+package ratelimit
+
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestNil_IsAlwaysAllow(t *testing.T) {
+	var l *Limiter
+	if !l.Allow("any") {
+		t.Fatal("nil limiter rejected")
+	}
+}
+
+func TestNew_DisabledWhenNoRPS(t *testing.T) {
+	if l := New(Spec{}); l != nil {
+		t.Fatal("expected nil limiter when spec disables both buckets")
+	}
+}
+
+func TestPerTenant_BurstThenRefill(t *testing.T) {
+	now := time.Unix(0, 0)
+	l := New(Spec{PerTenant: Bucket{RPS: 10, Burst: 3}})
+	l.now = func() time.Time { return now }
+
+	for i := 0; i < 3; i++ {
+		if !l.Allow("acme") {
+			t.Fatalf("burst #%d denied", i)
+		}
+	}
+	if l.Allow("acme") {
+		t.Fatal("expected denial after burst")
+	}
+	// 100ms at 10/s = 1 token.
+	now = now.Add(100 * time.Millisecond)
+	if !l.Allow("acme") {
+		t.Fatal("expected refilled token to allow")
+	}
+	if l.Allow("acme") {
+		t.Fatal("expected immediate denial after refill consumed")
+	}
+}
+
+func TestTenantsAreIsolated(t *testing.T) {
+	now := time.Unix(0, 0)
+	l := New(Spec{PerTenant: Bucket{RPS: 1, Burst: 1}})
+	l.now = func() time.Time { return now }
+
+	if !l.Allow("a") {
+		t.Fatal("tenant a first call denied")
+	}
+	if l.Allow("a") {
+		t.Fatal("tenant a second call allowed")
+	}
+	if !l.Allow("b") {
+		t.Fatal("tenant b first call denied (sharing tenant a's bucket?)")
+	}
+}
+
+func TestDefaultBucketUsedForEmptyTenant(t *testing.T) {
+	now := time.Unix(0, 0)
+	l := New(Spec{Default: Bucket{RPS: 5, Burst: 2}})
+	l.now = func() time.Time { return now }
+
+	if !l.Allow("") || !l.Allow("") {
+		t.Fatal("default bucket denied within burst")
+	}
+	if l.Allow("") {
+		t.Fatal("default bucket should be empty")
+	}
+	// Per-tenant disabled → named tenant always passes.
+	for i := 0; i < 100; i++ {
+		if !l.Allow("acme") {
+			t.Fatalf("named tenant denied at #%d (per-tenant disabled, should pass)", i)
+		}
+	}
+}
+
+func TestConcurrent(t *testing.T) {
+	l := New(Spec{PerTenant: Bucket{RPS: 1_000_000, Burst: 1_000_000}})
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 1000; j++ {
+				_ = l.Allow("t")
+			}
+		}()
+	}
+	wg.Wait()
+	// No data race / panic = success.
+}

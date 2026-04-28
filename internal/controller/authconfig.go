@@ -17,13 +17,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/mikeappsec/lightweightauth/api/crd/v1alpha1"
 	"github.com/mikeappsec/lightweightauth/internal/config"
 	"github.com/mikeappsec/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/pkg/configstream"
 )
 
 // AuthConfigReconciler watches a single AuthConfig and swaps the
@@ -43,6 +46,13 @@ type AuthConfigReconciler struct {
 	// care about. Other AuthConfigs are filtered out at the predicate
 	// stage so we never even see them.
 	Watched types.NamespacedName
+
+	// Broker, if non-nil, receives a Publish() call after every
+	// successful Compile-and-Swap. Remote lwauth pods subscribed via
+	// the configstream gRPC server pick the snapshot up from there.
+	// In single-process embedders (cmd/lwauth) this stays nil; the
+	// in-process Holder.Swap is enough.
+	Broker *configstream.Broker
 }
 
 // Reconcile compiles the watched AuthConfig's .spec into a
@@ -67,6 +77,25 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return reconcile.Result{}, fmt.Errorf("get AuthConfig: %w", err)
 	}
 
+	// Resolve cluster-scoped IdentityProvider references before compile,
+	// so the jwt identifier (and any future bearer-style identifier) sees
+	// a fully materialized config. Tenant-set fields override the IdP's
+	// defaults; see ResolveIdPRefs for the merge rules.
+	var idps v1alpha1.IdentityProviderList
+	if err := r.Client.List(ctx, &idps); err != nil {
+		return reconcile.Result{}, fmt.Errorf("list IdentityProviders: %w", err)
+	}
+	if err := ResolveIdPRefs(&ac.Spec, idps.Items); err != nil {
+		logger.Error(err, "idpRef resolution failed; previous engine kept running")
+		ac.Status = v1alpha1.AuthConfigStatus{
+			Ready:              false,
+			ObservedGeneration: ac.Generation,
+			Message:            err.Error(),
+		}
+		_ = r.Client.Status().Update(ctx, &ac)
+		return reconcile.Result{}, nil //nolint:nilerr // surfaced on status
+	}
+
 	eng, err := config.Compile(&ac.Spec)
 	if err != nil {
 		// Surface compile errors on the CR's status so kubectl describe
@@ -82,6 +111,14 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 
 	r.Holder.Swap(eng)
+	if r.Broker != nil {
+		// Publish a deep-copied spec so subscribers can't see
+		// further mutations. The CR object's spec is shared with
+		// the local cache; copying via the existing DeepCopy keeps
+		// us honest.
+		specCopy := ac.DeepCopy().Spec
+		r.Broker.Publish(&specCopy)
+	}
 
 	ac.Status = v1alpha1.AuthConfigStatus{
 		Ready:              true,
@@ -99,9 +136,18 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 // down to just the named AuthConfig so we don't waste reconcile budget
 // on siblings in the same namespace.
 func (r *AuthConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Any IdentityProvider change enqueues the single watched AuthConfig
+	// so its compiled engine picks up the new key material. We don't
+	// need a fan-out here because the reconciler only owns one config;
+	// in a future multi-AuthConfig world this becomes a List+filter.
+	enqueueWatched := handler.EnqueueRequestsFromMapFunc(
+		func(_ context.Context, _ client.Object) []reconcile.Request {
+			return []reconcile.Request{{NamespacedName: r.Watched}}
+		},
+	)
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.AuthConfig{}).
-		WithEventFilter(matchesNamePredicate{Watched: r.Watched}).
+		For(&v1alpha1.AuthConfig{}, builder.WithPredicates(matchesNamePredicate{Watched: r.Watched})).
+		Watches(&v1alpha1.IdentityProvider{}, enqueueWatched).
 		Named("authconfig").
 		Complete(r)
 }

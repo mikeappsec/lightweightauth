@@ -74,8 +74,20 @@ type SinkFunc func(context.Context, *Event)
 // Record implements Sink.
 func (f SinkFunc) Record(ctx context.Context, e *Event) { f(ctx, e) }
 
-// Discard is a Sink that drops every event.
-var Discard Sink = SinkFunc(func(context.Context, *Event) {})
+// discardSink is the type of Discard. We use a named struct (rather
+// than a SinkFunc) so two `Sink` interface values that both hold
+// Discard compare equal at runtime — function values are
+// uncomparable and would panic on `==`. Callers that want to know
+// whether the process-default has been overridden therefore can
+// safely write `audit.Default() == audit.Discard`.
+type discardSink struct{}
+
+// Record implements Sink and drops every event.
+func (discardSink) Record(context.Context, *Event) {}
+
+// Discard is a Sink that drops every event. It is a comparable
+// singleton — see discardSink for why.
+var Discard Sink = discardSink{}
 
 // NewSlogSink returns a Sink that logs each event as a single
 // structured slog record at INFO level under the message "audit". The
