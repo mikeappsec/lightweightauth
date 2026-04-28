@@ -3,8 +3,12 @@ package grpc
 import (
 	"context"
 
+	grpc "google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
 	pluginv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/plugin/v1"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/plugin/sign"
 )
 
 // remoteAuthorizer satisfies module.Authorizer by calling
@@ -26,12 +30,19 @@ func (a *remoteAuthorizer) Authorize(ctx context.Context, r *module.Request, id 
 	ctx, cancel := context.WithTimeout(ctx, a.cfg.Timeout)
 	defer cancel()
 
+	var trailer metadata.MD
 	resp, err := a.client.Authorize(ctx, &pluginv1.AuthorizePluginRequest{
 		Request:  reqToProto(r),
 		Identity: idToProto(id),
-	})
+	}, grpc.Trailer(&trailer))
 	if err != nil {
 		return nil, errPluginRPC(a.name, err)
+	}
+	if err := a.cfg.Signing.verifyTrailer(
+		a.name, trailer,
+		sign.CanonicalAuthorizeResponse(trailerAlg(trailer), trailerKeyID(trailer), resp),
+	); err != nil {
+		return nil, err
 	}
 	if msg := resp.GetError(); msg != "" {
 		return nil, errPluginTransport(a.name, msg)

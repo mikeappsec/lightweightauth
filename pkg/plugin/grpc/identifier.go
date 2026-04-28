@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 
+	grpc "google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
 	pluginv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/plugin/v1"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/plugin/sign"
 )
 
 // remoteIdentifier satisfies module.Identifier by calling
@@ -32,11 +36,21 @@ func (i *remoteIdentifier) Identify(ctx context.Context, r *module.Request) (*mo
 	ctx, cancel := context.WithTimeout(ctx, i.cfg.Timeout)
 	defer cancel()
 
+	var trailer metadata.MD
 	resp, err := i.client.Identify(ctx, &pluginv1.IdentifyRequest{
 		Request: reqToProto(r),
-	})
+	}, grpc.Trailer(&trailer))
 	if err != nil {
 		return nil, errPluginRPC(i.name, err)
+	}
+	// Verify the F-PLUGIN-2 signature BEFORE inspecting the response
+	// fields — we don't want to act on, log, or even differentiate
+	// between an attacker-controlled "no_match=true" and a real one.
+	if err := i.cfg.Signing.verifyTrailer(
+		i.name, trailer,
+		sign.CanonicalIdentifyResponse(trailerAlg(trailer), trailerKeyID(trailer), resp),
+	); err != nil {
+		return nil, err
 	}
 	if msg := resp.GetError(); msg != "" {
 		return nil, errPluginTransport(i.name, msg)

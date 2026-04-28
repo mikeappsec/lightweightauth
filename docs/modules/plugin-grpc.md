@@ -141,6 +141,74 @@ authorizers:
 `insecure: true` cannot be combined with any `tls.*` setting, and
 `tls.certFile` / `tls.keyFile` must be configured together.
 
+### Application-layer signing (F-PLUGIN-2, v1.1+)
+
+TLS protects the **transport**: it stops a network attacker from
+forging plugin replies in flight. It does **not** stop a same-host
+attacker who can win a Unix-socket path race, replace the plugin
+binary on disk between health-check and exec, or otherwise
+impersonate the plugin process. For deployments that want
+defense-in-depth against those scenarios — or that simply want to
+refuse to honour anything the operator hasn't explicitly minted — the
+`signing` block enables an HMAC-SHA256 application-layer signature
+over a deterministic canonical encoding of the plugin's response.
+
+```yaml
+authorizers:
+  - name: vendor-policy
+    type: grpc-plugin
+    config:
+      address: corp-policy.svc.cluster.local:9000
+      timeout: 50ms
+      tls:
+        caFile: /etc/lwauth/plugin-ca.pem
+      signing:
+        mode: require                # disabled (default) | verify | require
+        keys:
+          - id: ops-2026-04          # arbitrary stable label
+            hmacSecret: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          - id: ops-2026-05          # rolling rotation: list both during overlap
+            hmacSecret: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+```
+
+| Mode       | When the plugin sends a valid signature | When the plugin sends no signature | When the plugin sends a bad signature |
+|------------|-----------------------------------------|------------------------------------|----------------------------------------|
+| `disabled` | trailer ignored                          | accepted                            | trailer ignored                        |
+| `verify`   | accepted                                 | accepted                            | **rejected** (`ErrUpstream`)           |
+| `require`  | accepted                                 | **rejected** (`ErrUpstream`)        | **rejected** (`ErrUpstream`)           |
+
+`disabled` is the v1.0 default — existing configs are unaffected by
+the v1.1 upgrade. Use `verify` while rolling signed plugins out across
+a fleet, then flip to `require` once every plugin has the SDK update.
+
+The signature, key id, and algorithm travel as gRPC trailing metadata
+(`lwauth-sig`, `lwauth-kid`, `lwauth-alg`). The signed payload is a
+length-prefixed canonical encoding that includes a version tag, the
+type of the response message, the alg/kid, and every field of the
+response with map keys sorted lexicographically — see
+[pkg/plugin/sign/sign.go](../../pkg/plugin/sign/sign.go) for the
+exact byte layout. Plugins in any language can implement it; v1.1
+ships a Go helper in `pkg/plugin/sign`.
+
+**Key sizing.** Secrets must be at least 16 bytes (32 hex chars).
+v1.1 only understands `hmac-sha256`; X.509 / asymmetric signatures
+are tracked as a follow-up and the trailer scheme is
+forward-compatible (the alg name is part of the signed payload, so a
+future host can refuse a downgrade attempt without ambiguity).
+
+**Threat model.** Application-layer signing closes:
+
+- A path-race attacker on a shared host who replaces a Unix socket
+  between dial and call.
+- A same-host process that wins an IP-stack race to bind the
+  plaintext loopback port.
+- A compromised TLS terminator (sidecar mesh) that can rewrite the
+  plugin response without rotating keys.
+
+It does **not** replace TLS — a network attacker still gets to see
+unencrypted credentials and policy decisions if you turn TLS off. Use
+both.
+
 ## Helm wiring
 
 The simplest deployment is a sidecar container in the same Pod sharing

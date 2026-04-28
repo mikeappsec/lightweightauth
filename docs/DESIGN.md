@@ -1611,6 +1611,21 @@ A1. **F-PLUGIN-2 (was 24) — Signature on plugin replies.** Slice 8
     a pre-shared key (HMAC) or X.509 cert; the host verifies
     before surfacing the result to the pipeline.
 
+    ✅ v1.1 ships the HMAC half on `v1.1-tier-a`. Application-layer
+    signature carried as gRPC trailing metadata
+    (`lwauth-sig` / `lwauth-kid` / `lwauth-alg`) over a deterministic
+    length-prefixed canonical encoding of the response. Modes:
+    `disabled` (v1.0 default — zero-config compat), `verify` (accept
+    signed or unsigned, reject *bad* signatures), `require` (every
+    response must be signed). Alg/kid are bound into the protected
+    bytes so a downgrade attempt invalidates the signature instead of
+    silently degrading. X.509 / asymmetric is a forward-compatible
+    follow-up; the trailer scheme already routes alg through to the
+    host. New package
+    [pkg/plugin/sign](../pkg/plugin/sign/) and the
+    [signing config block](../pkg/plugin/grpc/sign.go) on every
+    `grpc-plugin` factory.
+
 A2. **K-AUTHN-2 (was 22) — Negative-cache invalid introspection.**
     ✅ shipped on `v1.1-tier-a`. The `oauth2-introspection`
     identifier already negative-cached `active=false`; v1.1 adds
