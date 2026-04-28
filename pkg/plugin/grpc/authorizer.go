@@ -65,6 +65,9 @@ func authorizerFactory(name string, raw map[string]any) (module.Authorizer, erro
 	if err != nil {
 		return nil, err
 	}
+	if err := startSupervisorIfConfigured(name, cfg, cfg.Lifecycle); err != nil {
+		return nil, err
+	}
 	return &remoteAuthorizer{
 		name:   name,
 		cfg:    cfg,

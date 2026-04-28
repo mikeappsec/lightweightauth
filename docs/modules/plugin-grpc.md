@@ -245,14 +245,80 @@ Service and point `address: my-plugin-service:9000`.
 
 ## Lifecycle
 
-The host today assumes the plugin process is supervised **externally**
-(systemd, the sidecar's own restart policy, or the kubelet for a
-dedicated Pod). This is a deliberate scope cut: the topologies above
-already give Kubernetes-native restart behaviour for free.
+By default the host assumes the plugin process is supervised
+**externally** (systemd, the sidecar's own restart policy, the kubelet
+for a dedicated Pod). The Helm topology above gives Kubernetes-native
+restart for free, and that remains the recommended deployment.
 
-In-host spawn / health-check / restart with exponential backoff lands
-in **M11** alongside circuit-breaking, for operators who want lwauth to
-own the plugin process directly (e.g. running outside Kubernetes).
+For operators who want lwauth itself to own the plugin process — most
+commonly when running outside an orchestrator, or when the plugin is
+private to a single replica and a sidecar would be overkill — v1.1
+ships an opt-in supervisor under
+[pkg/plugin/supervisor](../../pkg/plugin/supervisor/). Add a
+`lifecycle` block:
+
+```yaml
+identifiers:
+  - name: corp-saml
+    type: grpc-plugin
+    config:
+      address: unix:///run/lwauth/saml.sock
+      timeout: 200ms
+      lifecycle:
+        command: /usr/local/bin/corp-saml-plugin
+        args: ["--listen", "/run/lwauth/saml.sock"]
+        env: ["VAULT_ADDR=https://vault.internal:8200"]   # optional; nil = inherit
+        workDir: /run/lwauth                              # optional
+        gracefulTimeout: 5s     # SIGTERM grace before SIGKILL (Unix); Kill on Windows
+        startTimeout: 30s       # max wait for first successful health probe
+        healthCheck:
+          service: ""           # grpc.health.v1 service name; "" = overall
+          interval: 5s
+          timeout: 1s
+          failureThreshold: 3
+        restart:
+          initialBackoff: 200ms
+          maxBackoff: 30s
+          jitter: 0.2           # ±20% on each backoff
+          maxRestarts: 0        # 0 = unlimited (recommended)
+```
+
+The supervisor:
+
+- Spawns the child via `os/exec` with the configured command, args,
+  env, and working directory.
+- Probes `grpc.health.v1.Health.Check` over the same connection the
+  data plane uses (so a probe failure means exactly what an Authorize
+  failure would: TLS, mTLS, signing — all the same).
+- After `failureThreshold` consecutive failed probes, sends SIGTERM
+  (Windows: `Process.Kill`), waits up to `gracefulTimeout`, then
+  forcibly kills.
+- Restarts the child with **exponential backoff** (`initialBackoff *
+  2^n`, capped at `maxBackoff`) plus uniform `±jitter`. `maxRestarts:
+  0` is unlimited; a positive value moves the supervisor to a terminal
+  *gave up* state once exhausted, surfaced via
+  `Supervisor.State()` for an operator's readiness probe.
+- Captures the child's stdout/stderr line-by-line into the host's
+  `slog` logger under `plugin stdout` / `plugin stderr` keys.
+
+When more than one module (e.g. an identifier *and* a mutator) points
+at the same plugin, the supervisor — like the gRPC connection — is
+de-duplicated process-wide. One child, one supervisor, one connection
+pool, regardless of how many config entries reference it.
+
+`startTimeout` bounds engine startup: if the plugin does not produce
+its first successful health probe within that window, engine
+construction fails with `ErrConfig` so the operator finds out at boot,
+not at the first request. `failureThreshold * interval` is therefore a
+useful sanity check during rollout — it caps how long a transient
+plugin hiccup can hold the engine ready-gate open.
+
+This is opt-in on purpose: most users running on Kubernetes / systemd
+will leave it unset and let the platform restart the sidecar, which is
+both simpler to reason about and integrates with the platform's own
+observability (Pod restart counts, `kubectl describe`, etc.). The
+in-host supervisor exists for the topologies where there is no such
+platform.
 
 ## Authoring a plugin
 

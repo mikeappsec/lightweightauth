@@ -74,6 +74,9 @@ func identifierFactory(name string, raw map[string]any) (module.Identifier, erro
 	if err != nil {
 		return nil, err
 	}
+	if err := startSupervisorIfConfigured(name, cfg, cfg.Lifecycle); err != nil {
+		return nil, err
+	}
 	return &remoteIdentifier{
 		name:   name,
 		cfg:    cfg,

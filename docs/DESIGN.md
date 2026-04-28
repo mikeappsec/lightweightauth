@@ -1613,10 +1613,25 @@ A3. **K-DOS-1 (was 23) — Distributed rate-limit aggregation.**
 A4. **M10-PLUGIN-LIFECYCLE (supervisor half, was 25) — Plugin
     process supervision.** Slice 8 closed the dial-credentials
     half (TLS / mTLS / fail-closed for non-loopback plaintext);
-    the supervisor half remains. Add an opt-in mode: process
-    exec, periodic `grpc.health.v1.Health.Check`, exponential-
-    backoff restart. Operators on Kubernetes / systemd keep the
-    current "platform restarts the sidecar" model by default.
+    the supervisor half ships in v1.1.
+
+    ✅ v1.1 ships the opt-in supervisor on `v1.1-tier-a`. New
+    package [pkg/plugin/supervisor](../pkg/plugin/supervisor/)
+    spawns the child via `os/exec`, probes
+    `grpc.health.v1.Health.Check` every `interval` over the same
+    transport credentials the data plane uses, and after
+    `failureThreshold` consecutive failures sends SIGTERM (Kill on
+    Windows), waits up to `gracefulTimeout`, then SIGKILL. Restart
+    is exponential backoff (`initial * 2^n` capped at `maxBackoff`)
+    with uniform ±`jitter`; `maxRestarts: 0` = unlimited. New
+    `lifecycle:` block on the `grpc-plugin` config opts in;
+    operators on Kubernetes / systemd leave it unset and the v1.0
+    "platform owns the sidecar" model is unchanged. Supervisor and
+    connection pool share the same `poolKey` so multiple modules
+    pointed at one plugin reuse one child. Config-time readiness:
+    `startTimeout` bounds how long engine construction waits for
+    the first successful health probe; failure surfaces as
+    `ErrConfig` at boot.
 
 A5. **K-CRYPTO-2 (was 21) — FIPS 140-3 build mode.** Optional
     `make fips` target that builds with

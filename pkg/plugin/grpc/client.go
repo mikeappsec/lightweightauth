@@ -38,6 +38,12 @@ type commonConfig struct {
 	// carried as gRPC trailing metadata. Independent of TLS — a
 	// well-configured deployment uses both.
 	Signing signingConfig
+
+	// Lifecycle is the M10-PLUGIN-LIFECYCLE supervisor policy. nil
+	// when the operator owns the plugin process externally (the v1.0
+	// default). Non-nil when the lwauth process should spawn,
+	// health-check, and restart the plugin itself.
+	Lifecycle *lifecycleConfig
 }
 
 // tlsConfig captures the optional credentials a gRPC plugin client
@@ -119,6 +125,12 @@ func parseCommon(name string, raw map[string]any) (commonConfig, error) {
 		return c, err
 	}
 	c.Signing = sigCfg
+
+	lc, err := parseLifecycle(name, raw)
+	if err != nil {
+		return c, err
+	}
+	c.Lifecycle = lc
 	return c, nil
 }
 

@@ -75,6 +75,9 @@ func mutatorFactory(name string, raw map[string]any) (module.ResponseMutator, er
 	if err != nil {
 		return nil, err
 	}
+	if err := startSupervisorIfConfigured(name, cfg, cfg.Lifecycle); err != nil {
+		return nil, err
+	}
 	return &remoteMutator{
 		name:   name,
 		cfg:    cfg,
