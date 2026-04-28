@@ -1536,119 +1536,199 @@ by dependency, not by calendar.
     or (c) you ship long-lived API keys. Operators who don't need it
     pay zero cost.
 
-### Experimental / post-v1
+### Post-v1.0 queue (reprioritized 2026-04-28)
 
-16. **eBPF data plane** in the separate `lightweightauth-ebpf` repo
-    (Mode C, §3). Linux-only, `CAP_BPF`, kernel ≥ 5.10. Stays
-    experimental until at least three production users report stable
+The post-v1.0 list is now ordered by **risk**, not by milestone number:
+security and bug-fix work runs first, then hardening that closes known
+DoS / trust gaps, then quality / coverage gaps, and only then new
+feature surface area. The original numeric IDs (16–27) are preserved
+in parentheses so existing references still resolve.
+
+#### Tier S — security & correctness (next patch line, v1.0.x)
+
+These are open security findings or known bugs against shipped code.
+They MUST land before any tier-A feature work begins.
+
+S1. **SEC-PROXY-1 — Mode B proxy request fidelity & deny redaction.**
+    The `lightweightauth-proxy` adapter (sibling repo
+    `lightweightauth-proxy/cmd/lwauth-proxy/main.go`) builds the
+    `module.Request` it sends into the engine from `r.URL.Path`
+    only — `r.URL.RawQuery` and `r.Body` never make it across, so
+    HMAC validation and policies that key off query string or body
+    in core are silently bypassed when the proxy is in path. The
+    same file also returns raw `"lwauth: "+err.Error()` and the
+    engine's verbose deny reason directly to clients, the same
+    leak we redacted on Door A / native gRPC in slice 8. Fix is
+    twofold: include `r.URL.RequestURI()` (or `Path + "?" +
+    RawQuery`) when a query is present, add a bounded
+    request-body read with `io.LimitReader` that *also restores*
+    `r.Body` for the upstream forward, and route every error /
+    deny through the same `publicReason` mapping the core uses.
+    Severity: H/M.
+
+S2. **SEC-MTLS-1 — XFCC trust requires an anchor.** Slice 1 added
+    the opt-in `trustForwardedClientCert: true` knob plus the
+    `trustedCAFiles` / `trustedCAs` / `trustedIssuers` config; it
+    rejects "CA without trust=true" but does not yet reject the
+    symmetric mistake of "trust=true with no CA bundle and no
+    issuer allow-list", which silently re-enables the original
+    blind-trust XFCC behavior. Add a one-line factory-time guard
+    in `pkg/identity/mtls/mtls.go` `factory()` that fails closed
+    when `trustXFCC == true && pool == nil &&
+    len(trustedIssuers) == 0`. Severity: M.
+
+S3. **TEST-RACE-1 — Race-mode flake in `configstream`.**
+    `pkg/configstream/TestGRPC_MultiClientReconnectStorm` passes
+    in isolation but flakes intermittently under
+    `go test -race ./...`. Most likely a shutdown-ordering or
+    goroutine-leak issue in the storm fixture rather than a
+    `Broker` correctness bug, but until that's confirmed it
+    obscures real regressions in CI. Reproduce with
+    `-count=20 -race`, isolate with `-run`, then either fix the
+    test or open a `Broker` fix as required.
+
+#### Tier A — hardening (v1.1)
+
+These close known DoS / trust gaps and reduce operator footguns.
+Each is a self-contained slice, ordered roughly by impact.
+
+A1. **F-PLUGIN-2 (was 24) — Signature on plugin replies.** Slice 8
+    landed mTLS dial credentials for `grpc-plugin`, but the host
+    still trusts the *payload* of a reply by virtue of having
+    dialed the right address. On a shared host or a multi-tenant
+    plugin sidecar that's a weaker boundary than we'd like. Add
+    an optional `plugin/v1.1` extension that lets a plugin sign
+    its `IdentifyResponse` / `AuthorizePluginResponse` body with
+    a pre-shared key (HMAC) or X.509 cert; the host verifies
+    before surfacing the result to the pipeline.
+
+A2. **K-AUTHN-2 (was 22) — Negative-cache invalid introspection.**
+    The `oauth2-introspection` identifier negative-caches
+    `active=false` today, but a malformed or non-2xx introspection
+    response surfaces as `ErrUpstream` and is re-attempted every
+    request. A misbehaving IdP can therefore be turned into a
+    per-request DoS amplifier. Add a small short-TTL negative
+    cache for the upstream-error case keyed on a digest of the
+    inbound credential.
+
+A3. **K-DOS-1 (was 23) — Distributed rate-limit aggregation.**
+    `pkg/ratelimit` is per-replica; under N pods a tenant can
+    spend `N × limit` before any replica trips. v1.1 adds an
+    optional Valkey-backed aggregator (the `cache.Backend`
+    registry already provides the connection) keyed by
+    `(tenant, bucket)` with a sliding window. Per-replica
+    buckets stay the default — distributed mode is opt-in for
+    operators who actually need cluster-wide limits.
+
+A4. **M10-PLUGIN-LIFECYCLE (supervisor half, was 25) — Plugin
+    process supervision.** Slice 8 closed the dial-credentials
+    half (TLS / mTLS / fail-closed for non-loopback plaintext);
+    the supervisor half remains. Add an opt-in mode: process
+    exec, periodic `grpc.health.v1.Health.Check`, exponential-
+    backoff restart. Operators on Kubernetes / systemd keep the
+    current "platform restarts the sidecar" model by default.
+
+A5. **K-CRYPTO-2 (was 21) — FIPS 140-3 build mode.** Optional
+    `make fips` target that builds with
+    `GOEXPERIMENT=boringcrypto` and the matching toolchain so
+    regulated deployments can ship a FIPS-validated lwauth
+    binary. No code change expected — CI matrix entry, published
+    image tag, and a docs note on which primitives switch
+    backends.
+
+#### Tier B — quality / coverage (v1.1)
+
+Not user-visible features, but they catch whole classes of
+regressions before users do.
+
+B1. **M12-CONF-MATRIX (was 20) — Full conformance matrix.** Slice
+    2 of M12 landed the Door A vs Door B parity harness using
+    `apikey + rbac` as the single fixture. Promote it to a
+    matrix that walks every shipped identifier (`jwt`,
+    `oauth2-introspection`, `mtls`, `hmac`, `dpop` wrapper,
+    `oauth2`) and authorizer (`opa`, `cel`, `composite`,
+    `openfga`) so a transport-level regression in any module is
+    caught at PR time.
+
+B2. **M12-BROKER-MW (was 19) — Multi-writer `configstream.Broker`.**
+    Lift the implicit single-writer contract on `Broker.Publish`
+    so per-tenant publishers and federated control planes can
+    fan in safely. Compare versions in `subscription.deliver` so
+    a slow subscriber's pending slot only ever moves forwards.
+    Small change but it shifts a documented invariant, hence
+    v1.1 rather than a v1.0 patch.
+
+B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
+    Generate an OpenAPI 3.1 doc for the HTTP surface (`POST
+    /v1/authorize`, `/healthz`, `/readyz`, `/metrics`, and
+    `module.HTTPMounter` prefixes such as `/oauth2/*`) checked
+    in at `api/openapi/lwauth.yaml`, served at
+    `GET /openapi.json` behind the same admin gate as
+    `/metrics`. Publish the existing `.proto` files as a
+    `buf.build` module so consumers can codegen clients without
+    vendoring.
+
+#### Tier C — new features (v1.1+)
+
+These add user-visible capability rather than closing a gap. They
+ship after tier S/A/B clears.
+
+C1. **M7-SPICEDB (was 26) — SpiceDB authorizer adapter.** Land
+    `pkg/authz/spicedb` registered as `spicedb`, composing under
+    `composite` exactly like `openfga` does. Decision-cache and
+    `pkg/upstream` Guard wiring is reused verbatim. Surface
+    parity with `openfga` is the explicit acceptance bar.
+
+C2. **DOC-COOKBOOK-1 (was 27) — Cookbook recipes + hosted docs.**
+    `docs/cookbook/` end-to-end recipes ("protect a gRPC service
+    with Istio + lwauth + RBAC", "add OpenFGA to an existing
+    Envoy deployment", "rotate HMAC secrets without downtime")
+    plus a static-site build (likely `mkdocs-material` or Hugo)
+    of the per-module references already in `docs/modules/`.
+
+#### Tier X — experimental (no firm target)
+
+Explicitly out of the v1.x line. Live in their own repos /
+branches and graduate only when the surrounding ecosystem catches
+up.
+
+X1. **eBPF data plane (was 16)** in the separate
+    `lightweightauth-ebpf` repo (Mode C, §3). Linux-only,
+    `CAP_BPF`, kernel ≥ 5.10. Stays experimental until at least
+    three production users report stable
     operation.
-17. **WASM plugins** via `wazero`. Defer until the auth-library
-    ecosystem in WASM matures (§2).
-18. **OpenAPI / Protobuf-driven API surface description.** Ship a
-    machine-readable contract for every endpoint lwauth exposes:
-    - **HTTP** (`POST /v1/authorize`, `/healthz`, `/readyz`, `/metrics`,
-      and any `module.HTTPMounter` prefixes such as `/oauth2/*`) as an
-      OpenAPI 3.1 document checked into `api/openapi/lwauth.yaml`,
-      generated from the request/response Go structs (`kin-openapi` or
-      `swaggo` + a `go generate` step) and served at
-      `GET /openapi.json` behind the same admin gate as `/metrics`.
-    - **gRPC** (`envoy.service.auth.v3.Authorization`,
-      `lightweightauth.v1.Auth`, `lightweightauth.v1.ConfigDiscovery`,
-      `grpc.health.v1.Health`) as the existing `.proto` files plus a
-      published `buf.build` module so consumers can codegen clients
-      without vendoring our tree.
+X2. **WASM plugins (was 17)** via `wazero`. Defer until the
+    auth-library ecosystem in WASM matures (§2).
 
-    Why post-v1: the wire shapes are stable in v1.0 (frozen by the
-    conformance suite, M12 slice 2), so a generated spec can't drift
-    from reality — but generation, doc hosting, and the admin-gate
-    plumbing for `/openapi.json` are themselves a slice of work, and
-    no v1.0 user is blocked on it. Promote to v1.1 once a contributor
-    picks it up; track as `DOC-OPENAPI-1`.
+### Prioritization rationale
 
-19. **Multi-writer `configstream.Broker`.** Lift the implicit
-    single-writer contract on `Broker.Publish` so per-tenant
-    publishers and federated control planes can fan in safely.
-    Implementation is small — compare versions in
-    `subscription.deliver` so a slow subscriber's pending slot
-    only ever moves forwards — but it changes a documented
-    invariant, so it's a v1.1 surface change rather than a v1.0
-    patch. Tracked as `M12-BROKER-MW`. (Originally noted in M12
-    §15 "Known follow-up: multi-writer `configstream.Broker`".)
+The reorder follows a single rule: **never ship a new feature on top of
+a known security or correctness gap.** Concretely:
 
-20. **Conformance coverage for all identifiers.** M12 slice 2
-    landed the Door A vs Door B parity harness using `apikey + rbac`
-    as the single fixture. Promote it to a fixture matrix that walks
-    every shipped identifier (`jwt`, `oauth2-introspection`, `mtls`,
-    `hmac`, `dpop` wrapper, `oauth2`) and authorizer (`opa`, `cel`,
-    `composite`, `openfga`) so a transport-level regression in any
-    module is caught at PR time. The harness is already extracted
-    in `pkg/module/conformance` for plugin authors — this is the
-    same idea applied internally. Tracked as `M12-CONF-MATRIX`.
+- **Tier S items are non-negotiable.** S1 is an active mode-B bypass
+  (query / body never reach the engine), S2 re-enables a previously
+  fixed XFCC class with one config typo, and S3 is masking real
+  concurrency regressions. They block the v1.1 branch from opening.
+- **Tier A items are hardening, not features.** Each one closes a
+  category of attack we already know about (plugin payload trust,
+  introspection-driven DoS, rate-limit-N-replica DoS, plugin process
+  supervision, FIPS compliance). They land before any new module.
+- **Tier B is the test / contract investment** that pays for tier C
+  going faster. The conformance matrix in particular will catch a
+  whole class of "we added a new identifier and Door B does
+  something subtly different" regressions before they ship.
+- **Tier C is new surface area** (`spicedb`, cookbook). It's last
+  on purpose — these are valuable but not urgent, and they are the
+  items most likely to introduce their own gaps if we rush them.
+- **Tier X stays experimental** until the surrounding ecosystem
+  forces our hand. Pulling either of them forward without three
+  production reference deployments is how stability promises die.
 
-21. **FIPS 140-3 build mode (`boringcrypto`).** Optional `make
-    fips` target that builds with `GOEXPERIMENT=boringcrypto` and
-    the matching toolchain so regulated deployments can ship a
-    FIPS-validated lwauth binary. No code change expected; what's
-    needed is a CI matrix entry, a published image tag, and a
-    docs note on which crypto primitives switch backends. Security
-    review tracks as `K-CRYPTO-2`.
-
-22. **Negative-cache invalid OAuth2 introspection responses.** The
-    `oauth2-introspection` identifier negative-caches `active=false`
-    today, but a malformed / non-2xx introspection response surfaces
-    as `ErrUpstream` and is re-attempted every request. Add a small
-    short-TTL negative cache for the latter so a misbehaving IdP
-    can't be turned into a per-request DoS. Security review tracks
-    as `K-AUTHN-2`.
-
-23. **Distributed (cross-replica) rate-limit aggregation.** M11's
-    `pkg/ratelimit` is per-replica; under N pods a tenant can spend
-    `N × limit` before any replica trips. v1.1 adds an optional
-    Valkey-backed aggregator (the `cache.Backend` registry already
-    provides the connection) keyed by `(tenant, bucket)` with a
-    sliding window. Per-replica buckets stay the default — the
-    distributed mode is opt-in for operators who actually need
-    cluster-wide limits. Security review tracks as `K-DOS-1`.
-
-24. **Signature on plugin replies.** The `grpc-plugin` adapter
-    trusts the plugin's reply payload by virtue of having dialed
-    it; on a shared host or a multi-tenant plugin sidecar that's a
-    weaker boundary than we'd like. Add an optional
-    `plugin/v1.1` extension that lets a plugin sign its
-    `IdentifyResponse` / `AuthorizePluginResponse` body with a
-    pre-shared key (HMAC) or X.509 cert; the host verifies before
-    surfacing the result to the pipeline. Security review tracks
-    as `F-PLUGIN-2`.
-
-25. **Plugin lifecycle + mTLS to plugin host.** M10 explicitly
-    deferred plugin spawn / health-check / restart to M11, and TLS
-    on the plugin dial to "M11 alongside circuit-breaking". M11
-    shipped outbound resilience (`pkg/upstream`) for *core*
-    upstreams but did not extend it to plugin processes; today
-    operators run plugins as sidecar containers / systemd units
-    and let the platform restart them. v1.1 closes both: an opt-in
-    supervisor mode (process exec, periodic
-    `grpc.health.v1.Health.Check`, exponential-backoff restart)
-    and mTLS dial credentials on the existing
-    `address` config knob. Tracked as `M10-PLUGIN-LIFECYCLE`.
-
-26. **SpiceDB adapter.** M7 shipped `openfga` first because of its
-    simpler HTTP `Check` API and CNCF sandbox status, and explicitly
-    flagged SpiceDB as "a future adapter at the same surface".
-    Land it as `pkg/authz/spicedb` registered as `spicedb`,
-    composing under `composite` exactly like `openfga` does. The
-    decision-cache + `pkg/upstream` Guard wiring is reused
-    verbatim. Tracked as `M7-SPICEDB`.
-
-27. **Cookbook recipes + hosted docs site.** M12 §15 promised a
-    `docs/cookbook/` of end-to-end recipes ("protect a gRPC
-    service with Istio + lwauth + RBAC", "add OpenFGA to an
-    existing Envoy deployment", "rotate HMAC secrets without
-    downtime") plus a hosted docs site built from the per-module
-    references in `docs/modules/`. The module references and
-    [QUICKSTART.md](QUICKSTART.md) landed in v1.0; the cookbook
-    and the static-site build (likely `mkdocs-material` or
-    Hugo) did not. Tracked as `DOC-COOKBOOK-1`.
+The sibling repos (`lightweightauth-proxy`, `lightweightauth-idp`,
+`lightweightauth-plugins`, `lightweightauth-ebpf`) inherit this
+ordering: a proxy-side fix for S1 is the next planned slice on the
+proxy line; the plugin SDK changes for A1 land in
+`lightweightauth-plugins` once the host side is merged.
 
 ### Explicit non-goals
 
