@@ -1,10 +1,15 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin
 
 GO     ?= go
 BIN    ?= bin
 PKG    := ./...
 IMAGE  ?= lightweightauth
 TAG    ?= dev
+
+# envtest binaries live under .envtest-bin/ (gitignored). The path
+# printed by setup-envtest is exported as KUBEBUILDER_ASSETS for the
+# envtest-tagged tests in tests/envtest/.
+ENVTEST_BIN_DIR ?= .envtest-bin
 
 build:
 	$(GO) build -o $(BIN)/lwauth ./cmd/lwauth
@@ -37,6 +42,16 @@ proto:
 
 docker:
 	docker build -t $(IMAGE):$(TAG) .
+
+# Download kube-apiserver + etcd binaries for envtest into ENVTEST_BIN_DIR.
+# Idempotent; safe to re-run.
+envtest-bin:
+	$(GO) install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	setup-envtest use --bin-dir $(ENVTEST_BIN_DIR) -p path
+
+# Run the envtest-tagged e2e suite against a real apiserver.
+envtest: envtest-bin
+	$(GO) test -tags envtest ./tests/envtest/... -count=1 -timeout 120s
 
 clean:
 	rm -rf $(BIN)
