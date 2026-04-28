@@ -1181,53 +1181,268 @@ by dependency, not by calendar.
 
 ### Next
 
-13. **M11 – Multi-tenancy hardening + xDS push.**
-    - Replace ConfigMap+SIGHUP with a controller-pushed gRPC stream
-      (xDS-style) for clusters with many `AuthConfig`s.
-    - Per-tenant rate limits (token-bucket).
-    - Per-tenant key-material isolation; cluster-scoped
-      `IdentityProvider` with tenant overrides.
-    - **Outbound resilience.** Per-upstream circuit breaker (Hystrix-style
-      half-open trial after a configurable cool-down) and retry budgets
-      for every network-touching module (`oauth2-introspection`, `jwt`
-      JWKS fetch, `openfga` Check, IdP token endpoint, Valkey backend).
-      Today each module has its own timeout but no shared breaker, so a
-      slow IdP can chew up worker goroutines under load. Centralized in
-      a small `pkg/upstream` helper consumed by all built-ins.
-    - **`lwauthctl` dev-loop expansion**: `lwauthctl validate` (compile
-      an AuthConfig YAML offline and surface module errors), `lwauthctl
-      diff` (show what would change vs. the running engine), `lwauthctl
-      explain` (dry-run a request through the pipeline and dump each
-      stage's verdict). The CLI exists in M0 as a stub; M11 makes it
-      genuinely useful for debugging multi-tenant configs.
+13. **M11 – Multi-tenancy hardening + xDS push ✅** _(branch
+    `m11-multitenancy-xds`, merged in #8)._
+    - **Outbound resilience** (`pkg/upstream`). Centralized circuit
+      breaker (closed → open → half-open after a configurable
+      cool-down) plus a token-bucket retry budget, composed by
+      `Guard.Do(ctx, fn)` with bounded exponential back-off. Wired
+      into every network-touching built-in: `openfga` Check,
+      `oauth2-introspection`, `clientauth` token fetch, and the
+      `valkey` cache backend (Get/Set/Delete each guarded). Each
+      module exposes a uniform `resilience: { breaker: {...}, retries:
+      {...} }` block parsed by `upstream.FromMap`. Sentinel errors
+      `ErrCircuitOpen` / `ErrRetryBudgetExceeded` map to
+      `module.ErrUpstream` so the pipeline returns deterministic
+      503-class denies under upstream pressure rather than chewing
+      worker goroutines.
+    - **Per-tenant rate limits** (`pkg/ratelimit`). Token-bucket keyed
+      by `Request.TenantID` with per-tenant overrides and a Default
+      bucket. Wired into `pipeline.Engine` via `Options.RateLimiter`
+      so the limit check fires *before* identifier work — exhausted
+      tenants short-circuit to a `429` deny without spending JWKS
+      fetches or OPA evaluations. Disabled by default; the limiter is
+      a typed nil when `rateLimit:` is absent so cost is one branch
+      per request.
+    - **Per-tenant key-material isolation.** Cluster-scoped
+      `IdentityProvider` CR (now carrying `header`, `scheme`,
+      `minRefreshInterval` in addition to issuer/jwks/audiences). A
+      tenant `AuthConfig` references one with `idpRef: <name>` on a
+      jwt identifier; the controller's `ResolveIdPRefs` expands the
+      reference before `Compile` so the identifier sees a
+      fully-materialized config. Tenant-set scalar fields win;
+      `audiences` is a deduplicated set-union so an API gateway
+      shared between two services can extend the cluster list
+      without forking. Reconciler now `Watches` `IdentityProvider`
+      and re-enqueues the AuthConfig on every change, so a
+      cluster-wide JWKS rotation propagates without touching tenant
+      CRs.
+    - **xDS-style push** (`pkg/configstream`). A `Broker` fans
+      compiled snapshots to many subscribers with latest-wins
+      conflation (slow consumers can never block `Publish`); late
+      subscribers are primed with the current snapshot so a
+      mid-flight pod restart catches up immediately. Wrapped by the
+      `lightweightauth.v1.ConfigDiscovery` gRPC service — one
+      server-streaming RPC `StreamAuthConfig` that pushes
+      JSON-encoded snapshots tagged with a monotonic version. The
+      reconciler optionally publishes to a `Broker` after each
+      successful Compile-and-Swap; a `Stream(ctx, conn, nodeID,
+      handler)` client helper drives any embedder's
+      Compile-and-Swap path. JSON over the wire (rather than a
+      schemafull message) is deliberate: module-specific free-form
+      `config` maps round-trip cleanly through it but not through
+      protobuf's struct/Any. Bufconn round-trip tests cover
+      initial-snapshot delivery, mid-stream updates, and
+      multi-client fan-out.
+    - **`lwauthctl` dev-loop**. `lwauthctl validate --config <f>`
+      compiles a YAML offline and prints a one-line summary
+      (`OK hosts=… identifiers=N authorizers=N mutators=N
+      cache=bool rateLimit=bool`). `lwauthctl diff --from --to`
+      surfaces module-level structural diffs (`+` / `-` / `~`) plus
+      scalar / cache / rateLimit changes; both files are `Compile()`d
+      first so unparsable inputs are rejected before diff. `lwauthctl
+      explain --config --request` dry-runs a request through the
+      pipeline and prints `✓` / `·` / `✗` markers for each stage's
+      verdict. Six binary-level tests boot the actual `lwauthctl` so
+      the integration with `cmd/`'s flag wiring stays honest.
+    - Bug fix uncovered late: `audit.Discard` was a `SinkFunc` (a
+      function type, uncomparable in Go), and `lwauthd.Run` does
+      `audit.Default() == audit.Discard` to detect operator overrides.
+      Process boot panicked with `comparing uncomparable type
+      audit.SinkFunc`, killing the lwauth container in
+      `compose up --wait`. Replaced with a named zero-sized struct
+      so interface-wrapped equality is well-defined; regression test
+      pinned in `pkg/observability/audit/audit_test.go`.
 
-14. **M12 – Supply-chain hardening.**
+      Tests: every new package ships a `_test.go` (race-clean) and
+      the suite remained 30/30 green at every slice. The
+      `pkg/configstream` tests in particular cover slow-subscriber
+      conflation under N=16 concurrent goroutines and full bufconn
+      gRPC round-trips against the generated stubs.
+
+### Next
+
+14. **M12 – v1.0 release.** This is the stabilization milestone — no new
+    runtime features; the goal is to lock the surface, audit the
+    codebase end-to-end, and close the testing gaps that accumulated
+    while we were shipping.
+
+    *API freeze.*
+    - `pkg/module` API frozen under SemVer; CRDs promoted from
+      `v1alpha1` to `v1`.
+    - Plugin contract `plugin/v1` declared stable; future evolution
+      through `plugin/v2`.
+    - Native `lightweightauth.v1.Auth` and
+      `lightweightauth.v1.ConfigDiscovery` protos declared stable.
+    - Documented promotion criteria for tier 2 → tier 1 plugins.
+    - Published Go SDK + Python/Rust plugin SDKs at 1.0.
+
+    *Feature inventory frozen for v1.0 (recap of M1–M11).* Every line
+    here is something we ship and support; the list is the contract.
+
+    | Area | Surface |
+    |---|---|
+    | **Servers** | HTTP `/v1/authorize`, native gRPC Door B (`lightweightauth.v1.Auth.Authorize` + `AuthorizeStream`), Envoy ext_authz Door A (`envoy.service.auth.v3.Authorization.Check`), `/healthz`, `/metrics`, OAuth2 endpoints (`/oauth2/{start,callback,logout,refresh,userinfo,device/start,device/poll}`). |
+    | **Identifiers** | `jwt`, `oauth2-introspection`, `oauth2` (auth-code + PKCE + device grant), `apikey` (plaintext + argon2id file/dir backends), `hmac`, `mtls`, `dpop` wrapper, `grpc-plugin` adapter. |
+    | **Authorizers** | `rbac`, `opa` (embedded Rego), `cel`, `composite` (`allOf`/`anyOf`), `openfga` (HTTP `Check`), `grpc-plugin` adapter. |
+    | **Mutators** | `jwt-issue` (HS/RS 256/384/512), `header-add` / `header-remove` / `header-passthrough`, `grpc-plugin` adapter. |
+    | **Caches** | In-process LRU + per-entry TTL, `valkey` shared backend (also speaks Redis 7.x). Decision cache with positive + negative TTL + singleflight; per-identifier introspection cache; DPoP replay cache; JWKS via jwx. |
+    | **Resilience** | `pkg/upstream` Guard (breaker + retry budget + bounded back-off) wired into every network-touching module. |
+    | **Multi-tenancy** | `Request.TenantID` carried through the pipeline; per-tenant rate limits (`pkg/ratelimit`); cluster-scoped `IdentityProvider` with tenant overrides. |
+    | **Config plane** | YAML files (fsnotify hot-reload), Kubernetes CRDs (`AuthConfig`, `AuthPolicy`, `IdentityProvider`) reconciled by an in-process `controller-runtime` manager, gRPC `ConfigDiscovery` push (`pkg/configstream`). |
+    | **Observability** | Prometheus metrics (`lwauth_decisions_total`, `_decision_latency_seconds`, `_identifier_total`, `_cache_*`), OpenTelemetry tracing (no-op until an exporter is wired), structured audit log via `slog`. |
+    | **CLI** | `lwauth` daemon, `lwauthctl validate / diff / explain / audit`. |
+    | **SDKs** | Go (`pkg/client/go`), plus Python and Rust in `lightweightauth-plugins`. |
+    | **Sibling repos** | `lightweightauth-proxy` (Mode B), `lightweightauth-idp`, `lightweightauth-plugins`. |
+    | **Outbound helper** | `pkg/clientauth` client-credentials Source for service-to-service callers. |
+
+    *Testing already in place.* The `go test ./... -count=1` matrix
+    runs 30 packages green and is gated on every PR via
+    `.github/workflows/build.yaml`. What's already covered:
+
+    - **Unit**: every module has table-driven coverage of its happy
+      path and its sentinel-error paths (`ErrNoMatch`,
+      `ErrInvalidCredential`, `ErrConfig`, `ErrUpstream`). DPoP, HMAC,
+      JWT, mTLS, introspection, OPA/CEL/RBAC/OpenFGA all carry
+      explicit negative cases.
+    - **Race**: the test matrix runs under `-race`; concurrency-heavy
+      packages (`pkg/configstream`, `internal/cache/valkey`,
+      `pkg/ratelimit`) exercise N≥16 goroutine fan-outs.
+    - **Integration / transport conformance**:
+      `internal/server/conformance_test.go` boots Door A and Door B
+      on a single bufconn server and asserts the same allow/deny
+      verdict + HTTP status hint across both. The OpenFGA tests
+      stand up an `httptest` server impersonating the
+      `/stores/{id}/check` endpoint; introspection tests do the same
+      for RFC 7662; OAuth2 auth-code and device-grant flows have
+      end-to-end tests against an in-process fake IdP.
+    - **gRPC plugin host**: `pkg/plugin/grpc/grpc_test.go` boots a
+      bufconn fake implementing all three plugin services and
+      round-trips OK / no_match / plugin-error / RPC-error /
+      config-error paths.
+    - **Controller**: `internal/controller` tests reconcile fake
+      `AuthConfig` + `IdentityProvider` CRs (envtest-free) covering
+      Compile success, Compile error → status, idpRef resolution,
+      tenant overrides, and ConfigDiscovery `Broker.Publish`.
+    - **CLI**: `cmd/lwauthctl/main_test.go` builds the actual binary
+      and drives `validate / diff / explain / audit` end-to-end so
+      flag wiring stays honest.
+    - **Compose smoke test** (`.github/workflows/build.yaml` job
+      `e2e`): `docker compose up --build --wait` brings up Envoy +
+      lwauth + an echo upstream; `curl` exercises healthz and a
+      real ext_authz allow.
+
+    *Additional testing planned for v1.0.* These are the gaps M12
+    closes before tagging:
+
+    1. **End-to-end Kubernetes test** with `envtest` /
+       `controller-runtime`'s test harness: install the CRDs into a
+       real apiserver, post an `AuthConfig`, observe the engine swap
+       through `EngineHolder`, then mutate an `IdentityProvider`
+       referenced via `idpRef` and assert the swap propagates. Today
+       we test the reconciler's pure-function paths but not the
+       envtest round-trip.
+    2. **xDS-style push integration**: spin up a controller with a
+       `Broker` and N gRPC `Stream()` clients in the same process,
+       assert ordering + de-dup-by-version under reconnect storms.
+       Single-client tests already exist; this is multi-client +
+       reconnect.
+    3. **Soak / load**: a `make bench` target that drives ~10k RPS
+       through Door A and Door B for 30 minutes against a synthetic
+       JWT identifier + RBAC + decision cache, asserts p99 < 5 ms
+       and zero-error invariants. Current benchmarks are micro-only
+       (table-driven `-bench` per module).
+    4. **Chaos**: introduce upstream faults (slow IdP, 500-ing
+       OpenFGA, packet-loss to Valkey) under load and confirm the
+       `pkg/upstream` breaker opens, the retry budget bounds the
+       pain, and the pipeline returns deterministic 503s rather
+       than chewing goroutines. We have unit tests for each fault
+       primitive; we don't yet have a "all of them at once" run.
+    5. **Fuzzing** (`go test -fuzz`) on the credential parsers most
+       at risk: `jwt` token splitting, `hmac` `Authorization` parsing,
+       `dpop` proof header decoding, `mtls` x-forwarded-client-cert
+       parsing, native gRPC `AuthorizeRequest` decoding. These are
+       the inputs an attacker most directly controls.
+    6. **Concurrency stress on hot reloads**: 1000 reconciles/sec on
+       an `AuthConfig` while serving traffic; assert no torn reads,
+       no leaked goroutines (`goleak`), and metrics counters stay
+       monotonic.
+    7. **Backwards-compat lock**: vendor a v1.0-RC AuthConfig YAML
+       and a v1.0-RC plugin proto into `tests/golden/` and assert
+       every subsequent build still parses them. This is the
+       contract that turns the API freeze into something we can
+       enforce in CI rather than just promise.
+
+    *Secure code review.* Before tagging v1.0 we run a focused
+    review of the codebase. Scope:
+
+    - **Cryptography**: every code path that signs, verifies, hashes,
+      or compares secrets (`jwt`, `hmac`, `dpop`, `mtls`,
+      `apikey/store.go`, `pkg/session` cookie sealing,
+      `pkg/mutator/jwtissue`). Confirm constant-time compares
+      everywhere, no string-equality on secret material, no logging
+      of token contents, no `none` / weak-alg acceptance, JWKS
+      rotation under key compromise.
+    - **AuthN/AuthZ correctness**: every `Identifier` honors the
+      `firstMatch` / `allMust` contract, sentinel-error mapping is
+      correct end-to-end (a network failure in OpenFGA must NOT be
+      cached as a deny), pipeline can never accidentally allow on
+      error.
+    - **Untrusted-input parsing**: HTTP / gRPC adapters, CRD
+      validation, gRPC proto deserialization, YAML loading. Confirm
+      every parser has an upper bound (header count, body size,
+      claim count) and that bounded denies happen *before*
+      unbounded work.
+    - **Resource exhaustion**: caches have hard size caps,
+      goroutine fan-outs are bounded (e.g. controller `Watches`
+      enqueue but never spawn unbounded), the `pkg/upstream` breaker
+      really does shed load rather than just reorder it.
+    - **Container / supply chain (lite)**: image runs as non-root,
+      read-only rootfs, no shell; `examples/` configs do not embed
+      production-looking secrets. (Full hardened-image work is M13;
+      this pass just confirms we're not regressing today.)
+    - **Plugin trust boundary**: the `grpc-plugin` adapter is the
+      one place untrusted-language code returns into core. Confirm
+      we don't pass through unbounded slices, never trust plugin
+      timestamps, and surface plugin errors uniformly.
+    - **Multi-tenancy isolation**: cache keys, audit lines, metric
+      labels, rate-limit buckets are all tenant-scoped — no
+      cross-tenant leak via shared state.
+    - **Dependencies**: `govulncheck` clean on every release; pin
+      versions; remove any unused imports.
+
+    The review's output is a checklist in
+    `docs/security/v1.0-review.md` plus follow-up issues for
+    anything unfixable in M12 itself (those gate v1.0).
+
+    *Documentation site + cookbook.* A `docs/cookbook/` of
+    end-to-end recipes ("protect a gRPC service with Istio + lwauth
+    + RBAC", "add OpenFGA to an existing Envoy deployment", "rotate
+    HMAC secrets without downtime"). The per-module references in
+    `docs/modules/` (added on the design/* branch in 2026-04) become
+    the foundation; v1.0 surfaces them on a docs site.
+
+    *Plugin-author conformance suite* (`pkg/module/conformance`):
+    a Go test harness third-party module authors can vendor that
+    asserts their `Identifier` / `Authorizer` / `Mutator` honors the
+    contract (concurrent-safe, no Context retention, sentinel
+    errors, `nil`-safety). Published alongside
+    `lightweightauth-plugins`.
+
+15. **M13 – Supply-chain hardening.** Deferred to *after* v1.0
+    deliberately: M12 freezes the API and ships a reviewed,
+    well-tested release using the standard `golang:alpine` base, so
+    the supply-chain story can move on its own cadence without
+    blocking users on dhi.io entitlement.
     - Docker Hardened Image bases (`dhi.io/golang`, `dhi.io/alpine`,
       `dhi.io/envoy`).
     - Cosign-signed releases verified by Kyverno / Sigstore policy.
     - SBOM publication (`syft`) on every release.
     - Mirrored images for air-gapped deployments.
-    - Deferred from M2 to keep the early build pipeline accessible to
-      contributors without dhi.io entitlement.
-
-15. **M13 – v1.0.**
-    - `pkg/module` API frozen under SemVer; CRDs promoted from
-      `v1alpha1` to `v1`.
-    - Plugin contract `plugin/v1` declared stable; future evolution
-      through `plugin/v2`.
-    - Documented promotion criteria for tier 2 → tier 1 plugins.
-    - Published Go SDK + Python/Rust plugin SDKs.
-    - **Plugin-author conformance suite** (`pkg/module/conformance`):
-      a Go test harness third-party module authors can vendor that
-      asserts their `Identifier` / `Authorizer` / `Mutator` honors the
-      contract (concurrent-safe, no Context retention, sentinel errors,
-      `nil`-safety). Published alongside `lightweightauth-plugins`.
-    - **Documentation site + cookbook.** A `docs/cookbook/` of
-      end-to-end recipes ("protect a gRPC service with Istio + lwauth +
-      RBAC", "add OpenFGA to an existing Envoy deployment", "rotate
-      HMAC secrets without downtime"). The per-module references in
-      `docs/modules/` (added on the design/* branch in 2026-04) become
-      the foundation; v1.0 surfaces them on a docs site.
+    - Originally deferred from M2 to keep the early build pipeline
+      accessible to contributors without dhi.io entitlement; now
+      deferred again past v1.0 because none of it is on the user-
+      visible runtime path.
 
 16. **M14 – Revocation (optional).** Until M14, lwauth is *short-TTL
     by design*: revocation = let things expire. M14 adds three opt-in
