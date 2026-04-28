@@ -1,6 +1,43 @@
 # lightweightauth
 
-A minimalistic, pluggable authentication & authorization service written in Go.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ARCHITECTURE / DEPLOYMENT entries.    and security/v1.0-review.md alongside the existing DESIGN /    that surfaces QUICKSTART.md, MILESTONES.md, modules/README.md,  - Replaced the three-row Quick links table with a seven-row oneREADME.md:    metric names.    checklist", and troubleshooting bullets keyed to the right    + a real AuthConfig CR), a four-row "universal verification  - Includes a CRD-mode upgrade walkthrough (controller.enabled=true    on the response line, not a 200-with-deny-flag.    with empty body and the deny case carries the deny status code    reason/subject/identitySource), and that healthz returns 200    map<string, list<string>>/tenantId; response: allow/status/    HTTP shape (request: method/host/path/headers as  - Verified end-to-end against ./bin/lwauth: confirms the actual    deny, and /metrics.    and copy-paste verification curls covering /healthz, allow,    each with a self-contained inline AuthConfig (`apikey` + `rbac`)  - Three paths — local binary, Docker Compose, Kubernetes (Helm) —QUICKSTART.md (new):      * the verification gates the upgrade ran clean through.        refresh never gates a code release,      * container bases left at current pins so a base-image        the next controller-runtime minor),        multi_namespace_cache.handlerRegistration; pin lifts on        controller-runtime 0.23.3 does not yet implement on its        ResourceEventHandlerRegistration.HasSyncedChecker which      * why k8s.io/* held at 0.35.4 (k8s 0.36 added        structured-merge-diff + the indirect refresh wave),        alert #1, x/* + jwx + controller-runtime 0.21 → 0.23.3 +      * the bumps that landed (otel 1.41 → 1.43 closes dependabot    pinned" subsection. Documents:  - New "Dependency refresh — what landed and why some deps stayedDESIGN.md (M12 §15):A minimalistic, pluggable authentication & authorization service written in Go.
 Think of it as a small, embeddable mash-up of [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy)
 and [Authorino](https://github.com/Kuadrant/authorino):
 
@@ -46,9 +83,13 @@ See [§9 of DESIGN.md](docs/DESIGN.md#9-repository-topology) for the full topolo
 
 | Doc | Purpose |
 |-----|---------|
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | Build & run locally, in Docker Compose, or in Kubernetes — with verification curls |
+| [docs/MILESTONES.md](docs/MILESTONES.md) | M0–M12 feature timeline with copy-paste YAML / Go samples |
+| [docs/modules/README.md](docs/modules/README.md) | Per-module reference (every `type:` string + sample) |
 | [docs/DESIGN.md](docs/DESIGN.md) | Requirements → recommended design + trade-offs |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component layout, request flow, plugin model |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Kubernetes, CRDs, Helm, Envoy integration |
+| [docs/security/v1.0-review.md](docs/security/v1.0-review.md) | v1.0 security self-review |
 
 ## Repo layout (planned)
 

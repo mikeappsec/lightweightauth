@@ -1445,6 +1445,50 @@ by dependency, not by calendar.
     errors, `nil`-safety). Published alongside
     `lightweightauth-plugins`.
 
+    *Dependency refresh — what landed and why some deps stayed pinned.*
+    Run as a final M12 sweep: `go get -u ./...` followed by
+    `go mod tidy` and a full test + `govulncheck` run. Outcomes:
+
+    - **Bumped to current minor/patch:**
+      - `go.opentelemetry.io/otel` family (`otel`, `trace`, `metric`,
+        `sdk/metric`) **1.41.0 → 1.43.0** — also closes dependabot
+        alert #1 (high) for the multi-value `baggage` header
+        allocation DoS (GHSA-r3pj-fc6c-r6j8).
+      - `golang.org/x/{crypto, net, sys, text, term}` to current.
+      - `sigs.k8s.io/controller-runtime` **v0.21.0 → v0.23.3**.
+      - `sigs.k8s.io/structured-merge-diff/v6` **6.3.2 → 6.4.0**.
+      - `github.com/lestrrat-go/jwx/v3` **3.0.13 → 3.1.0** (and the
+        v2 line consumed by `pkg/identity/oauth2` is at v2.1.6).
+      - All Prometheus, go-openapi, fxamacker/cbor, goccy/go-json,
+        mailru/easyjson, vektah/gqlparser, valyala/fastjson, and
+        gomodules.xyz/jsonpatch indirects to current.
+    - **k8s.io/* held at v0.35.4** (was 0.34.1, target was 0.36.0).
+      The k8s 0.36 release added a new method
+      (`HasSyncedChecker`) to the `client-go`
+      `ResourceEventHandlerRegistration` interface, which
+      controller-runtime v0.23.3 (the latest at v1.0 cut) does not
+      yet implement on its `multi_namespace_cache.handlerRegistration`
+      type. Building against k8s 0.36 + controller-runtime 0.23.3
+      therefore breaks compilation of the indirect dependency chain
+      we don't own. We pin to v0.35.4 (the highest k8s minor
+      controller-runtime 0.23.3 builds against) and will revisit on
+      the next controller-runtime minor.
+    - **Container bases unchanged at v1.0:** `golang:1.26.2-alpine`
+      (matches the repo's `go` directive), `alpine:3.22.4`,
+      `envoyproxy/envoy:v1.37.2`, `ealen/echo-server:0.9.2`. All
+      are on their current minor lines; bumping them is a no-op
+      change tracked separately so a base-image refresh does not
+      gate a code release.
+    - **Verification gates the upgrade ran clean through:**
+      `go build ./...`, `go test ./...` (33/33 packages green),
+      `govulncheck ./...` (zero called vulnerabilities), and the
+      build-tag-gated suites (`make envtest`, `make soak`,
+      `make chaos`, `make fuzz`).
+
+    The `make vuln` Makefile target (added in slice 9) reproduces
+    the scan against the repo's pinned toolchain so contributors
+    can replay the v1.0 result locally.
+
 15. **M13 – Supply-chain hardening.** Deferred to *after* v1.0
     deliberately: M12 freezes the API and ships a reviewed,
     well-tested release using the standard `golang:alpine` base, so
