@@ -1,4 +1,57 @@
-{{- if and .Values.rbac.create .Values.controller.enabled }}
+{{- /*
+RBAC for the controller. Two shapes:
+
+  * Namespace-scoped Role / RoleBinding when controllerRBAC.preferNamespaceScope
+    is true AND controller.watchNamespace is set. Most installs only watch one
+    namespace and don't need cluster-wide list/watch.
+  * ClusterRole / ClusterRoleBinding otherwise (cross-namespace watch or an
+    operator who explicitly wants the cluster-scoped form).
+
+Both shapes carry the same verbs; the only difference is scope.
+*/ -}}
+{{- if and .Values.rbac.create .Values.controller.enabled -}}
+{{- $ns := default .Release.Namespace .Values.controller.watchNamespace -}}
+{{- $useNamespaceScope := and .Values.controllerRBAC.preferNamespaceScope (ne $ns "") -}}
+{{- if $useNamespaceScope }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lwauth.fullname" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["lightweightauth.io"]
+    resources: ["authconfigs", "authpolicies", "identityproviders"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["lightweightauth.io"]
+    resources: ["authconfigs/status", "authpolicies/status", "identityproviders/status"]
+    verbs: ["get", "update", "patch"]
+  # Leader election is M11; keep the lease verbs ready so we can flip
+  # the switch without re-issuing RBAC.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lwauth.fullname" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "lwauth.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lwauth.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- else }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -12,8 +65,6 @@ rules:
   - apiGroups: ["lightweightauth.io"]
     resources: ["authconfigs/status", "authpolicies/status", "identityproviders/status"]
     verbs: ["get", "update", "patch"]
-  # Leader election is M11; keep the lease verbs ready so we can flip
-  # the switch without re-issuing RBAC.
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -35,4 +86,5 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "lwauth.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

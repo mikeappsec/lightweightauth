@@ -25,3 +25,7 @@ Thumbs.db
 
 # envtest binaries (kube-apiserver, etcd) downloaded by setup-envtest
 /.envtest-bin/
+
+# Local-only security review notes. Engineers keep these on disk to
+# verify hardening fixes; they never belong in source control.
+/docs/SECURITY_REVIEW_*.md

@@ -90,10 +90,51 @@ podDisruptionBudget:
 # Network policy
 # ---------------------------------------------------------------------------
 networkPolicy:
-  enabled: false
+  # Default-on: a fresh install with no allowedFrom selectors blocks
+  # ingress entirely, which is the safe failure mode. Operators flip
+  # the namespaceSelectors / podSelectors below to admit their mesh
+  # or callers. Set to false only for ephemeral dev clusters where
+  # NetworkPolicy isn't enforced.
+  enabled: true
   allowedFrom:
     namespaceSelectors: []
     podSelectors: []
+
+# ---------------------------------------------------------------------------
+# Pod / container security context
+# ---------------------------------------------------------------------------
+# Defaults satisfy the "restricted" Pod Security Admission profile
+# (https://kubernetes.io/docs/concepts/security/pod-security-standards/).
+# Override individual fields to fit your platform; do NOT downgrade
+# without a documented reason.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532          # nonroot
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# RBAC scope
+# ---------------------------------------------------------------------------
+# When controller.enabled and controller.watchNamespace is set, prefer
+# a namespace-scoped Role/RoleBinding over a ClusterRole. Cluster-scope
+# is only required when watching across namespaces (watchNamespace=="").
+# Set to false to force ClusterRole even for a single-namespace watch.
+controllerRBAC:
+  preferNamespaceScope: true
 
 # ---------------------------------------------------------------------------
 # Metrics + observability
