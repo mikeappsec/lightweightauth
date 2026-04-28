@@ -10,9 +10,9 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/server"
 )
 
-// TestHTTPHandler_MaxRequestBytes is the regression test for pentest
-// finding MED-02: /v1/authorize must refuse oversize JSON bodies with
-// 413 instead of streaming them into json.Decoder and burning memory.
+// TestHTTPHandler_MaxRequestBytes asserts /v1/authorize refuses
+// oversize JSON bodies with 413 instead of streaming them into
+// json.Decoder and burning memory.
 func TestHTTPHandler_MaxRequestBytes(t *testing.T) {
 	t.Parallel()
 	holder := server.NewEngineHolder(nil)
@@ -37,8 +37,8 @@ func TestHTTPHandler_MaxRequestBytes(t *testing.T) {
 }
 
 // TestHTTPHandler_DisableAuthorize verifies the operator can shrink
-// the public surface (HIGH-04 mitigation): /v1/authorize 404s when
-// disabled, while /healthz still serves.
+// the public surface: /v1/authorize 404s when disabled, while
+// /healthz still serves.
 func TestHTTPHandler_DisableAuthorize(t *testing.T) {
 	t.Parallel()
 	holder := server.NewEngineHolder(nil)

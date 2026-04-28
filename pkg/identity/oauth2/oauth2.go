@@ -86,6 +86,16 @@ type Config struct {
 	// rotate via the refresh_token. Empty/zero disables refresh.
 	RefreshLeeway string `yaml:"refreshLeeway" json:"refreshLeeway"`
 
+	// AllowedRedirectHosts is the optional allow-list of absolute hosts
+	// (and optional port) the `rd` query parameter on /oauth2/start may
+	// point at. When empty (the default), only relative paths beginning
+	// with `/` (and not `//`) are accepted; everything else is silently
+	// rewritten to PostLoginPath. This is the open-redirect defense:
+	// without it an attacker could craft
+	// /oauth2/start?rd=https://evil.example/ and use the legitimate
+	// login flow as a phishing redirect.
+	AllowedRedirectHosts []string `yaml:"allowedRedirectHosts" json:"allowedRedirectHosts"`
+
 	Cookie CookieConfig `yaml:"cookie" json:"cookie"`
 }
 
@@ -113,6 +123,10 @@ type identifier struct {
 	endSessionURL  string
 	refreshLeeway  time.Duration
 	deviceAuthURL  string
+
+	// allowedRedirectHosts gates the `rd` query parameter against an
+	// operator-defined allow-list. Empty -> only relative paths.
+	allowedRedirectHosts map[string]struct{}
 
 	oauth      *oauth2.Config
 	keyset     jwk.Set
@@ -240,6 +254,7 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 		endSessionURL:  cfg.EndSessionURL,
 		refreshLeeway:  leeway,
 		deviceAuthURL:  cfg.DeviceAuthURL,
+		allowedRedirectHosts: buildAllowedHosts(cfg.AllowedRedirectHosts),
 		oauth: &oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
@@ -253,7 +268,7 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 		now:              time.Now,
 		provider:         name,
 		httpClient:       &http.Client{Timeout: 30 * time.Second},
-		maxResponseBytes: 1 << 20, // 1 MiB IdP responses; see MED-02.
+		maxResponseBytes: 1 << 20, // 1 MiB cap on IdP responses.
 		jwtParseOpts:     parseOpts,
 	}, nil
 }

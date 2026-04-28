@@ -206,10 +206,10 @@ func readDeviceCode(r *http.Request) (string, error) {
 // authorization endpoint and the token endpoint so callers can inspect
 // the IdP's error responses verbatim.
 //
-// Hardening (pentest MED-02): we use the identifier's bounded
-// http.Client (timeout) instead of http.DefaultClient, and bound the
-// response body with io.LimitReader before ReadAll so an IdP that
-// streams gigabytes can't pin our memory.
+// Hardening: we use the identifier's bounded http.Client (timeout)
+// instead of http.DefaultClient, and bound the response body with
+// io.LimitReader before ReadAll so an IdP that streams gigabytes
+// can't pin our memory.
 func (i *identifier) postForm(ctx context.Context, endpoint string, form url.Values) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {

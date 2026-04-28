@@ -40,6 +40,13 @@ func parseConfig(raw map[string]any) (Config, error) {
 			}
 		}
 	}
+	if v, ok := raw["allowedRedirectHosts"].([]any); ok {
+		for _, s := range v {
+			if s2, ok := s.(string); ok && s2 != "" {
+				c.AllowedRedirectHosts = append(c.AllowedRedirectHosts, s2)
+			}
+		}
+	}
 	if cm, ok := raw["cookie"].(map[string]any); ok {
 		c.Cookie.Name, _ = cm["name"].(string)
 		c.Cookie.Secret, _ = cm["secret"].(string)

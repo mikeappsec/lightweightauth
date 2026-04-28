@@ -144,10 +144,10 @@ func TestMTLS_XFCCPath(t *testing.T) {
 	}
 }
 
-// TestMTLS_XFCC_DefaultIgnored is the regression test for the pentest
-// finding HIGH-01: with the default config, a forged XFCC header from
-// an attacker-generated self-signed cert is treated as if no credential
-// was presented at all — never as identity material.
+// TestMTLS_XFCC_DefaultIgnored asserts that with the default config,
+// a forged XFCC header from an attacker-generated self-signed cert is
+// treated as if no credential was presented at all — never as identity
+// material.
 func TestMTLS_XFCC_DefaultIgnored(t *testing.T) {
 	t.Parallel()
 	_, pemStr := makeCert(t, "attacker", "CN=Corp Root CA", "spiffe://example.org/ns/default/sa/admin")
@@ -166,10 +166,10 @@ func TestMTLS_XFCC_DefaultIgnored(t *testing.T) {
 	}
 }
 
-// TestMTLS_XFCC_SelfSignedRejectedByCAPool is the second half of the
-// HIGH-01 fix: even when XFCC is trusted, a self-signed cert that does
-// not chain to the configured CA pool is rejected. The legacy
-// trustedIssuers DN allow-list is no longer the only check.
+// TestMTLS_XFCC_SelfSignedRejectedByCAPool: even when XFCC is trusted,
+// a self-signed cert that does not chain to the configured CA pool is
+// rejected. The legacy trustedIssuers DN allow-list is no longer the
+// only check.
 func TestMTLS_XFCC_SelfSignedRejectedByCAPool(t *testing.T) {
 	t.Parallel()
 	// Real CA + cert it signed (the "good" path).

@@ -53,7 +53,7 @@ type Options struct {
 	HTTPAddr string // Default ":8080".
 	GRPCAddr string // Default ":9001".
 
-	// --- Listener hardening (pentest HIGH-04 + MED-02) ---
+	// --- Listener hardening ---
 	//
 	// TLSCertFile / TLSKeyFile enable TLS on the HTTP listener. When
 	// both are set, ListenAndServeTLS is used; otherwise the server

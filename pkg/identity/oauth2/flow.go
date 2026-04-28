@@ -48,10 +48,13 @@ type flowState struct {
 // PKCE material, store them in the flow cookie, and 302 the user to the
 // IdP's authorize URL.
 func (i *identifier) handleStart(w http.ResponseWriter, r *http.Request) {
-	rd := r.URL.Query().Get("rd")
-	if rd == "" {
-		rd = i.postLogin
-	}
+	// `rd` is the post-login redirect target. We validate it BEFORE
+	// stashing it in the flow cookie so an attacker can't smuggle an
+	// absolute URL through /oauth2/start?rd=https://evil.example and
+	// turn the login flow into a trusted open redirect. Anything that
+	// fails the safeRedirect check falls back to the configured
+	// PostLoginPath.
+	rd := i.safeRedirect(r.URL.Query().Get("rd"))
 	state, err := randURL(24)
 	if err != nil {
 		http.Error(w, "rand: "+err.Error(), http.StatusInternalServerError)
@@ -169,7 +172,10 @@ func (i *identifier) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = i.flowCookie.Clear(w, r)
-	http.Redirect(w, r, flow.RD, http.StatusFound)
+	// Defense in depth: even though /oauth2/start sanitised `rd` before
+	// stashing it in the encrypted flow cookie, re-run the same check
+	// here so a forged or replayed flow cookie can't redirect away.
+	http.Redirect(w, r, i.safeRedirect(flow.RD), http.StatusFound)
 }
 
 // handleLogout clears the session cookie (and any lingering flow cookie)

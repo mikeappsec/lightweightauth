@@ -80,7 +80,7 @@ func TestHMAC_Roundtrip(t *testing.T) {
 	}
 }
 
-// TestHMAC_QueryTamper is the regression test for HIGH-02 query
+// TestHMAC_QueryTamper is a regression test for query-string
 // tampering: a signature minted for ?amount=10 must fail to verify
 // when replayed against ?amount=1000.
 func TestHMAC_QueryTamper(t *testing.T) {
@@ -111,8 +111,8 @@ func TestHMAC_QueryTamper(t *testing.T) {
 	}
 }
 
-// TestHMAC_HostTamper covers the second half of HIGH-02: a signature
-// minted for one Host must fail to verify against another.
+// TestHMAC_HostTamper covers the host-binding half of the canonical:
+// a signature minted for one Host must fail to verify against another.
 func TestHMAC_HostTamper(t *testing.T) {
 	t.Parallel()
 	id := newID(t)

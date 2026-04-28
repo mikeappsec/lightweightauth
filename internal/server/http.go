@@ -26,8 +26,7 @@ type HTTPHandler struct {
 // defaultMaxRequestBytes caps /v1/authorize JSON bodies. 1 MiB is far
 // larger than any legitimate authorize request (which is just method +
 // path + a handful of headers) and small enough that an attacker can't
-// trivially exhaust memory by streaming a giant payload. See pentest
-// finding MED-02 in docs/SECURITY_REVIEW_2026-04-28.md.
+// trivially exhaust memory by streaming a giant payload.
 const defaultMaxRequestBytes = 1 << 20
 
 // HTTPHandlerOptions configures the listener hardening knobs surfaced
