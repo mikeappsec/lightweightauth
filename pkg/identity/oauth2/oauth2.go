@@ -121,6 +121,13 @@ type identifier struct {
 	now        func() time.Time
 	provider   string
 
+	// httpClient is used for outbound IdP calls (device authorization,
+	// token endpoint). Bounded by clientTimeout so a misbehaving IdP
+	// can't hang the device-poll path. Tests override this via the
+	// package-private withHTTPClient hook.
+	httpClient       *http.Client
+	maxResponseBytes int64
+
 	jwtParseOpts []jwtlib.ParseOption
 }
 
@@ -240,12 +247,14 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 			RedirectURL:  cfg.RedirectURL,
 			Scopes:       cfg.Scopes,
 		},
-		keyset:       keyset,
-		flowCookie:   flow,
-		store:        store,
-		now:          time.Now,
-		provider:     name,
-		jwtParseOpts: parseOpts,
+		keyset:           keyset,
+		flowCookie:       flow,
+		store:            store,
+		now:              time.Now,
+		provider:         name,
+		httpClient:       &http.Client{Timeout: 30 * time.Second},
+		maxResponseBytes: 1 << 20, // 1 MiB IdP responses; see MED-02.
+		jwtParseOpts:     parseOpts,
 	}, nil
 }
 

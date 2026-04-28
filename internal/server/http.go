@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -18,7 +19,32 @@ import (
 // GET  /healthz                                       -> 200
 // GET  /readyz                                        -> 200
 type HTTPHandler struct {
-	Engines *EngineHolder
+	Engines         *EngineHolder
+	MaxRequestBytes int64 // 0 -> defaultMaxRequestBytes; <0 -> unlimited (tests only).
+}
+
+// defaultMaxRequestBytes caps /v1/authorize JSON bodies. 1 MiB is far
+// larger than any legitimate authorize request (which is just method +
+// path + a handful of headers) and small enough that an attacker can't
+// trivially exhaust memory by streaming a giant payload. See pentest
+// finding MED-02 in docs/SECURITY_REVIEW_2026-04-28.md.
+const defaultMaxRequestBytes = 1 << 20
+
+// HTTPHandlerOptions configures the listener hardening knobs surfaced
+// by lwauthd.Run. All fields are optional; zero values pick safe
+// defaults.
+type HTTPHandlerOptions struct {
+	// MaxRequestBytes caps inbound request bodies on /v1/authorize.
+	// 0 means defaultMaxRequestBytes (1 MiB); a negative value
+	// disables the cap (test-only).
+	MaxRequestBytes int64
+	// DisableAuthorize removes the /v1/authorize endpoint from the
+	// mux. Operators who only use the gRPC ext_authz surface can
+	// shrink their attack surface by setting this true.
+	DisableAuthorize bool
+	// DisableMetrics removes /metrics. Useful when metrics are
+	// scraped on a separate, internally-routed listener.
+	DisableMetrics bool
 }
 
 // NewHTTPHandler returns an http.Handler with /v1/authorize, /healthz,
@@ -26,9 +52,16 @@ type HTTPHandler struct {
 // module.HTTPMounter implementations (e.g. the OAuth2 auth-code module)
 // and mounts their prefixes on the same mux.
 func NewHTTPHandler(h *EngineHolder) http.Handler {
+	return NewHTTPHandlerWithOptions(h, HTTPHandlerOptions{})
+}
+
+// NewHTTPHandlerWithOptions is the configurable form of NewHTTPHandler.
+func NewHTTPHandlerWithOptions(h *EngineHolder, o HTTPHandlerOptions) http.Handler {
 	mux := http.NewServeMux()
-	hh := &HTTPHandler{Engines: h}
-	mux.HandleFunc("/v1/authorize", hh.authorize)
+	hh := &HTTPHandler{Engines: h, MaxRequestBytes: o.MaxRequestBytes}
+	if !o.DisableAuthorize {
+		mux.HandleFunc("/v1/authorize", hh.authorize)
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if hh.Engines.Load() == nil {
@@ -37,9 +70,11 @@ func NewHTTPHandler(h *EngineHolder) http.Handler {
 		}
 		w.WriteHeader(200)
 	})
-	// Prometheus scrape surface. The Default recorder is process-wide
-	// so a hot-reload of the engine doesn't lose counters.
-	mux.Handle("/metrics", metrics.Default().Handler())
+	if !o.DisableMetrics {
+		// Prometheus scrape surface. The Default recorder is process-wide
+		// so a hot-reload of the engine doesn't lose counters.
+		mux.Handle("/metrics", metrics.Default().Handler())
+	}
 	if eng := h.Load(); eng != nil {
 		seen := map[string]bool{}
 		for _, m := range eng.HTTPMounts() {
@@ -77,8 +112,24 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
+	// Bound the body before decoding. MaxBytesReader returns a 413-
+	// like *http.MaxBytesError when the cap is exceeded, which the
+	// json decoder bubbles up; we surface a 413 to the caller so
+	// they can distinguish "too big" from "malformed".
+	limit := h.MaxRequestBytes
+	if limit == 0 {
+		limit = defaultMaxRequestBytes
+	}
+	if limit > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+	}
 	var in authorizeRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
