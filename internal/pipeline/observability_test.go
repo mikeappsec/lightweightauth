@@ -56,8 +56,12 @@ func TestEvaluate_EmitsMetricsAndAudit(t *testing.T) {
 	if ev.Authorizer != "az" {
 		t.Errorf("Authorizer = %q, want az", ev.Authorizer)
 	}
-	if ev.LatencyMs <= 0 {
-		t.Errorf("LatencyMs = %v, want > 0", ev.LatencyMs)
+	if ev.LatencyMs < 0 {
+		// Allow zero: on Windows the system clock has ~15.6 ms
+		// resolution so a sub-tick Evaluate call can legitimately
+		// produce time.Since(start) == 0. Anything negative would be a
+		// real bug.
+		t.Errorf("LatencyMs = %v, want >= 0", ev.LatencyMs)
 	}
 
 	// Metrics — scrape and assert at least the decision counter is

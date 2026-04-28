@@ -1136,9 +1136,48 @@ by dependency, not by calendar.
     - Bootstrap `lightweightauth-plugins` (SDKs in Go / Python / Rust +
       reference plugins: SAML bridge, Vault-backed API keys, custom
       HMAC).
-    - **Out-of-process plugin host runtime** in core: lifecycle
-      (spawn / health-check / restart), `grpc-plugin` adapter under the
-      `plugin/v1` proto.
+    - ✅ **Out-of-process plugin host runtime** (`pkg/plugin/grpc`,
+      branch `m10-plugin-host-runtime`). The package registers a single
+      type name `grpc-plugin` under all three module kinds; a config
+      entry of the form
+      ```yaml
+      type: grpc-plugin
+      config:
+        address: unix:///var/run/lwauth/saml.sock   # or "host:port"
+        timeout: 200ms
+      ```
+      dials the plugin (insecure today; mTLS lands in M11 alongside
+      circuit-breaking) and returns a thin remote adapter satisfying
+      `module.Identifier` / `Authorizer` / `ResponseMutator`. The
+      pipeline cannot tell built-ins from plugins apart — same caching,
+      same observability, same audit emission.
+
+      Wire mapping:
+      - `module.Request` → `authv1.AuthorizeRequest` (Path → Resource,
+        []string headers comma-joined, Host surfaced as a synthetic
+        `Host` header, Context map JSON-stringified). The plugin sees
+        exactly what a Door B caller would.
+      - `IdentifyResponse{no_match=true}` → `module.ErrNoMatch` so the
+        host moves to the next configured identifier, matching built-in
+        semantics. `error != ""` → `module.ErrUpstream`.
+      - `AuthorizePluginResponse` → `*module.Decision` verbatim
+        (allow / status / deny_reason / both header maps).
+      - `MutateResponse` headers are *merged* on top of any existing
+        decision headers, never replacing — composes cleanly with
+        chained mutators.
+
+      Connection pool: a process-wide `sync.Map` keyed by address de-dups
+      `*grpc.ClientConn` so two identifiers + an authorizer + a mutator
+      all wired to the same socket share one HTTP/2 stream pool.
+
+      Lifecycle (spawn / health-check / restart) is **deferred to
+      M11**; today the host assumes the plugin process is supervised
+      externally (systemd unit or sidecar container), which is the
+      documented topology in `docs/modules/plugin-grpc.md`.
+
+      Tests: `pkg/plugin/grpc/grpc_test.go` boots a bufconn fake
+      implementing all three plugin services and round-trips OK /
+      no_match / plugin-error / RPC-error / config-error paths.
 
 13. **M11 – Multi-tenancy hardening + xDS push.**
     - Replace ConfigMap+SIGHUP with a controller-pushed gRPC stream
