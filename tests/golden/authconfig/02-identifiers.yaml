@@ -1,0 +1,41 @@
+# Golden: every built-in identifier in one config. Exercises the
+# firstMatch path so the test reaches every factory's Build path.
+# Note: jwt is intentionally absent — its factory does a JWKS fetch on
+# construction. It's covered by pkg/identity/jwt's own tests against an
+# in-process JWKS server.
+tenantId: golden-identifiers
+identifierMode: firstMatch
+
+identifiers:
+  - name: keys-static
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        k1: { subject: alice, roles: [admin] }
+
+  - name: corp-hmac
+    type: hmac
+    config:
+      header: Authorization
+      scheme: HMAC-SHA256
+      dateHeader: Date
+      clockSkew: 5m
+      keys:
+        client-1:
+          secret: "shared-secret-bytes-32-chars-long"
+          subject: svc-1
+          roles: [editor]
+
+  - name: corp-mtls
+    type: mtls
+    config:
+      header: x-forwarded-client-cert
+      trustedIssuers: ["CN=Corp Root CA"]
+
+authorizers:
+  - name: rbac
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow: [admin, editor]

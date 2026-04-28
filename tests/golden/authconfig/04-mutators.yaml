@@ -1,0 +1,48 @@
+# Golden: every response mutator. Mutators run after Allow.
+tenantId: golden-mutators
+identifierMode: firstMatch
+
+identifiers:
+  - name: dev-apikey
+    type: apikey
+    config:
+      headerName: X-Api-Key
+      static:
+        k1: { subject: alice, roles: [admin] }
+
+authorizers:
+  - name: rbac
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow: [admin]
+
+response:
+  - name: mint-internal
+    type: jwt-issue
+    config:
+      issuer: lwauth
+      audience: internal
+      ttl: 60s
+      algorithm: HS256
+      key: "hex:abababababababababababababababababababababababababababababababab"
+      header: X-Internal-Token
+      copyClaims: [sub]
+
+  - name: stamp
+    type: header-add
+    config:
+      subjectHeader: X-LwAuth-Subject
+      upstream:
+        X-LwAuth-Tenant: "golden-mutators"
+        X-LwAuth-Email:  "${claim:email}"
+
+  - name: scrub
+    type: header-remove
+    config:
+      upstream: [Cookie, Authorization]
+
+  - name: forward-claims
+    type: header-passthrough
+    config:
+      headers: [X-Trace-Id, X-Request-Id]
