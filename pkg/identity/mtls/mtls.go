@@ -265,6 +265,15 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 			}
 		}
 	}
+	// Symmetric to the gate above: trustForwardedClientCert: true
+	// without ANY anchor (no CA bundle, no issuer allow-list) silently
+	// re-enables the original blind-XFCC behavior — anyone able to
+	// reach the listener could spoof any subject. Fail closed at
+	// compile time so the operator has to make the trust boundary
+	// explicit. (SEC-MTLS-1.)
+	if trustXFCC && pool == nil && len(trusted) == 0 {
+		return nil, fmt.Errorf("mtls: trustForwardedClientCert: true requires at least one anchor (trustedCAFiles, trustedCAs, or trustedIssuers)")
+	}
 	return &identifier{
 		name:           name,
 		header:         hdr,

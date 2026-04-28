@@ -1550,42 +1550,51 @@ These are open security findings or known bugs against shipped code.
 They MUST land before any tier-A feature work begins.
 
 S1. **SEC-PROXY-1 — Mode B proxy request fidelity & deny redaction.**
-    The `lightweightauth-proxy` adapter (sibling repo
-    `lightweightauth-proxy/cmd/lwauth-proxy/main.go`) builds the
-    `module.Request` it sends into the engine from `r.URL.Path`
-    only — `r.URL.RawQuery` and `r.Body` never make it across, so
-    HMAC validation and policies that key off query string or body
-    in core are silently bypassed when the proxy is in path. The
-    same file also returns raw `"lwauth: "+err.Error()` and the
-    engine's verbose deny reason directly to clients, the same
-    leak we redacted on Door A / native gRPC in slice 8. Fix is
-    twofold: include `r.URL.RequestURI()` (or `Path + "?" +
-    RawQuery`) when a query is present, add a bounded
-    request-body read with `io.LimitReader` that *also restores*
-    `r.Body` for the upstream forward, and route every error /
-    deny through the same `publicReason` mapping the core uses.
-    Severity: H/M.
+    ✅ shipped (sibling repo `lightweightauth-proxy`,
+    `cmd/lwauth-proxy/main.go`). The adapter now builds the
+    `module.Request` from `r.URL.RequestURI()` so `RawQuery`
+    survives into HMAC's `splitPathQuery`; reads inbound bodies
+    once into a `--max-auth-body`-bounded buffer (default 1 MiB)
+    and replays them to the upstream via `io.MultiReader`; refuses
+    to bind a truncated prefix when the body exceeds the cap
+    (over-cap requests still forward, but with
+    `module.Request.Body == nil` so HMAC's deny-on-mismatch fires
+    instead of being bypassed by a shifted prefix); and routes
+    every error / deny body through a `publicReason` mirror of
+    `internal/server/public_reason.go` while the verbose engine
+    reason flows to the proxy log via `slog`. Regression coverage:
+    `TestRequestFromHTTP_PreservesQueryString`,
+    `TestRequestFromHTTP_BodyBoundUnderCap`,
+    `TestRequestFromHTTP_BodyOverCapStreamsButUnbound`,
+    `TestRequestFromHTTP_ZeroCapDisablesAuthBody`,
+    `TestPublicReason`,
+    `TestProxy_ForwardsBodyAndQueryUpstream`.
 
-S2. **SEC-MTLS-1 — XFCC trust requires an anchor.** Slice 1 added
-    the opt-in `trustForwardedClientCert: true` knob plus the
-    `trustedCAFiles` / `trustedCAs` / `trustedIssuers` config; it
-    rejects "CA without trust=true" but does not yet reject the
-    symmetric mistake of "trust=true with no CA bundle and no
-    issuer allow-list", which silently re-enables the original
-    blind-trust XFCC behavior. Add a one-line factory-time guard
-    in `pkg/identity/mtls/mtls.go` `factory()` that fails closed
-    when `trustXFCC == true && pool == nil &&
-    len(trustedIssuers) == 0`. Severity: M.
+S2. **SEC-MTLS-1 — XFCC trust requires an anchor.** ✅ shipped.
+    Factory-time guard in
+    [pkg/identity/mtls/mtls.go](../pkg/identity/mtls/mtls.go) now
+    fails closed when `trustXFCC == true && pool == nil &&
+    len(trustedIssuers) == 0`, closing the symmetric mistake of
+    the slice-1 fix where an XFCC-enabled config without an anchor
+    silently re-enabled blind-trust behaviour. Regression test:
+    `TestMTLS_TrustFlagRequiresAnchor`.
 
-S3. **TEST-RACE-1 — Race-mode flake in `configstream`.**
-    `pkg/configstream/TestGRPC_MultiClientReconnectStorm` passes
-    in isolation but flakes intermittently under
-    `go test -race ./...`. Most likely a shutdown-ordering or
-    goroutine-leak issue in the storm fixture rather than a
-    `Broker` correctness bug, but until that's confirmed it
-    obscures real regressions in CI. Reproduce with
-    `-count=20 -race`, isolate with `-run`, then either fix the
-    test or open a `Broker` fix as required.
+S3. **TEST-RACE-1 — Race-mode flake in `configstream`.** ✅ shipped.
+    `pkg/configstream/TestGRPC_MultiClientReconnectStorm` passed in
+    isolation but flaked intermittently under `go test -race ./...`.
+    Investigated: the original `goleak` allow-list covered only
+    *server-side* gRPC transport helpers
+    (`http2Server.{keepalive,HandleStreams}`, etc.). The client-side
+    counterparts (`http2Client.{reader,keepalive}`,
+    `addrConn.resetTransport`, the resolver/balancer
+    `CallbackSerializer`) can outlive `cc.Close()` and
+    `GracefulStop()` by a few scheduler ticks under `-race ./...`,
+    and trip the leak check before they unwind. Not a `Broker`
+    correctness bug. Fix: mirror the server-side allow-list with the
+    symmetric client-side helpers and wrap the goleak call in a
+    50 ms settle window. A real `Broker` subscription-pump leak does
+    not exit on its own, so it still fails the check after the
+    settle.
 
 #### Tier A — hardening (v1.1)
 

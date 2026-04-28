@@ -126,9 +126,17 @@ func TestMTLS_XFCCPath(t *testing.T) {
 	// Operator opts in: a verified Envoy/Istio hop sits in front and
 	// emits XFCC. Without trustForwardedClientCert, the header is
 	// ignored entirely (covered by TestMTLS_XFCC_DefaultIgnored below).
-	id, _ := factory("mtls", map[string]any{
+	// We also pin a trusted issuer so the SEC-MTLS-1 anchor gate is
+	// satisfied — trustForwardedClientCert: true alone is rejected.
+	// makeCert produces a self-signed cert (parent==template), so the
+	// effective Issuer DN is CN=bob, not CN=Corp Root.
+	id, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
+		"trustedIssuers":           []any{"CN=bob"},
 	})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
 	got, err := id.Identify(context.Background(), &module.Request{
 		Headers: map[string][]string{"X-Forwarded-Client-Cert": {xfcc}},
 	})
@@ -233,6 +241,47 @@ func TestMTLS_CAPoolRequiresTrustFlag(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("factory accepted trustedCAs without trustForwardedClientCert")
+	}
+}
+
+// TestMTLS_TrustFlagRequiresAnchor pins SEC-MTLS-1: enabling
+// trustForwardedClientCert without ANY anchor (CA bundle, inline PEM,
+// or issuer allow-list) silently re-enables the original blind-XFCC
+// behavior — anyone who can reach the listener could spoof any
+// subject. The factory must reject this at compile time.
+func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
+	t.Parallel()
+
+	// Bare trust=true with no anchor: must fail.
+	if _, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+	}); err == nil {
+		t.Fatal("factory accepted trustForwardedClientCert: true without any anchor (CA / issuer)")
+	}
+
+	// Empty issuer list still counts as no anchor.
+	if _, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+		"trustedIssuers":           []any{},
+	}); err == nil {
+		t.Fatal("factory accepted trustForwardedClientCert: true with empty trustedIssuers")
+	}
+
+	// Each individual anchor is sufficient on its own.
+	caPEM, _, _ := makeCAandLeaf(t, "Corp Root CA", "alice", "")
+	for label, raw := range map[string]map[string]any{
+		"trustedCAs": {
+			"trustForwardedClientCert": true,
+			"trustedCAs":               caPEM,
+		},
+		"trustedIssuers": {
+			"trustForwardedClientCert": true,
+			"trustedIssuers":           []any{"CN=Corp Root CA"},
+		},
+	} {
+		if _, err := factory("mtls", raw); err != nil {
+			t.Errorf("anchor %q rejected: %v", label, err)
+		}
 	}
 }
 

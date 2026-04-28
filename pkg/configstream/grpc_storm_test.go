@@ -23,15 +23,45 @@ import (
 // but the unwind is asynchronous, so allow-list the well-known frames.
 // Our Broker pump goroutines (broker.go) are NOT in this list, so a
 // real pump leak still fails the test.
+//
+// TEST-RACE-1: the original list covered only server-side helpers,
+// which let the client-side counterparts (http2Client.{reader,keepalive},
+// addrConn.resetTransport, the resolver/balancer callback serializers)
+// race the goleak check under -race ./... when many goroutines compete
+// for the scheduler. The mirrored client-side entries below close that
+// gap; everything here is a known-bounded gRPC internal that exits on
+// cc.Close() / GracefulStop(), not a Broker subscription pump.
 var grpcGoleakIgnores = []goleak.Option{
+	// Server side.
 	goleak.IgnoreAnyFunction("google.golang.org/grpc.(*Server).handleStream"),
 	goleak.IgnoreAnyFunction("google.golang.org/grpc.(*Server).serveStreams"),
 	goleak.IgnoreAnyFunction("google.golang.org/grpc.(*Server).handleRawConn.func1"),
-	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/transport.(*controlBuffer).get"),
 	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/transport.(*http2Server).keepalive"),
 	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/transport.(*http2Server).HandleStreams"),
+	// Client side (mirror of the server entries).
+	goleak.IgnoreAnyFunction("google.golang.org/grpc.(*ccBalancerWrapper).watcher"),
+	goleak.IgnoreAnyFunction("google.golang.org/grpc.(*addrConn).resetTransport"),
+	goleak.IgnoreAnyFunction("google.golang.org/grpc.(*ClientConn).updateResolverState"),
+	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/transport.(*http2Client).reader"),
+	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/transport.(*http2Client).keepalive"),
+	// Shared (transport-direction agnostic).
+	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/transport.(*controlBuffer).get"),
 	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/transport.(*loopyWriter).run"),
 	goleak.IgnoreAnyFunction("google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run"),
+}
+
+// verifyNoBrokerLeaks is goleak.VerifyNone with a small settle window
+// so post-handler-return gRPC helpers can finish unwinding. The window
+// is intentionally short — a real Broker subscription pump leak does
+// NOT exit on its own, so it will still trip the check after the
+// settle. Any real leak is therefore caught; only the cosmetic
+// "GracefulStop returned before the http2 transport's last goroutine
+// scheduled out" race is masked.
+func verifyNoBrokerLeaks(t *testing.T) {
+	t.Helper()
+	// 50ms is well over the worst observed unwind on CI under -race.
+	time.Sleep(50 * time.Millisecond)
+	goleak.VerifyNone(t, grpcGoleakIgnores...)
 }
 
 // TestGRPC_MultiClientReconnectStorm is the M12 multi-client xDS-push
@@ -62,7 +92,7 @@ func TestGRPC_MultiClientReconnectStorm(t *testing.T) {
 	go func() { _ = gs.Serve(lis) }()
 	// Cleanups run LIFO: goleak last, after GracefulStop has finished
 	// unwinding the server transport goroutines.
-	t.Cleanup(func() { goleak.VerifyNone(t, grpcGoleakIgnores...) })
+	t.Cleanup(func() { verifyNoBrokerLeaks(t) })
 	t.Cleanup(func() { gs.GracefulStop() })
 
 	dialer := func(_ context.Context, _ string) (net.Conn, error) { return lis.Dial() }
@@ -218,7 +248,7 @@ func TestGRPC_ServerCancelClosesAllClients(t *testing.T) {
 	NewServer(b).Register(gs)
 	go func() { _ = gs.Serve(lis) }()
 
-	t.Cleanup(func() { goleak.VerifyNone(t, grpcGoleakIgnores...) })
+	t.Cleanup(func() { verifyNoBrokerLeaks(t) })
 
 	dialer := func(_ context.Context, _ string) (net.Conn, error) { return lis.Dial() }
 	cc, err := grpc.NewClient(
