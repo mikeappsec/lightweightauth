@@ -10,6 +10,7 @@ Pick a recipe by **what you already have**, not by what you want to add:
 
 | Starting point                                         | Recipe |
 | ------------------------------------------------------ | ------ |
+| You have a workload Pod and want every request to arrive only through lwauth, on Kubernetes. | [Gate an upstream service through lwauth](gate-upstream-service.md) |
 | You run gRPC services behind Istio and need RBAC at the edge. | [Istio + lwauth + RBAC for gRPC](istio-grpc-rbac.md) |
 | You already terminate HTTP at Envoy and want fine-grained ReBAC. | [OpenFGA on an existing Envoy deployment](openfga-on-envoy.md) |
 | You ship long-lived HMAC keys to clients and need to rotate them. | [Rotate HMAC secrets without downtime](rotate-hmac.md) |

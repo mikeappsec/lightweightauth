@@ -105,6 +105,7 @@ nav:
   - Quickstart: QUICKSTART.md
   - Cookbook:
       - cookbook/README.md
+      - Gate an upstream service through lwauth: cookbook/gate-upstream-service.md
       - Istio + lwauth + RBAC for gRPC: cookbook/istio-grpc-rbac.md
       - OpenFGA on existing Envoy: cookbook/openfga-on-envoy.md
       - Rotate HMAC secrets without downtime: cookbook/rotate-hmac.md
