@@ -1783,52 +1783,15 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
 These add user-visible capability rather than closing a gap. They
 ship after tier S/A/B clears.
 
-C1. **M7-SPICEDB (was 26) — SpiceDB authorizer adapter.** Land
-    `pkg/authz/spicedb` registered as `spicedb`, composing under
-    `composite` exactly like `openfga` does. Decision-cache and
-    `pkg/upstream` Guard wiring is reused verbatim. Surface
-    parity with `openfga` is the explicit acceptance bar.
-
-C2. **DOC-COOKBOOK-1 (was 27) — Cookbook recipes + hosted docs.**
+C1. **DOC-COOKBOOK-1 (was C2 / 27) — Cookbook recipes + hosted docs.**
     `docs/cookbook/` end-to-end recipes ("protect a gRPC service
     with Istio + lwauth + RBAC", "add OpenFGA to an existing
     Envoy deployment", "rotate HMAC secrets without downtime")
-    plus a static-site build (likely `mkdocs-material` or Hugo)
-    of the per-module references already in `docs/modules/`.
-
-C3. **M14-REVOCATION (was 16) — Optional revocation surface.**
-    Until M14, lwauth is *short-TTL by design*: revocation = let
-    things expire. The bearer story works fine with short access-
-    token TTLs (≤ 5 min) and refresh rotation (M6) for most
-    deployments. M14 is mandatory only when (a) operators cannot
-    shorten TTLs (UX constraints), (b) regulatory "kill switch"
-    requirements apply, or (c) the deployment ships long-lived
-    API keys. Three opt-in surfaces:
-
-    - **Token revocation list** (RFC 7009 client-facing helper).
-      New `pkg/identity/revocation` consults a shared store keyed
-      by `jti` (for JWTs) or `sha256(token)` (for opaque bearers)
-      before accepting a credential. Backed by the same
-      `cache.Backend` registry as M7 (Valkey by default) so
-      revocations propagate to every replica via
-      `SET <key> "1" PX <remaining-exp>`. The IdP writes; lwauth
-      reads. A short Bloom-filter pre-check keeps the fast path
-      at one in-process lookup when the list is empty.
-    - **Decision-cache invalidation API.** New `lwauthctl revoke`
-      command and authenticated `POST /v1/admin/revoke` endpoint
-      that delete cached decisions by `(tenant, sub)` or full
-      key prefix. Already partially possible since M7 (`DEL` on
-      Valkey); M14 wraps it in a stable CLI + audited HTTP
-      surface.
-    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
-      already implemented for M3's `MemoryStore`; M14 extends it
-      to a shared `valkey` session store and wires
-      `/oauth2/logout` + admin revoke through it so a logout on
-      one replica is honored by all of them.
-
-    Lives in Tier C rather than Tier A because operators who
-    don't need it pay zero cost — the v1.0 short-TTL story
-    remains the supported default.
+    plus a static-site build (`mkdocs-material`) of the per-module
+    references already in `docs/modules/`. This is the only
+    Tier C item targeted at v1.1; the previous C1 (SpiceDB
+    adapter) and C3 (revocation surface) are deferred to Tier X
+    until the ecosystem and operator demand justify the work.
 
 #### Tier X — experimental (no firm target)
 
@@ -1873,6 +1836,51 @@ X3. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
     dependencies. Graduates to Tier B when an operator who needs
     the full supply-chain story sponsors the entitlements.
 
+X4. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
+    Land `pkg/authz/spicedb` registered as `spicedb`, composing
+    under `composite` exactly like `openfga` does. Decision-cache
+    and `pkg/upstream` Guard wiring is reused verbatim. Surface
+    parity with `openfga` is the explicit acceptance bar.
+    Deferred from Tier C because OpenFGA already covers the
+    Zanzibar-style ReBAC slot in v1.x and we have no operator
+    asking for SpiceDB specifically; graduates to Tier C the
+    moment one does.
+
+X5. **M14-REVOCATION (was C3 / 16) — Optional revocation surface.**
+    Until M14, lwauth is *short-TTL by design*: revocation = let
+    things expire. The bearer story works fine with short access-
+    token TTLs (≤ 5 min) and refresh rotation (M6) for most
+    deployments. M14 is mandatory only when (a) operators cannot
+    shorten TTLs (UX constraints), (b) regulatory "kill switch"
+    requirements apply, or (c) the deployment ships long-lived
+    API keys. Three opt-in surfaces:
+
+    - **Token revocation list** (RFC 7009 client-facing helper).
+      New `pkg/identity/revocation` consults a shared store keyed
+      by `jti` (for JWTs) or `sha256(token)` (for opaque bearers)
+      before accepting a credential. Backed by the same
+      `cache.Backend` registry as M7 (Valkey by default) so
+      revocations propagate to every replica via
+      `SET <key> "1" PX <remaining-exp>`. The IdP writes; lwauth
+      reads. A short Bloom-filter pre-check keeps the fast path
+      at one in-process lookup when the list is empty.
+    - **Decision-cache invalidation API.** New `lwauthctl revoke`
+      command and authenticated `POST /v1/admin/revoke` endpoint
+      that delete cached decisions by `(tenant, sub)` or full
+      key prefix. Already partially possible since M7 (`DEL` on
+      Valkey); M14 wraps it in a stable CLI + audited HTTP
+      surface.
+    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
+      already implemented for M3's `MemoryStore`; M14 extends it
+      to a shared `valkey` session store and wires
+      `/oauth2/logout` + admin revoke through it so a logout on
+      one replica is honored by all of them.
+
+    Deferred from Tier C because the v1.0 short-TTL story remains
+    the supported default and operators who don't need it pay zero
+    cost. Graduates back to Tier C when an operator hits one of
+    the three triggers above.
+
 ### Prioritization rationale
 
 The reorder follows a single rule: **never ship a new feature on top of
@@ -1890,9 +1898,12 @@ a known security or correctness gap.** Concretely:
   going faster. The conformance matrix in particular will catch a
   whole class of "we added a new identifier and Door B does
   something subtly different" regressions before they ship.
-- **Tier C is new surface area** (`spicedb`, cookbook). It's last
-  on purpose — these are valuable but not urgent, and they are the
-  items most likely to introduce their own gaps if we rush them.
+- **Tier C is documentation surface** (cookbook + hosted docs site).
+  It's last on purpose — valuable but not urgent. The previous
+  C-tier feature work (`spicedb`, revocation surface) is moved to
+  Tier X until an operator pulls it back: shipping new modules on
+  top of fresh hardening is the fastest way to introduce the next
+  S-tier finding.
 - **Tier X stays experimental** until the surrounding ecosystem
   forces our hand. Pulling either of them forward without three
   production reference deployments is how stability promises die.
