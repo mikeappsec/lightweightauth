@@ -1754,6 +1754,27 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     `buf.build` module so consumers can codegen clients without
     vendoring.
 
+    *Status: shipped (v1.1).* Spec checked in at
+    [api/openapi/lwauth.yaml](../api/openapi/lwauth.yaml) and
+    embedded into the lwauthd binary by the
+    [api/openapi](../api/openapi/openapi.go) package. Two
+    endpoints share one source: `GET /openapi.yaml` returns the
+    bytes verbatim (preserving comments + ordering); `GET
+    /openapi.json` returns a lazily-converted, cached JSON form.
+    Both sit on the same listener as `/metrics`; operators
+    shrink the surface with the new `--disable-http-openapi`
+    flag (mirrors `--disable-http-metrics`). Module-mounted
+    prefixes (`/oauth2/*`, etc.) intentionally live in their
+    own per-module docs rather than in this transport-layer
+    spec — the lwauthd binary doesn't know which mounters a
+    given config will compose. Buf module name set in
+    [buf.yaml](../buf.yaml) (`buf.build/mikeappsec/lightweightauth`)
+    so `buf push` publishes the api/proto tree to the BSR.
+    Fenced by `TestHTTPHandler_OpenAPI_JSON`,
+    `TestHTTPHandler_OpenAPI_YAML`, and
+    `TestHTTPHandler_DisableOpenAPI` in
+    [internal/server/openapi_test.go](../internal/server/openapi_test.go).
+
 #### Tier C — new features (v1.1+)
 
 These add user-visible capability rather than closing a gap. They

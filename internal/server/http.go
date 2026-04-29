@@ -17,7 +17,13 @@ import (
 //
 // POST /v1/authorize  { method, path, host, headers } -> 200 / 401 / 403
 // GET  /healthz                                       -> 200
-// GET  /readyz                                        -> 200
+// GET  /readyz                                        -> 200 / 503
+// GET  /metrics                                       -> Prometheus exposition
+// GET  /openapi.json                                  -> embedded OpenAPI 3.1 (JSON)
+// GET  /openapi.yaml                                  -> embedded OpenAPI 3.1 (YAML)
+//
+// The full machine-readable contract for the JSON surface lives at
+// [api/openapi/lwauth.yaml](../../api/openapi/lwauth.yaml).
 type HTTPHandler struct {
 	Engines         *EngineHolder
 	MaxRequestBytes int64 // 0 -> defaultMaxRequestBytes; <0 -> unlimited (tests only).
@@ -44,6 +50,12 @@ type HTTPHandlerOptions struct {
 	// DisableMetrics removes /metrics. Useful when metrics are
 	// scraped on a separate, internally-routed listener.
 	DisableMetrics bool
+	// DisableOpenAPI removes the /openapi.json and /openapi.yaml
+	// discovery endpoints. The endpoints are mounted on the same
+	// public listener as /metrics; operators who treat the spec as
+	// out-of-band documentation (published to a docs site, vendored
+	// into SDKs) can shrink the surface by setting this true.
+	DisableOpenAPI bool
 }
 
 // NewHTTPHandler returns an http.Handler with /v1/authorize, /healthz,
@@ -73,6 +85,14 @@ func NewHTTPHandlerWithOptions(h *EngineHolder, o HTTPHandlerOptions) http.Handl
 		// Prometheus scrape surface. The Default recorder is process-wide
 		// so a hot-reload of the engine doesn't lose counters.
 		mux.Handle("/metrics", metrics.Default().Handler())
+	}
+	if !o.DisableOpenAPI {
+		// Embedded OpenAPI 3.1 spec. Served on the same listener as
+		// /metrics — operators who keep observability internal will
+		// typically disable both with the same `--disable-http-*`
+		// flags.
+		mux.HandleFunc("/openapi.json", openAPIJSONHandler)
+		mux.HandleFunc("/openapi.yaml", openAPIYAMLHandler)
 	}
 	if eng := h.Load(); eng != nil {
 		seen := map[string]bool{}
