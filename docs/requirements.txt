@@ -1,0 +1,7 @@
+# Pinned to make the docs build reproducible and to keep the CI image
+# small. mkdocs-material 9.5.x is the current stable line; pymdown-
+# extensions 10.x is what 9.5.x is tested against. Do not float either
+# pin without rebuilding `make docs` and confirming the rendered nav,
+# code blocks, and admonitions still look right.
+mkdocs-material==9.5.39
+pymdown-extensions==10.11

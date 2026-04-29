@@ -5,8 +5,15 @@
 # generated *.pb.go / *_grpc.pb.go files are committed alongside the
 # .proto sources so consumers don't need a proto toolchain installed.
 version: v2
+# `name` makes this module publishable to the Buf Schema Registry. With
+# this set, `buf push` uploads the api/proto tree as
+# buf.build/mikeappsec/lightweightauth so downstream consumers can
+# `buf generate buf.build/mikeappsec/lightweightauth` and codegen
+# clients without vendoring the .proto files. Tracked under
+# DOC-OPENAPI-1.
 modules:
   - path: api/proto
+    name: buf.build/mikeappsec/lightweightauth
 lint:
   use:
     - STANDARD

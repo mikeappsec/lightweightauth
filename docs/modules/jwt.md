@@ -5,7 +5,7 @@ tokens) using a JWKS endpoint. The cheapest identifier on the hot path
 because verification is a single signature check against an in-memory
 keyset.
 
-**Source:** [pkg/identity/jwt](../../pkg/identity/jwt/jwt.go) — registered as `jwt`.
+**Source:** [pkg/identity/jwt](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/jwt/jwt.go) — registered as `jwt`.
 
 ## When to use
 
@@ -89,4 +89,4 @@ decide.
 
 - RFC 7519 (JWT), RFC 7517 (JWKS), RFC 7515 (JWS).
 - [DESIGN.md §4](../DESIGN.md) — identity & credential modules.
-- Source: [pkg/identity/jwt/jwt.go](../../pkg/identity/jwt/jwt.go).
+- Source: [pkg/identity/jwt/jwt.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/jwt/jwt.go).

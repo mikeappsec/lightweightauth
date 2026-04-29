@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,7 +16,13 @@ import (
 //
 // POST /v1/authorize  { method, path, host, headers } -> 200 / 401 / 403
 // GET  /healthz                                       -> 200
-// GET  /readyz                                        -> 200
+// GET  /readyz                                        -> 200 / 503
+// GET  /metrics                                       -> Prometheus exposition
+// GET  /openapi.json                                  -> embedded OpenAPI 3.1 (JSON)
+// GET  /openapi.yaml                                  -> embedded OpenAPI 3.1 (YAML)
+//
+// The full machine-readable contract for the JSON surface lives at
+// [api/openapi/lwauth.yaml](../../api/openapi/lwauth.yaml).
 type HTTPHandler struct {
 	Engines         *EngineHolder
 	MaxRequestBytes int64 // 0 -> defaultMaxRequestBytes; <0 -> unlimited (tests only).
@@ -44,6 +49,12 @@ type HTTPHandlerOptions struct {
 	// DisableMetrics removes /metrics. Useful when metrics are
 	// scraped on a separate, internally-routed listener.
 	DisableMetrics bool
+	// DisableOpenAPI removes the /openapi.json and /openapi.yaml
+	// discovery endpoints. The endpoints are mounted on the same
+	// public listener as /metrics; operators who treat the spec as
+	// out-of-band documentation (published to a docs site, vendored
+	// into SDKs) can shrink the surface by setting this true.
+	DisableOpenAPI bool
 }
 
 // NewHTTPHandler returns an http.Handler with /v1/authorize, /healthz,
@@ -74,6 +85,14 @@ func NewHTTPHandlerWithOptions(h *EngineHolder, o HTTPHandlerOptions) http.Handl
 		// so a hot-reload of the engine doesn't lose counters.
 		mux.Handle("/metrics", metrics.Default().Handler())
 	}
+	if !o.DisableOpenAPI {
+		// Embedded OpenAPI 3.1 spec. Served on the same listener as
+		// /metrics — operators who keep observability internal will
+		// typically disable both with the same `--disable-http-*`
+		// flags.
+		mux.HandleFunc("/openapi.json", openAPIJSONHandler)
+		mux.HandleFunc("/openapi.yaml", openAPIYAMLHandler)
+	}
 	if eng := h.Load(); eng != nil {
 		seen := map[string]bool{}
 		for _, m := range eng.HTTPMounts() {
@@ -94,6 +113,20 @@ type authorizeRequest struct {
 	Path     string              `json:"path"`
 	Headers  map[string][]string `json:"headers"`
 	TenantID string              `json:"tenantId,omitempty"`
+}
+
+// lowercaseHeaderKeys enforces the [module.Request.Headers] invariant.
+// Returning a fresh map (rather than mutating in place) avoids
+// surprising the JSON decoder's owner.
+func lowercaseHeaderKeys(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return map[string][]string{}
+	}
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[strings.ToLower(k)] = v
+	}
+	return out
 }
 
 type authorizeResponse struct {
@@ -142,9 +175,18 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		Method:   strings.ToUpper(in.Method),
 		Host:     in.Host,
 		Path:     in.Path,
-		Headers:  in.Headers,
+		Headers:  lowercaseHeaderKeys(in.Headers),
 	}
-	dec, id, _ := eng.Evaluate(context.WithoutCancel(r.Context()), req)
+	// Use the request's own context. Stripping cancellation here
+	// (e.g. context.WithoutCancel) would leave plugin RPCs, IdP
+	// fetches, OpenFGA / OPA evaluations, and decision-cache work
+	// running after the client is gone, which an attacker could
+	// exploit by firing many short-lived /v1/authorize requests to
+	// amplify upstream load. Audit emission is synchronous within
+	// the pipeline and rides on whatever the engine produces — it
+	// does not need an uncancellable context to land in the slog
+	// handler.
+	dec, id, _ := eng.Evaluate(r.Context(), req)
 	// Engine emits a verbose internal reason (e.g. "hmac: signature
 	// mismatch") that the audit log captures. Public callers see only
 	// a generic status-aligned string so policy and module internals

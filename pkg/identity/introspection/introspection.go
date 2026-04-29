@@ -45,6 +45,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -160,7 +161,13 @@ func (i *identifier) callIntrospection(ctx context.Context, tok string) (map[str
 			return fmt.Errorf("%w: introspection returned status %d", module.ErrUpstream, resp.StatusCode)
 		}
 		claims = nil
-		if err := json.NewDecoder(resp.Body).Decode(&claims); err != nil {
+		// Cap successful response decode. RFC 7662 introspection
+		// responses are claim sets — typically <2 KiB, occasionally
+		// larger if the IdP attaches roles/groups. Cap at 1 MiB so a
+		// blackholed or compromised IdP cannot stream an arbitrarily
+		// large success body and burn memory during JSON decode.
+		const introspectionMaxResponseBytes = 1 << 20
+		if err := json.NewDecoder(io.LimitReader(resp.Body, introspectionMaxResponseBytes)).Decode(&claims); err != nil {
 			return fmt.Errorf("%w: introspection decode: %v", module.ErrUpstream, err)
 		}
 		return nil

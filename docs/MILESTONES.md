@@ -2,7 +2,7 @@
 
 This document is the canonical "what landed when" reference for
 LightweightAuth v1.0. Every feature listed below is on `main` and
-documented in [docs/modules/](modules/) with a YAML sample. Use this
+documented in [docs/modules/](modules/README.md) with a YAML sample. Use this
 page when you want to locate a capability by milestone; use
 [docs/modules/README.md](modules/README.md) when you want to locate it
 by `type:` string.
@@ -49,7 +49,7 @@ mutators:
 - `envoy.service.auth.v3.Authorization` server on `:9001`
   (`internal/server/grpc.go`).
 - Same pipeline as Door A HTTP — one `EngineHolder`, two doors.
-- Worked Envoy config: [examples/envoy/](../examples/envoy/) and
+- Worked Envoy config: [examples/envoy/](https://github.com/mikeappsec/lightweightauth/tree/main/examples/envoy/) and
   [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## M3 — OAuth2 authorization-code + sessions
@@ -66,7 +66,7 @@ mutators:
   `Plugin` (descriptor lock — see M12).
 - `internal/controller` reconciler watches `AuthConfig` and resolves
   `IdPRef` references; atomic Compile-and-Swap on every change.
-- Helm chart [deploy/helm/lightweightauth/](../deploy/helm/lightweightauth/)
+- Helm chart [deploy/helm/lightweightauth/](https://github.com/mikeappsec/lightweightauth/tree/main/deploy/helm/lightweightauth/)
   with both file-mode and CRD-mode wiring.
 - Pinned to `controller-runtime` aligned with `k8s.io/* v0.35.x`.
 
@@ -158,10 +158,10 @@ cache:
 
 - Native `lightweightauth.v1.Auth` service: `Authorize` (unary) +
   `AuthorizeStream` (bidi).
-- Generated proto bindings in [api/proto/lightweightauth/v1/](../api/proto/lightweightauth/v1/).
-- Go SDK: [pkg/client/go](../pkg/client/go) — `Client.Authorize`,
+- Generated proto bindings in [api/proto/lightweightauth/v1/](https://github.com/mikeappsec/lightweightauth/tree/main/api/proto/lightweightauth/v1/).
+- Go SDK: [pkg/client/go](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/client/go) — `Client.Authorize`,
   `UnaryServerInterceptor`, `HTTPMiddleware`.
-- Outbound helper for service-to-service callers: [pkg/clientauth](../pkg/clientauth)
+- Outbound helper for service-to-service callers: [pkg/clientauth](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/clientauth)
   (RFC 6749 §4.4 client-credentials with auto-refresh + Guard).
 
 ```go
@@ -239,14 +239,14 @@ No new runtime features. Stabilization, lock-down, and review:
 
 | Slice | Deliverable                                    | Doc / location |
 |-------|------------------------------------------------|----------------|
-| 1     | Golden config + plugin descriptor lock         | [tests/golden/](../tests/golden/) |
-| 2     | Plugin-author conformance suite                | [pkg/module/conformance](../pkg/module/conformance/) |
+| 1     | Golden config + plugin descriptor lock         | [tests/golden/](https://github.com/mikeappsec/lightweightauth/tree/main/tests/golden/) |
+| 2     | Plugin-author conformance suite                | [pkg/module/conformance](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/module/conformance/) |
 | 3     | Hot-reload concurrency stress + goleak         | `pkg/configstream/stress_test.go` |
-| 4     | Envtest e2e against real kube-apiserver        | [tests/envtest/](../tests/envtest/) |
+| 4     | Envtest e2e against real kube-apiserver        | [tests/envtest/](https://github.com/mikeappsec/lightweightauth/tree/main/tests/envtest/) |
 | 5     | Multi-client xDS reconnect storm tests         | `pkg/configstream/grpc_storm_test.go` |
 | 6     | Fuzzing on credential parsers (jwt/hmac/dpop/mtls) | `pkg/identity/*/fuzz_test.go` |
-| 7     | Soak/load harness (Door A + Door B)            | [tests/soak/](../tests/soak/) — `make soak` |
-| 8     | Chaos suite (upstream fault injection)         | [tests/chaos/](../tests/chaos/) — `make chaos` |
+| 7     | Soak/load harness (Door A + Door B)            | [tests/soak/](https://github.com/mikeappsec/lightweightauth/tree/main/tests/soak/) — `make soak` |
+| 8     | Chaos suite (upstream fault injection)         | [tests/chaos/](https://github.com/mikeappsec/lightweightauth/tree/main/tests/chaos/) — `make chaos` |
 | 9     | Secure code review + otel DoS fix              | [security/v1.0-review.md](security/v1.0-review.md) |
 
 Plus dependency refresh: every direct dep at HEAD as of v1.0 cut
@@ -273,7 +273,7 @@ make vuln              # govulncheck ./... pinned to repo toolchain
 - **Operating it:** [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Designing against it:** [ARCHITECTURE.md](ARCHITECTURE.md), [DESIGN.md](DESIGN.md).
 - **Writing a plugin:** [modules/plugin-grpc.md](modules/plugin-grpc.md) +
-  [pkg/module/conformance](../pkg/module/conformance/).
+  [pkg/module/conformance](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/module/conformance/).
 - **Securing a deployment:** [security/v1.0-review.md](security/v1.0-review.md).
 - **What's planned after v1.0:** [DESIGN.md §7](DESIGN.md) — the
   post-v1 roadmap (multi-writer Broker, OpenAPI doc, FIPS mode,

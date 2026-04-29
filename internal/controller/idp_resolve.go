@@ -14,11 +14,23 @@ import (
 //
 // Merge rules (M11 multi-tenancy hardening, DESIGN.md §8):
 //
-//   - The IdP defines the canonical key material: issuerUrl, jwksUrl,
-//     audiences, header, scheme, minRefreshInterval.
-//   - Tenant-set fields on the identifier WIN. So a tenant can extend
-//     `audiences` (set-union) or override `header` for a special route
-//     without forking the IdP definition cluster-wide.
+//   - The IdP defines the canonical TRUST material: issuerUrl and
+//     jwksUrl. These OVERWRITE any tenant-supplied value. The
+//     point of `idpRef` is that the cluster operator decides what
+//     issuer + signing-key endpoint a JWT identifier is anchored to;
+//     letting a tenant override either of those would defeat the
+//     reference and let a tenant with AuthConfig write access
+//     silently retarget a JWT identifier at an attacker-controlled
+//     IdP while still appearing to use the approved one.
+//   - The IdP defines the DEFAULT for non-trust-material fields:
+//     header, scheme, minRefreshInterval. Tenants may override these
+//     because they are operational ergonomics, not security anchors
+//     (you might serve token X via a different header on a
+//     specific route, but you do not silently retarget X to a
+//     different signing authority).
+//   - Audiences are set-unioned: cluster-defined audiences are
+//     additive with tenant-supplied ones. This supports the
+//     "API gateway shared by two services" idiom.
 //   - Unknown / typo'd `idpRef` is a hard config error — the
 //     reconciler surfaces it on AuthConfig.status.
 //
@@ -57,13 +69,22 @@ func ResolveIdPRefs(ac *config.AuthConfig, idps []v1alpha1.IdentityProvider) err
 	return nil
 }
 
-// mergeIdPInto copies fields from idp into cfg, leaving any
-// tenant-set value alone. For audiences the merge is a set-union
-// because an "API gateway shared by two services" idiom genuinely
-// wants the cluster-defined list AND the tenant's extra audience.
+// mergeIdPInto copies fields from idp into cfg.
+//
+// issuerUrl and jwksUrl are TRUST anchors — when the IdP defines
+// them, they OVERWRITE any tenant-supplied value. header, scheme,
+// minRefreshInterval are operational defaults — the tenant may
+// override. audiences are set-unioned.
 func mergeIdPInto(cfg map[string]any, idp v1alpha1.IdentityProviderSpec) {
-	setIfMissing(cfg, "issuerUrl", idp.IssuerURL)
-	setIfMissing(cfg, "jwksUrl", idp.JWKSURL)
+	// Trust material: IdP wins. A tenant-supplied issuerUrl/jwksUrl
+	// alongside an idpRef is a misconfiguration; we accept it (no
+	// hard error here, to keep CRD admission and AuthConfig compile
+	// robust against minor config drift) but the tenant value is
+	// dropped.
+	setAuthoritative(cfg, "issuerUrl", idp.IssuerURL)
+	setAuthoritative(cfg, "jwksUrl", idp.JWKSURL)
+
+	// Operational defaults: tenant override allowed.
 	setIfMissing(cfg, "header", idp.Header)
 	setIfMissing(cfg, "scheme", idp.Scheme)
 	setIfMissing(cfg, "minRefreshInterval", idp.MinRefreshInterval)
@@ -88,6 +109,16 @@ func mergeIdPInto(cfg map[string]any, idp v1alpha1.IdentityProviderSpec) {
 		}
 		cfg["audiences"] = merged
 	}
+}
+
+// setAuthoritative writes value into cfg[key], overwriting any
+// existing tenant value. Used for trust-material fields where the
+// IdP must win.
+func setAuthoritative(cfg map[string]any, key, value string) {
+	if value == "" {
+		return
+	}
+	cfg[key] = value
 }
 
 func setIfMissing(cfg map[string]any, key, value string) {

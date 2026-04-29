@@ -6,9 +6,9 @@ unused: the OTel global tracer is a no-op until an exporter is
 registered, the audit sink defaults to `audit.Discard`, and the
 Prometheus registry is mounted on the existing HTTP listener.
 
-**Source:** [pkg/observability/metrics](../../pkg/observability/metrics/),
-[pkg/observability/tracing](../../pkg/observability/tracing/),
-[pkg/observability/audit](../../pkg/observability/audit/).
+**Source:** [pkg/observability/metrics](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/observability/metrics/),
+[pkg/observability/tracing](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/observability/tracing/),
+[pkg/observability/audit](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/observability/audit/).
 
 ## Prometheus metrics
 
@@ -147,7 +147,7 @@ observability:
 ## References
 
 - DESIGN: [DESIGN.md §M9](../DESIGN.md).
-- Sources: [pkg/observability/metrics/metrics.go](../../pkg/observability/metrics/metrics.go),
-  [pkg/observability/tracing/tracing.go](../../pkg/observability/tracing/tracing.go),
-  [pkg/observability/audit/audit.go](../../pkg/observability/audit/audit.go).
-- `lwauthctl audit`: [cmd/lwauthctl](../../cmd/lwauthctl/).
+- Sources: [pkg/observability/metrics/metrics.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/observability/metrics/metrics.go),
+  [pkg/observability/tracing/tracing.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/observability/tracing/tracing.go),
+  [pkg/observability/audit/audit.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/observability/audit/audit.go).
+- `lwauthctl audit`: [cmd/lwauthctl](https://github.com/mikeappsec/lightweightauth/tree/main/cmd/lwauthctl/).

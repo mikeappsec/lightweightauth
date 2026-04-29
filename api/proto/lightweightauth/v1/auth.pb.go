@@ -123,7 +123,6 @@ type PeerInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RemoteAddr    string                 `protobuf:"bytes,1,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
 	SpiffeId      string                 `protobuf:"bytes,2,opt,name=spiffe_id,json=spiffeId,proto3" json:"spiffe_id,omitempty"`
-	CertChain     []byte                 `protobuf:"bytes,3,opt,name=cert_chain,json=certChain,proto3" json:"cert_chain,omitempty"` // DER-encoded leaf cert; full chain optional
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -170,13 +169,6 @@ func (x *PeerInfo) GetSpiffeId() string {
 		return x.SpiffeId
 	}
 	return ""
-}
-
-func (x *PeerInfo) GetCertChain() []byte {
-	if x != nil {
-		return x.CertChain
-	}
-	return nil
 }
 
 type Identity struct {
@@ -341,13 +333,12 @@ const file_lightweightauth_v1_auth_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
 	"\fContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Z\n" +
 	"\bPeerInfo\x12\x1f\n" +
 	"\vremote_addr\x18\x01 \x01(\tR\n" +
 	"remoteAddr\x12\x1b\n" +
-	"\tspiffe_id\x18\x02 \x01(\tR\bspiffeId\x12\x1d\n" +
-	"\n" +
-	"cert_chain\x18\x03 \x01(\fR\tcertChain\"\xb9\x01\n" +
+	"\tspiffe_id\x18\x02 \x01(\tR\bspiffeIdJ\x04\b\x03\x10\x04R\n" +
+	"cert_chain\"\xb9\x01\n" +
 	"\bIdentity\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\tR\asubject\x12\x16\n" +
 	"\x06source\x18\x02 \x01(\tR\x06source\x12@\n" +

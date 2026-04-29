@@ -7,7 +7,7 @@ plugin. Composed into one type — `upstream.Guard` — that owns a
 circuit breaker, a token-bucket retry budget, and bounded exponential
 backoff. Every consumer exposes a uniform `resilience:` block.
 
-**Source:** [pkg/upstream](../../pkg/upstream/guard.go).
+**Source:** [pkg/upstream](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/upstream/guard.go).
 **Wired into:** `openfga` Check, `oauth2-introspection`,
 `clientauth` token fetch, `valkey` cache (Get/Set/Delete each guarded).
 
@@ -113,7 +113,7 @@ default:                                           // last attempt's error
 ## References
 
 - DESIGN: [DESIGN.md §M11](../DESIGN.md) "outbound resilience".
-- Chaos validation: [tests/chaos/chaos_test.go](../../tests/chaos/chaos_test.go) (M12 slice 8).
-- Source: [pkg/upstream/guard.go](../../pkg/upstream/guard.go),
-  [pkg/upstream/breaker.go](../../pkg/upstream/breaker.go),
-  [pkg/upstream/budget.go](../../pkg/upstream/budget.go).
+- Chaos validation: [tests/chaos/chaos_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/tests/chaos/chaos_test.go) (M12 slice 8).
+- Source: [pkg/upstream/guard.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/upstream/guard.go),
+  [pkg/upstream/breaker.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/upstream/breaker.go),
+  [pkg/upstream/budget.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/upstream/budget.go).

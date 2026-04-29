@@ -56,11 +56,17 @@ func NewBroker() *Broker {
 // value (older queued values are dropped). Publish never blocks on a
 // subscriber.
 //
-// Publish is safe to call from a single goroutine. The reconciler is
-// the canonical caller and it serializes its own publishes; calling
-// Publish from multiple goroutines concurrently is not part of the
-// contract and may, under contention, allow an older snapshot to
-// clobber a newer one in a slow subscriber's pending slot.
+// Publish is safe to call from many goroutines concurrently. Version
+// assignment is serialized inside the broker so every snapshot gets a
+// unique, monotonically increasing version. Delivery to subscribers
+// happens outside the broker mutex, so two concurrent publishers may
+// hand a subscriber their snapshots in either order; subscriptions
+// reject any snapshot whose version is not strictly greater than the
+// highest one already queued or delivered (see [subscription.deliver]),
+// so a slow subscriber's pending slot only ever moves forwards.
+//
+// Multi-writer fan-in (per-tenant publishers, federated control
+// planes) is therefore part of the contract. M12-BROKER-MW (v1.1).
 func (b *Broker) Publish(spec *config.AuthConfig) Snapshot {
 	b.mu.Lock()
 	b.version++
@@ -104,8 +110,13 @@ func (b *Broker) Subscribe(ctx context.Context) <-chan Snapshot {
 	b.subs[s] = struct{}{}
 	if b.current != nil {
 		// Prime with the current snapshot so a late subscriber
-		// doesn't have to wait for the next reconcile.
+		// doesn't have to wait for the next reconcile. Seed
+		// highWater too so a concurrent Publish that delivers an
+		// already-superseded snapshot to this brand-new subscription
+		// (possible under multi-writer Publish, M12-BROKER-MW)
+		// doesn't accidentally regress us below b.current.
 		s.pending = b.current
+		s.highWater = b.current.Version
 	}
 	b.mu.Unlock()
 
@@ -120,15 +131,32 @@ func (b *Broker) Subscribe(ctx context.Context) <-chan Snapshot {
 
 // subscription owns one pending slot. deliver is called by Publish
 // under no locks (the broker copies the subscriber list first).
+//
+// highWater is the highest snapshot version this subscription has ever
+// observed — either currently queued in pending, or already delivered
+// through the channel. deliver compares against it so a delayed
+// concurrent Publish from a second writer cannot regress the slot to
+// an older snapshot. See [Broker.Publish] for the multi-writer
+// rationale.
 type subscription struct {
-	mu      sync.Mutex
-	cond    chan struct{} // signaled when pending becomes non-nil
-	pending *Snapshot
-	ch      chan Snapshot // unused — pump reads through `pending`
+	mu        sync.Mutex
+	cond      chan struct{} // signaled when pending becomes non-nil
+	pending   *Snapshot
+	highWater uint64
+	ch        chan Snapshot // unused — pump reads through `pending`
 }
 
+// deliver hands snap to the subscription's pending slot, but only if
+// snap is newer than anything we've already observed. The
+// version-compare here is what makes [Broker.Publish] safe to call
+// from many goroutines concurrently.
 func (s *subscription) deliver(snap Snapshot) {
 	s.mu.Lock()
+	if snap.Version <= s.highWater {
+		s.mu.Unlock()
+		return
+	}
+	s.highWater = snap.Version
 	s.pending = &snap
 	s.mu.Unlock()
 	// Best-effort wake; pump uses a select with default.

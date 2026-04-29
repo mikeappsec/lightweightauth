@@ -4,7 +4,7 @@ Adds (or overwrites) headers on the upstream request and/or downstream
 response. The most common mutator — used to forward identity downstream
 without re-parsing the bearer.
 
-**Source:** [pkg/mutator/headers](../../pkg/mutator/headers/headers.go) — registered as `header-add`.
+**Source:** [pkg/mutator/headers](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/headers/headers.go) — registered as `header-add`.
 
 ## When to use
 
@@ -77,5 +77,5 @@ X-Source:  bearer
 
 ## References
 
-- Source: [pkg/mutator/headers/headers.go](../../pkg/mutator/headers/headers.go).
+- Source: [pkg/mutator/headers/headers.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/headers/headers.go).
 - DESIGN.md §6 — response mutators.

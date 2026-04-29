@@ -83,6 +83,11 @@ type Options struct {
 	DisableHTTPAuthorize bool
 	// DisableHTTPMetrics removes /metrics from the public listener.
 	DisableHTTPMetrics bool
+	// DisableHTTPOpenAPI removes /openapi.json and /openapi.yaml from
+	// the public listener. The endpoints sit on the same mux as
+	// /metrics, so operators who keep observability internal will
+	// usually disable both. DOC-OPENAPI-1.
+	DisableHTTPOpenAPI bool
 
 	// MaxRequestBytes caps inbound /v1/authorize bodies. 0 -> 1 MiB.
 	MaxRequestBytes int64
@@ -214,6 +219,7 @@ func Run(opts Options) error {
 		MaxRequestBytes:  opts.MaxRequestBytes,
 		DisableAuthorize: opts.DisableHTTPAuthorize,
 		DisableMetrics:   opts.DisableHTTPMetrics,
+		DisableOpenAPI:   opts.DisableHTTPOpenAPI,
 	})
 	httpSrv := &http.Server{
 		Addr:              opts.HTTPAddr,
@@ -317,6 +323,7 @@ func Main() {
 	enableReflection := flag.Bool("enable-reflection", false, "register gRPC reflection (dev only)")
 	disableAuthorize := flag.Bool("disable-http-authorize", false, "remove /v1/authorize from the HTTP mux")
 	disableMetrics := flag.Bool("disable-http-metrics", false, "remove /metrics from the HTTP mux")
+	disableOpenAPI := flag.Bool("disable-http-openapi", false, "remove /openapi.json and /openapi.yaml from the HTTP mux")
 	maxBody := flag.Int64("max-request-bytes", 0, "cap on /v1/authorize body bytes (0 -> 1 MiB)")
 	printBuildInfo := flag.Bool("print-build-info", false, "print build attributes (version, commit, go runtime, FIPS mode) and exit")
 	flag.Parse()
@@ -344,6 +351,7 @@ func Main() {
 		EnableReflection:     *enableReflection,
 		DisableHTTPAuthorize: *disableAuthorize,
 		DisableHTTPMetrics:   *disableMetrics,
+		DisableHTTPOpenAPI:   *disableOpenAPI,
 		MaxRequestBytes:      *maxBody,
 	}); err != nil {
 		slog.Error("lwauthd", "err", err)

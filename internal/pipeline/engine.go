@@ -294,7 +294,24 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 		}
 		return merged, nil
 	default: // FirstMatch
-		var lastErr error
+		// Security: only ErrNoMatch falls through. The error taxonomy
+		// in pkg/module/errors.go documents that ErrInvalidCredential
+		// "stops trying further identifiers"; this loop honours that
+		// contract for every non-ErrNoMatch outcome so a request with
+		// an *invalid* DPoP / mTLS / HMAC credential cannot silently
+		// downgrade to a weaker later identifier (plain JWT, API key,
+		// ...) and authenticate that way.
+		//
+		//   - ErrNoMatch         -> identifier didn't apply, try next.
+		//   - any other error    -> terminal; the request is rejected.
+		//   - id != nil          -> success; return the match.
+		//   - id == nil, err nil -> identifier abstained, try next.
+		//
+		// Deployments that genuinely need "try the next identifier on
+		// invalid credential" (e.g. running two JWT issuers in
+		// parallel during a migration) should compose the two behind a
+		// single identifier or use AllMust mode — it must not be the
+		// silent default.
 		for _, idr := range e.identifiers {
 			id, err := idr.Identify(ctx, r)
 			if err != nil {
@@ -303,8 +320,7 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 					continue
 				}
 				metrics.Default().ObserveIdentifier(idr.Name(), "error")
-				lastErr = err
-				continue
+				return nil, err
 			}
 			if id != nil {
 				if id.Source == "" {
@@ -314,9 +330,6 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 				return id, nil
 			}
 			metrics.Default().ObserveIdentifier(idr.Name(), "no_match")
-		}
-		if lastErr != nil {
-			return nil, lastErr
 		}
 		return nil, fmt.Errorf("%w: no identifier matched", module.ErrInvalidCredential)
 	}

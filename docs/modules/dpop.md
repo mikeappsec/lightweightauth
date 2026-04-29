@@ -5,7 +5,7 @@ that binds the request to a key, then delegates the *bearer*
 verification to an inner identifier (typically [`jwt`](jwt.md) or
 [`oauth2-introspection`](oauth2-introspection.md)).
 
-**Source:** [pkg/identity/dpop](../../pkg/identity/dpop/dpop.go) — registered as `dpop`.
+**Source:** [pkg/identity/dpop](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/dpop/dpop.go) — registered as `dpop`.
 
 ## When to use
 
@@ -92,4 +92,4 @@ key the IdP bound the token to.
 ## References
 
 - RFC 9449 (DPoP), RFC 7638 (JWK Thumbprint), RFC 7800 (`cnf` claim).
-- Source: [pkg/identity/dpop/dpop.go](../../pkg/identity/dpop/dpop.go).
+- Source: [pkg/identity/dpop/dpop.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/dpop/dpop.go).

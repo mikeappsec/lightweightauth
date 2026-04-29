@@ -73,6 +73,13 @@ func (s *ExtAuthzServer) Check(ctx context.Context, in *authv3.CheckRequest) (*a
 
 // requestFromCheck folds Envoy's nested AttributeContext into the flat
 // transport-agnostic *module.Request the pipeline understands.
+//
+// Normalization: header keys are lowercased so module code can rely on
+// the [module.Request.Headers] invariant regardless of which door
+// delivered the request. (HTTP/2 already mandates lowercase on the
+// wire, so for Door A this is usually a no-op — we apply it
+// defensively in case a future Envoy version forwards mixed-case keys
+// from an HTTP/1.1 hop.)
 func requestFromCheck(in *authv3.CheckRequest) *module.Request {
 	out := &module.Request{Headers: map[string][]string{}}
 	if in == nil || in.Attributes == nil {
@@ -87,16 +94,19 @@ func requestFromCheck(in *authv3.CheckRequest) *module.Request {
 		out.Path = r.Http.Path
 		out.Body = []byte(r.Http.Body)
 		for k, v := range r.Http.Headers {
-			out.Headers[k] = []string{v}
+			out.Headers[strings.ToLower(k)] = []string{v}
 		}
 	}
 
-	// mTLS peer certificate URI-SAN, base64-DER, etc., live under source.
-	if src := attrs.Source; src != nil {
-		if src.Certificate != "" {
-			out.PeerCerts = []byte(src.Certificate)
-		}
-	}
+	// Note on PeerCerts: we deliberately do NOT populate it from
+	// attrs.Source.Certificate. That field carries Envoy's XFCC value
+	// (a URL-encoded PEM string), not raw DER — stuffing it into
+	// PeerCerts (which the mtls module parses with x509.ParseCertificate)
+	// would yield ErrInvalidCredential on every request. The mtls
+	// module reads XFCC from the configured header instead (default
+	// "x-forwarded-client-cert"), gated by trustForwardedClientCert.
+	// PeerCerts is reserved for the in-process TLS-termination path
+	// where lwauth itself parsed the chain and has DER bytes.
 
 	// Envoy passes the per-route filter metadata under a well-known key.
 	// We expose anything in `lwauth.tenant` to the pipeline so policies

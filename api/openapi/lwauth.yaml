@@ -1,0 +1,341 @@
+# LightweightAuth HTTP API — OpenAPI 3.1
+#
+# This is the machine-readable contract for the public HTTP surface
+# served by `lwauthd` (see [pkg/lwauthd](../../pkg/lwauthd)). Production
+# traffic typically goes through the gRPC `ext_authz` Door A
+# ([api/proto/lightweightauth/v1/auth.proto](../proto/lightweightauth/v1/auth.proto));
+# this document describes the JSON Door C used by `lwauthctl check`,
+# local development, and integration tests, plus the operator-facing
+# observability and discovery endpoints.
+#
+# The spec is checked in (rather than generated at server start) so:
+#   - SDK generators (`openapi-generator`, `oapi-codegen`) can run
+#     against the repo without booting lwauthd;
+#   - CI lints the schema with the rest of the source tree;
+#   - any change to the wire surface shows up as a diff in review.
+#
+# It is also embedded into the lwauthd binary and served at
+# `GET /openapi.json` (and `/openapi.yaml`) by
+# [internal/server/http.go](../../internal/server/http.go) so a running
+# instance can be introspected by tools that don't have the repo.
+#
+# Tracked under DOC-OPENAPI-1 in [docs/security/v1.0-review.md](../../docs/security/v1.0-review.md).
+openapi: 3.1.0
+info:
+  title: LightweightAuth HTTP API
+  version: "1.1.0"
+  summary: JSON authorization, health, and observability surface for lwauthd.
+  description: |
+    The HTTP surface complements the gRPC ext_authz Door A. Operators
+    typically expose only `/healthz`, `/readyz`, `/metrics`, and
+    `/openapi.json` on a public listener, and reach `/v1/authorize`
+    over an internal mesh path or via `lwauthctl`.
+
+    Module-mounted prefixes (e.g. the OAuth2 authorization-code module's
+    `/oauth2/*` endpoints, the OIDC-discovery JWKS proxy) are mounted on
+    the same mux at engine compile time and are therefore not enumerated
+    here — they belong to the module's own documentation under
+    [docs/modules/](../../docs/modules/). This spec covers the
+    transport-layer endpoints lwauthd owns directly.
+  contact:
+    name: LightweightAuth maintainers
+    url: https://github.com/mikeappsec/lightweightauth
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: http://localhost:8080
+    description: Default `lwauthd` HTTP listener.
+  - url: https://{host}
+    description: TLS-terminated deployment.
+    variables:
+      host:
+        default: lwauth.internal
+        description: Operator-chosen hostname for the lwauthd listener.
+
+tags:
+  - name: authorize
+    description: Decision API. The same logic that backs the gRPC ext_authz path.
+  - name: health
+    description: Kubernetes-style liveness / readiness probes.
+  - name: observability
+    description: Prometheus scrape and machine-readable spec.
+
+paths:
+  /v1/authorize:
+    post:
+      tags: [authorize]
+      summary: Evaluate an authorization decision.
+      description: |
+        Accepts a synthetic request — method, host, path, headers, and
+        an optional tenant — and runs it through the configured
+        identifier → authorizer → mutator pipeline. Identical to the
+        gRPC `ext_authz.Check` path; the same modules see the same
+        `module.Request` (header keys are lowercased, method
+        uppercased — see
+        [docs/testing/request-invariants.md](../../docs/testing/request-invariants.md)).
+
+        On allow, status is 200. On deny, status is the policy-chosen
+        4xx (typically 401 or 403); the body still carries the JSON
+        decision shape. Failures of the surface itself (missing engine,
+        oversize body, malformed JSON) are plain-text errors, not the
+        decision shape.
+      operationId: authorize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthorizeRequest"
+            examples:
+              jwtBearer:
+                summary: JWT bearer over HTTPS to an internal API.
+                value:
+                  method: GET
+                  host: api.example.com
+                  path: /v1/orders/42
+                  headers:
+                    authorization: ["Bearer eyJhbGciOi..."]
+                  tenantId: acme
+              hmacSigned:
+                summary: HMAC-signed POST.
+                value:
+                  method: POST
+                  host: api.example.com
+                  path: /webhooks/stripe
+                  headers:
+                    x-signature: ["t=1714291200,v1=abc..."]
+                    content-type: ["application/json"]
+      responses:
+        "200":
+          description: Allow. The pipeline accepted the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorizeResponse"
+        "401":
+          description: Deny — credential missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorizeResponse"
+        "403":
+          description: Deny — credential valid but policy refused.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthorizeResponse"
+        "400":
+          description: Malformed JSON body.
+          content:
+            text/plain:
+              schema: { type: string }
+        "405":
+          description: Wrong method (only POST is accepted).
+          content:
+            text/plain:
+              schema: { type: string }
+        "413":
+          description: |
+            Body exceeds the configured cap (default 1 MiB, override
+            with `--max-request-bytes` or `Options.MaxRequestBytes`).
+          content:
+            text/plain:
+              schema: { type: string }
+        "503":
+          description: |
+            No engine is loaded. Returned during the brief window
+            between process start and the first successful config
+            compile in `WatchNamespace` mode.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness probe.
+      description: |
+        Returns 200 unconditionally. Indicates the process is up and
+        the HTTP listener is accepting connections; says nothing about
+        whether an engine is loaded (use `/readyz` for that).
+      operationId: healthz
+      responses:
+        "200": { description: Process is alive. }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness probe.
+      description: |
+        Returns 200 once an engine is loaded and the pipeline is ready
+        to evaluate requests; 503 otherwise. Suitable as a Kubernetes
+        readinessProbe — kube-proxy will hold traffic until the first
+        config has compiled.
+      operationId: readyz
+      responses:
+        "200": { description: Engine loaded; ready to authorize. }
+        "503":
+          description: No engine loaded yet (early startup or compile failure).
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /metrics:
+    get:
+      tags: [observability]
+      summary: Prometheus scrape endpoint.
+      description: |
+        Standard Prometheus text exposition format. Counters, gauges,
+        and histograms are documented in
+        [docs/operations/metrics.md](../../docs/operations/metrics.md).
+        Notable series:
+
+          - `lwauth_decisions_total{decision,module}` — terminal verdicts.
+          - `lwauth_decision_cache_*` — decision-cache hit/miss counts.
+          - `lwauth_fips_enabled` — 1 when running under `GOFIPS140=v1.0.0`.
+          - `lwauth_build_info{version,commit,go_version}` — release identity.
+
+        Operators who run a separate metrics listener can remove this
+        endpoint with `--disable-http-metrics`.
+      operationId: metrics
+      responses:
+        "200":
+          description: Prometheus exposition.
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: |
+                  Prometheus text format. See
+                  https://prometheus.io/docs/instrumenting/exposition_formats/.
+        "404":
+          description: Endpoint disabled via `--disable-http-metrics`.
+
+  /openapi.json:
+    get:
+      tags: [observability]
+      summary: This OpenAPI document, JSON-encoded.
+      description: |
+        Returns the embedded copy of `api/openapi/lwauth.yaml` as
+        JSON. Useful for tools that don't have the repo checked out
+        — codegen, Swagger UI, Postman import. Content is identical
+        to `/openapi.yaml`.
+
+        Like `/metrics`, this endpoint can be removed from the public
+        listener with `--disable-http-openapi` if operators prefer to
+        publish the spec out-of-band.
+      operationId: openapiJSON
+      responses:
+        "200":
+          description: OpenAPI document.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: OpenAPI 3.1 root object.
+        "404":
+          description: Endpoint disabled via `--disable-http-openapi`.
+
+  /openapi.yaml:
+    get:
+      tags: [observability]
+      summary: This OpenAPI document, YAML-encoded.
+      description: |
+        Returns the embedded copy of `api/openapi/lwauth.yaml`
+        verbatim. The YAML form preserves comments and ordering,
+        which the JSON form drops.
+      operationId: openapiYAML
+      responses:
+        "200":
+          description: OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+        "404":
+          description: Endpoint disabled via `--disable-http-openapi`.
+
+components:
+  schemas:
+    AuthorizeRequest:
+      type: object
+      description: |
+        Synthetic request handed to the pipeline. Mirrors the
+        `module.Request` shape ([pkg/module/module.go](../../pkg/module/module.go))
+        with the same invariants — see
+        [docs/testing/request-invariants.md](../../docs/testing/request-invariants.md):
+
+          - `method` is uppercased before evaluation.
+          - `headers` keys are lowercased before evaluation.
+          - `host` is the HTTP authority the client targeted, not a
+            transport peer address.
+      required: [method, path]
+      properties:
+        method:
+          type: string
+          description: HTTP method. Case-insensitive on input; canonicalised to upper-case before policies see it.
+          examples: ["GET", "POST"]
+        host:
+          type: string
+          description: HTTP authority (`Host` header value) the client targeted.
+          examples: ["api.example.com"]
+        path:
+          type: string
+          description: Resource the request targets — HTTP path, gRPC FQN, Kafka topic, etc. Policies match against this verbatim.
+          examples: ["/v1/orders/42", "/example.Service/Method"]
+        headers:
+          type: object
+          description: |
+            Request headers. Keys are case-insensitive on input and
+            lowercased before the engine sees them; values are
+            preserved verbatim. Multi-value headers use a JSON array.
+          additionalProperties:
+            type: array
+            items: { type: string }
+          examples:
+            - authorization: ["Bearer eyJhbGciOi..."]
+              x-tenant: ["acme"]
+        tenantId:
+          type: string
+          description: Optional tenant identifier. When absent, the engine derives tenancy from configured identity sources.
+
+    AuthorizeResponse:
+      type: object
+      description: |
+        Decision shape. The same shape is returned for allow and
+        deny; status code distinguishes the two.
+
+        `reason` is the *public* reason (status-aligned generic
+        string); the verbose internal reason is captured by the audit
+        log and is never returned to callers, by design — see
+        [internal/server/public_reason.go](../../internal/server/public_reason.go).
+      required: [allow]
+      properties:
+        allow:
+          type: boolean
+          description: True iff the request was authorised.
+        status:
+          type: integer
+          description: HTTP status the engine recommends. Mirrors the response status code.
+          examples: [200, 401, 403]
+        reason:
+          type: string
+          description: Public, status-aligned reason. Safe to surface to end users.
+          examples: ["unauthorized", "forbidden"]
+        upstreamHeaders:
+          type: object
+          additionalProperties: { type: string }
+          description: Headers the engine would inject on the upstream request (e.g. `X-Auth-Subject`).
+        responseHeaders:
+          type: object
+          additionalProperties: { type: string }
+          description: Headers the engine would set on the downstream response (e.g. `WWW-Authenticate`).
+        subject:
+          type: string
+          description: Identity subject when an identifier matched. Empty when no identity was established.
+        identitySource:
+          type: string
+          description: |
+            Name of the identifier module that established the
+            identity (e.g. `jwt`, `apikey`, `mtls`). Empty when no
+            identity was established.

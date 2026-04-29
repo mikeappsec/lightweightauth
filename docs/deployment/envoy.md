@@ -10,7 +10,7 @@ parity](#3-sec-proxy-1-parity) for the gory details.
 
 Tested against Envoy **1.37.3**. The `envoy.service.auth.v3` API is
 unchanged from 1.18 → 1.37, so the wiring works on any 1.18+ Envoy. The
-sample config under [deploy/envoy/sample.yaml](../../deploy/envoy/sample.yaml)
+sample config under [deploy/envoy/sample.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/deploy/envoy/sample.yaml)
 is the minimum that boots; the snippets below are the minimum that's
 **safe in production**.
 
@@ -212,9 +212,9 @@ explicitly verify:
 
 ## 6. References
 
-- Sample boot config: [deploy/envoy/sample.yaml](../../deploy/envoy/sample.yaml)
+- Sample boot config: [deploy/envoy/sample.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/deploy/envoy/sample.yaml)
 - Topology + Helm wiring: [docs/DEPLOYMENT.md](../DEPLOYMENT.md)
 - SEC-PROXY-1 write-up: [docs/security/v1.0-review.md](../security/v1.0-review.md)
-- Mode B (proxy) equivalent flags: [lightweightauth-proxy/cmd/lwauth-proxy/main.go](../../../lightweightauth-proxy/cmd/lwauth-proxy/main.go) — `--max-auth-body`, `--trust-forward-headers`.
+- Mode B (proxy) equivalent flags: [lightweightauth-proxy/cmd/lwauth-proxy/main.go](https://github.com/mikeappsec/lightweightauth/blob/main/lightweightauth-proxy/cmd/lwauth-proxy/main.go) — `--max-auth-body`, `--trust-forward-headers`.
 - mTLS module + anchor requirement: [docs/modules/mtls.md](../modules/mtls.md)
 - Envoy ext_authz reference: <https://www.envoyproxy.io/docs/envoy/v1.37.3/configuration/http/http_filters/ext_authz_filter>

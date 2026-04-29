@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"fmt"
+	"strings"
 
 	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
@@ -41,23 +42,34 @@ func reqToProto(r *module.Request) *authv1.AuthorizeRequest {
 			if len(vs) == 0 {
 				continue
 			}
-			out.Headers[k] = joinHeaderValues(vs)
+			// Lowercase keys per the [module.Request.Headers]
+			// invariant. r.Headers should already be lowercase if it
+			// came through one of the in-process adapters, but a
+			// module that constructed a Request by hand might not be;
+			// normalize defensively so the plugin sees the same shape
+			// Door B clients see.
+			out.Headers[strings.ToLower(k)] = joinHeaderValues(vs)
 		}
 	}
-	// Surface Host as a synthetic "Host" header if the caller did not
+	// Surface Host as a synthetic "host" header if the caller did not
 	// already include one — plugins that route by virtual-host (e.g.
 	// a SAML bridge handling multiple IdPs by URL) need it.
 	if r.Host != "" {
 		if out.Headers == nil {
 			out.Headers = map[string]string{}
 		}
-		if _, ok := out.Headers["Host"]; !ok {
-			out.Headers["Host"] = r.Host
+		if _, ok := out.Headers["host"]; !ok {
+			out.Headers["host"] = r.Host
 		}
 	}
-	if len(r.PeerCerts) > 0 {
-		out.Peer = &authv1.PeerInfo{CertChain: r.PeerCerts}
-	}
+	// Verified peer certificates are not forwarded to plugins over
+	// the wire. The cert bytes are trust-bearing, and serialising
+	// them into application data would invite a downstream plugin
+	// (or anything that proxies for one) to start treating
+	// non-handshake-derived bytes as verified. Plugins that need
+	// peer identity should read the SPIFFE ID from PeerInfo, the
+	// XFCC string from Headers["x-forwarded-client-cert"], or
+	// claims surfaced by an upstream identifier.
 	if len(r.Context) > 0 {
 		out.Context = make(map[string]string, len(r.Context))
 		for k, v := range r.Context {

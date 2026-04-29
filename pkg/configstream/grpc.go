@@ -6,23 +6,45 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	"github.com/mikeappsec/lightweightauth/internal/config"
 )
 
+// Authorizer gates each inbound StreamAuthConfig RPC. It runs once at
+// stream open with the gRPC stream context, which carries peer TLS state
+// and per-call metadata. Returning a non-nil error tears the stream down
+// before any snapshot is sent. Returning nil admits the stream.
+//
+// The fail-closed contract is intentional: AuthConfigSnapshot bytes ARE
+// trust material (they shape every downstream authorize decision in every
+// pod that consumes them), so an embedder who registers ConfigDiscovery
+// MUST tell the server how to authenticate the caller. There is no
+// "anonymous" mode.
+type Authorizer func(ctx context.Context) error
+
 // Server adapts a *Broker to the ConfigDiscovery gRPC service. Each
-// inbound StreamAuthConfig RPC subscribes once and forwards every
-// snapshot until the client disconnects or the broker is dropped.
+// inbound StreamAuthConfig RPC is gated by an Authorizer, then subscribes
+// once and forwards every snapshot until the client disconnects or the
+// broker is dropped.
 type Server struct {
 	authv1.UnimplementedConfigDiscoveryServer
 	broker *Broker
+	auth   Authorizer
 }
 
-// NewServer wraps b. The returned value is registered with a
-// grpc.Server via Register.
-func NewServer(b *Broker) *Server {
-	return &Server{broker: b}
+// NewServer wraps b and gates every StreamAuthConfig call through auth.
+// auth MUST be non-nil — passing nil panics rather than silently exposing
+// the snapshot stream. Embedders who genuinely want an open endpoint
+// should pass an explicit allow-everything Authorizer so the choice is
+// visible in their own code review.
+func NewServer(b *Broker, auth Authorizer) *Server {
+	if auth == nil {
+		panic("configstream.NewServer: Authorizer is required; pass an explicit allow function if you really want an open endpoint")
+	}
+	return &Server{broker: b, auth: auth}
 }
 
 // Register attaches s to gs under the standard
@@ -31,12 +53,20 @@ func (s *Server) Register(gs grpc.ServiceRegistrar) {
 	authv1.RegisterConfigDiscoveryServer(gs, s)
 }
 
-// StreamAuthConfig serves one client. It subscribes to the broker
-// (which primes the channel with the latest snapshot, if any) and
-// forwards each value as a JSON-encoded AuthConfigSnapshot until the
-// client cancels.
+// StreamAuthConfig serves one client. It runs the configured Authorizer
+// against the stream context first, then subscribes to the broker (which
+// primes the channel with the latest snapshot, if any) and forwards each
+// value as a JSON-encoded AuthConfigSnapshot until the client cancels.
 func (s *Server) StreamAuthConfig(_ *authv1.StreamAuthConfigRequest, stream grpc.ServerStreamingServer[authv1.AuthConfigSnapshot]) error {
 	ctx := stream.Context()
+	if err := s.auth(ctx); err != nil {
+		// Preserve any gRPC status the Authorizer returned; otherwise
+		// surface as Unauthenticated so callers see a stable code.
+		if _, ok := status.FromError(err); ok {
+			return err
+		}
+		return status.Errorf(codes.Unauthenticated, "configstream: %v", err)
+	}
 	sub := s.broker.Subscribe(ctx)
 	for {
 		select {

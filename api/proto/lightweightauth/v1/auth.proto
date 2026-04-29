@@ -31,7 +31,13 @@ message AuthorizeRequest {
 message PeerInfo {
   string remote_addr = 1;
   string spiffe_id   = 2;
-  bytes  cert_chain  = 3; // DER-encoded leaf cert; full chain optional
+  // Field 3 (formerly bytes cert_chain) was removed: trust material
+  // for mTLS-based identifiers comes exclusively from the gRPC
+  // server's verified TLS handshake, never from the request body.
+  // The number is reserved so a future, intentionally trusted field
+  // does not silently reuse it.
+  reserved 3;
+  reserved "cert_chain";
 }
 
 message Identity {

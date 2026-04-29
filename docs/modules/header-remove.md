@@ -4,7 +4,7 @@ Drops named headers from the upstream request before it reaches your
 application. Pairs with `header-add` so lwauth has full control over
 which auth-relevant headers cross the trust boundary.
 
-**Source:** [pkg/mutator/headers](../../pkg/mutator/headers/headers.go) — registered as `header-remove`.
+**Source:** [pkg/mutator/headers](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/headers/headers.go) — registered as `header-remove`.
 
 ## When to use
 
@@ -78,4 +78,4 @@ X-Roles: editor
 
 ## References
 
-- Source: [pkg/mutator/headers/headers.go](../../pkg/mutator/headers/headers.go).
+- Source: [pkg/mutator/headers/headers.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/headers/headers.go).

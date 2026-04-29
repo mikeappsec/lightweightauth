@@ -4,7 +4,7 @@ Verifies opaque OAuth 2.0 access tokens by calling the IdP's RFC 7662
 introspection endpoint. The result is cached per-token until `exp` (or
 `maxCacheTtl`) so the IdP sees one round-trip per token.
 
-**Source:** [pkg/identity/introspection](../../pkg/identity/introspection/introspection.go) — registered as `oauth2-introspection`.
+**Source:** [pkg/identity/introspection](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/introspection/introspection.go) — registered as `oauth2-introspection`.
 
 ## When to use
 
@@ -111,4 +111,4 @@ client → lwauth → cache.Get(sha256(token)) → hit → continue
 
 - RFC 7662 (Token Introspection).
 - [DESIGN.md §4](../DESIGN.md) — token introspection.
-- Source: [pkg/identity/introspection/introspection.go](../../pkg/identity/introspection/introspection.go).
+- Source: [pkg/identity/introspection/introspection.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/introspection/introspection.go).

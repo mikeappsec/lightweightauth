@@ -113,7 +113,16 @@ func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, e
 	if err := cache.Register(cfg.JWKSURL, jwk.WithMinRefreshInterval(cfg.MinRefreshInterval)); err != nil {
 		return nil, fmt.Errorf("%w: jwt: register jwks: %v", module.ErrConfig, err)
 	}
-	if _, err := cache.Refresh(ctx, cfg.JWKSURL); err != nil {
+	// Bound the initial JWKS fetch so a blackholed or very slow IdP
+	// cannot stall lwauthd startup indefinitely. The factory's
+	// caller may pass a context.Background() (via Main / Run
+	// construction), which would never time out on its own. 30s is
+	// generous for a JWKS GET against a healthy IdP and short enough
+	// that the supervisor's startTimeout (M10) can still surface the
+	// failure as a config error.
+	refreshCtx, refreshCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer refreshCancel()
+	if _, err := cache.Refresh(refreshCtx, cfg.JWKSURL); err != nil {
 		return nil, fmt.Errorf("%w: jwt: fetch jwks %s: %v", module.ErrUpstream, cfg.JWKSURL, err)
 	}
 	keyset := jwk.NewCachedSet(cache, cfg.JWKSURL)

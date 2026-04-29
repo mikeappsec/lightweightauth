@@ -45,7 +45,10 @@ type DecisionOptions struct {
 	// cache key. Recognised values:
 	//   "sub", "tenant", "method", "host", "path",
 	//   "header:<Name>", "claim:<Name>"
-	// Unknown values are skipped so future fields don't break old configs.
+	// Unknown values are rejected at NewDecision time. A typo in the
+	// config (e.g. "pathTemplate") would otherwise silently drop that
+	// dimension from the key and let one allow decision replay across
+	// requests that differed only by the missing field.
 	KeyFields []string
 	// Backend optionally selects a non-default cache backend (e.g.
 	// shared "valkey" for multi-replica deployments). Empty Backend.Type
@@ -74,6 +77,11 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 		return nil, fmt.Errorf("decision cache: %w", err)
 	}
 	keys := append([]string(nil), o.KeyFields...)
+	for _, k := range keys {
+		if !isValidKeyField(k) {
+			return nil, fmt.Errorf("%w: cache.key: unknown field %q (recognised: sub, tenant, method, host, path, header:<Name>, claim:<Name>)", module.ErrConfig, k)
+		}
+	}
 	sort.Strings(keys) // deterministic key ordering
 	return &Decision{
 		backend:     backend,
@@ -149,6 +157,23 @@ func (d *Decision) Do(ctx context.Context, key string, fn func() (*module.Decisi
 		return nil, false, err
 	}
 	return v.(*module.Decision), false, nil
+}
+
+// isValidKeyField mirrors the switch in resolveField. Anything not listed
+// here is a configuration error and must fail closed so a typo cannot
+// silently weaken the cache key.
+func isValidKeyField(f string) bool {
+	switch f {
+	case "sub", "tenant", "method", "host", "path":
+		return true
+	}
+	if strings.HasPrefix(f, "header:") && len(f) > len("header:") {
+		return true
+	}
+	if strings.HasPrefix(f, "claim:") && len(f) > len("claim:") {
+		return true
+	}
+	return false
 }
 
 func resolveField(f string, r *module.Request, id *module.Identity) string {

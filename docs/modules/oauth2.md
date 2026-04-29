@@ -5,7 +5,7 @@ with PKCE (RFC 7636), encrypted-cookie sessions, refresh-token rotation,
 and the Device Authorization Grant (RFC 8628). Mounts the `/oauth2/*`
 HTTP routes lwauth needs to act as an OIDC Relying Party.
 
-**Source:** [pkg/identity/oauth2](../../pkg/identity/oauth2/oauth2.go) — registered as `oauth2`.
+**Source:** [pkg/identity/oauth2](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/oauth2/oauth2.go) — registered as `oauth2`.
 
 ## When to use
 
@@ -14,7 +14,7 @@ HTTP routes lwauth needs to act as an OIDC Relying Party.
 - You want logout, refresh rotation, and userinfo built in.
 
 **Don't use** for service-to-service. Use [`jwt`](jwt.md) +
-[`pkg/clientauth`](../../pkg/clientauth) instead.
+[`pkg/clientauth`](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/clientauth) instead.
 
 ## Configuration
 
@@ -104,4 +104,4 @@ extraEnv:
 
 - RFC 6749 §4.1, RFC 7636 (PKCE), RFC 8628 (Device Authorization).
 - OIDC Core 1.0, OIDC RP-Initiated Logout 1.0.
-- Source: [pkg/identity/oauth2/oauth2.go](../../pkg/identity/oauth2/oauth2.go).
+- Source: [pkg/identity/oauth2/oauth2.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/oauth2/oauth2.go).

@@ -1,0 +1,74 @@
+# DOC-COOKBOOK-1 (Tier C1, v1.1): build the mkdocs-material site so a
+# PR that breaks the nav, deletes a referenced page, or introduces an
+# anchor typo fails before merge instead of breaking the published
+# docs site after merge.
+#
+# Lives in its own workflow rather than tacked onto build.yaml so a
+# Go-only change does not pay the pip-install cost and a docs-only
+# change does not need the Go matrix; both surfaces stay independent
+# at the contributor's mental model and at the GitHub status-check
+# level.
+
+name: docs
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    # Skip on PRs that touch nothing the docs build consumes. The
+    # filter is deliberately broad: anything under docs/, the
+    # mkdocs.yml itself, the pip pin, the Makefile (because `make
+    # docs` lives there), and this workflow file.
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'Makefile'
+      - '.github/workflows/docs.yaml'
+
+# Least privilege. The build never reads secrets, never publishes
+# anything, and never needs id-token. Hosting the rendered site is a
+# follow-up commit (gh-pages or a hosted static-site provider) and
+# will opt back into pages-write at that point.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          # Cache the pip download so reruns on a hot cache install in
+          # ~2 s rather than ~30 s. The cache key is the pinned
+          # docs/requirements.txt itself, so a pin bump invalidates
+          # the cache automatically.
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: install pinned docs toolchain
+        run: python -m pip install --upgrade -r docs/requirements.txt
+
+      # `make docs` runs `mkdocs build` against the validation policy
+      # in mkdocs.yml: nav errors block, source-tree links downgrade
+      # to warnings (those resolve on GitHub but not on the static
+      # site, and are tracked separately). A non-zero exit here is a
+      # real regression, not lint noise.
+      - name: build docs site
+        run: make docs
+
+      # Surface the rendered site as a workflow artifact so a reviewer
+      # who wants to spot-check rendering on a PR can download it
+      # without running mkdocs locally. Retention kept short because
+      # the build is reproducible from the PR head.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-${{ github.sha }}
+          path: site/
+          retention-days: 7
+          if-no-files-found: error

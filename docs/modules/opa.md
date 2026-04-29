@@ -3,7 +3,7 @@
 Evaluates a Rego policy via embedded OPA. Bundles can be loaded from
 disk or pulled from an OPA bundle service.
 
-**Source:** [pkg/authz/opa](../../pkg/authz/opa/opa.go) — registered as `opa`.
+**Source:** [pkg/authz/opa](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/opa/opa.go) — registered as `opa`.
 
 ## When to use
 
@@ -100,4 +100,4 @@ Identity `{claims: {roles: [admin]}}`, any request → `allow=true` → permit.
 ## References
 
 - OPA / Rego docs: <https://www.openpolicyagent.org>.
-- Source: [pkg/authz/opa/opa.go](../../pkg/authz/opa/opa.go).
+- Source: [pkg/authz/opa/opa.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/opa/opa.go).

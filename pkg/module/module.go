@@ -37,6 +37,22 @@ type Request struct {
 	Method  string
 	Host    string
 	Path    string
+
+	// Headers carries the request's headers.
+	//
+	// INVARIANT: keys are ALWAYS lowercase. The transport adapters
+	// ([internal/server/grpc.go] requestFromCheck,
+	// [internal/server/native.go] requestFromAuthorize,
+	// [internal/server/http.go] HTTP authorize handler, and
+	// [pkg/plugin/grpc/translate.go] reqToProto) all normalize keys
+	// before placing them here. Modules MAY use direct map lookups
+	// (`r.Headers["authorization"]`) or the case-insensitive helper
+	// [Request.Header]; both are correct.
+	//
+	// Modules constructing a Request directly in tests SHOULD use
+	// lowercase keys to match real traffic. Header() remains
+	// case-insensitive so older test data with mixed-case keys keeps
+	// working, but new code should not rely on that.
 	Headers map[string][]string
 
 	// Body is populated only when an AuthConfig opts in via withBody.

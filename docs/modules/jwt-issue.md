@@ -5,7 +5,7 @@ Signs a short-lived JWT carrying selected claims from the verified
 opaque tokens / cookies / mTLS / API keys, while east-west traffic uses
 a uniform signed assertion.
 
-**Source:** [pkg/mutator/jwtissue](../../pkg/mutator/jwtissue/jwtissue.go) — registered as `jwt-issue`.
+**Source:** [pkg/mutator/jwtissue](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/jwtissue/jwtissue.go) — registered as `jwt-issue`.
 
 ## When to use
 
@@ -110,4 +110,4 @@ Authorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6Im...
 ## References
 
 - RFC 7519 (JWT), RFC 8037 (EdDSA JWS).
-- Source: [pkg/mutator/jwtissue/jwtissue.go](../../pkg/mutator/jwtissue/jwtissue.go).
+- Source: [pkg/mutator/jwtissue/jwtissue.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/jwtissue/jwtissue.go).
