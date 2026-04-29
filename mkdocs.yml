@@ -1,0 +1,147 @@
+# Site identity ---------------------------------------------------------------
+site_name: LightweightAuth
+site_description: >-
+  Pluggable identification, authorization, and response-mutation pipeline for
+  HTTP and gRPC. Single binary; embeddable Go library; Envoy ext_authz adapter.
+site_url: https://mikeappsec.github.io/lightweightauth/
+repo_url: https://github.com/mikeappsec/lightweightauth
+repo_name: mikeappsec/lightweightauth
+edit_uri: edit/main/docs/
+
+# Where the docs live --------------------------------------------------------
+docs_dir: docs
+site_dir: site
+
+# Theme ----------------------------------------------------------------------
+# mkdocs-material is chosen over Hugo because (a) it is Python-only — no
+# extra toolchain in CI beyond what the controller already builds against;
+# (b) it consumes Markdown directly so docs/modules/*.md and
+# docs/cookbook/*.md need no front-matter rewrites; (c) the navigation,
+# admonition, and code-block features below are stock theme behaviour and
+# do not require theme overrides we'd then have to maintain.
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.action.edit
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+
+plugins:
+  - search
+
+# Validation policy ----------------------------------------------------------
+# Many in-tree docs link out to source files using paths like
+# `../../pkg/.../foo.go`. Those resolve correctly on GitHub but not on
+# the rendered static site. Rewriting each one to an absolute repo URL
+# is its own follow-up; until then we warn (not fail) on broken
+# source-tree references so a broken nav or a broken in-docs link still
+# fails the build but a deep link into Go code does not.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    absolute_links: warn
+    unrecognized_links: warn
+    anchors: warn
+
+# Navigation ------------------------------------------------------------------
+# The nav is hand-curated rather than auto-discovered so a new file under
+# docs/ does not silently appear in production navigation. Anything not
+# listed here is reachable via search but not surfaced in the side rail.
+nav:
+  - Home: index.md
+  - Quickstart: QUICKSTART.md
+  - Cookbook:
+      - cookbook/README.md
+      - Istio + lwauth + RBAC for gRPC: cookbook/istio-grpc-rbac.md
+      - OpenFGA on existing Envoy: cookbook/openfga-on-envoy.md
+      - Rotate HMAC secrets without downtime: cookbook/rotate-hmac.md
+  - Modules:
+      - modules/README.md
+      - Identifiers:
+          - JWT: modules/jwt.md
+          - OAuth2 introspection: modules/oauth2-introspection.md
+          - OAuth2 (browser flow): modules/oauth2.md
+          - API key: modules/apikey.md
+          - mTLS / SPIFFE: modules/mtls.md
+          - HMAC (SigV4-style): modules/hmac.md
+          - DPoP wrapper: modules/dpop.md
+          - gRPC plugin: modules/plugin-grpc.md
+      - Authorizers:
+          - RBAC: modules/rbac.md
+          - CEL: modules/cel.md
+          - OPA: modules/opa.md
+          - OpenFGA: modules/openfga.md
+          - Composite: modules/composite.md
+      - Response mutators:
+          - Header add: modules/header-add.md
+          - Header remove: modules/header-remove.md
+          - Header passthrough: modules/header-passthrough.md
+          - JWT issue: modules/jwt-issue.md
+      - Cache backends:
+          - In-process memory: modules/cache-memory.md
+          - Valkey: modules/cache-valkey.md
+      - Cross-cutting:
+          - Rate limit: modules/ratelimit.md
+          - Session: modules/session.md
+          - Upstream guard: modules/upstream.md
+          - ConfigStream broker: modules/configstream.md
+          - Observability: modules/observability.md
+  - Architecture:
+      - Design: DESIGN.md
+      - Architecture overview: ARCHITECTURE.md
+      - HTTP / gRPC API: API.md
+      - Milestones: MILESTONES.md
+  - Operations:
+      - Deployment: DEPLOYMENT.md
+      - Envoy integration: deployment/envoy.md
+      - FIPS 140-3 build: operations/fips.md
+      - Request invariants: testing/request-invariants.md
+  - Security:
+      - v1.0 security review: security/v1.0-review.md
+      - 2026-04-28 review delta: security/SECURITY_REVIEW_DELTA_2026-04-28.md
+      - 2026-04-29 hardening pass: security/SECURITY_HARDENING_2026-04-29.md
