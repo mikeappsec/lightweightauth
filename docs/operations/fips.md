@@ -42,7 +42,7 @@ make fips-test
 make docker-fips IMAGE=ghcr.io/acme/lwauth TAG=v1.1.0
 ```
 
-CI mirrors these targets in [`.github/workflows/build.yaml`](../../.github/workflows/build.yaml):
+CI mirrors these targets in [`.github/workflows/build.yaml`](https://github.com/mikeappsec/lightweightauth/blob/main/.github/workflows/build.yaml):
 the `fips-test` job builds + tests the FIPS variant on every push, and
 `build-fips` publishes `ghcr.io/<owner>/lightweightauth:<tag>-fips`
 alongside the stock image.
@@ -159,9 +159,9 @@ v1.1 doesn't currently use any of them; adding one would fail
 
 ## References
 
-- Source: [pkg/buildinfo/buildinfo.go](../../pkg/buildinfo/buildinfo.go)
-- Image: [Dockerfile.fips](../../Dockerfile.fips)
-- Build targets: [Makefile](../../Makefile) (`fips`, `fips-test`, `fips-verify`, `docker-fips`)
-- CI: [.github/workflows/build.yaml](../../.github/workflows/build.yaml)
+- Source: [pkg/buildinfo/buildinfo.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/buildinfo/buildinfo.go)
+- Image: [Dockerfile.fips](https://github.com/mikeappsec/lightweightauth/blob/main/Dockerfile.fips)
+- Build targets: [Makefile](https://github.com/mikeappsec/lightweightauth/tree/main/Makefile) (`fips`, `fips-test`, `fips-verify`, `docker-fips`)
+- CI: [.github/workflows/build.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/.github/workflows/build.yaml)
   (`fips-test`, `build-fips` jobs)
 - Roadmap: [DESIGN.md §7 Tier A5](../DESIGN.md), [v1.0-review.md §10 Tier A](../security/v1.0-review.md)

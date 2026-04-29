@@ -1,10 +1,10 @@
 # `module.Request` invariants — one canonical shape, two doors
 
 > **Audience:** anyone touching the transport adapters
-> ([internal/server/grpc.go](../../internal/server/grpc.go),
-> [internal/server/native.go](../../internal/server/native.go),
-> [internal/server/http.go](../../internal/server/http.go),
-> [pkg/plugin/grpc/translate.go](../../pkg/plugin/grpc/translate.go))
+> ([internal/server/grpc.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/grpc.go),
+> [internal/server/native.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/native.go),
+> [internal/server/http.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/http.go),
+> [pkg/plugin/grpc/translate.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/plugin/grpc/translate.go))
 > or writing a new identifier / authorizer / mutator.
 
 ---
@@ -16,10 +16,10 @@ entry points:
 
 | Door / surface              | Wire type                                  | Adapter function                                                    |
 |-----------------------------|--------------------------------------------|---------------------------------------------------------------------|
-| Door A (Envoy ext_authz)    | `envoy.service.auth.v3.CheckRequest`       | [requestFromCheck](../../internal/server/grpc.go)                   |
-| Door B (native gRPC SDK)    | `lightweightauth.v1.AuthorizeRequest`      | [requestFromAuthorize](../../internal/server/native.go)             |
-| HTTP JSON                   | `POST /v1/authorize` body                  | [HTTPHandler.authorize](../../internal/server/http.go)              |
-| Out-of-process plugin host  | `*module.Request` → `authv1.AuthorizeRequest` | [reqToProto](../../pkg/plugin/grpc/translate.go)                 |
+| Door A (Envoy ext_authz)    | `envoy.service.auth.v3.CheckRequest`       | [requestFromCheck](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/grpc.go)                   |
+| Door B (native gRPC SDK)    | `lightweightauth.v1.AuthorizeRequest`      | [requestFromAuthorize](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/native.go)             |
+| HTTP JSON                   | `POST /v1/authorize` body                  | [HTTPHandler.authorize](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/http.go)              |
+| Out-of-process plugin host  | `*module.Request` → `authv1.AuthorizeRequest` | [reqToProto](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/plugin/grpc/translate.go)                 |
 
 All four feed `pipeline.Engine.Evaluate(ctx, *module.Request)`. The
 engine and every shipped module read **only** from `module.Request` —
@@ -94,20 +94,20 @@ Normalizing at the adapter boundary is strictly stronger:
   engine + bufconn gRPC server per cell; normalization tests are pure
   function calls.
 - **The contract is documented.** The
-  [module.Request.Headers](../../pkg/module/module.go) godoc spells
+  [module.Request.Headers](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/module/module.go) godoc spells
   out the invariant; new contributors see it before they reach for a
   case-sensitive lookup.
 
 The parity matrix was deleted in this slice. The few asymmetries it
 had surfaced (host plumbing, XFCC handling, header casing) became
 explicit normalization rules in the adapters, fenced by
-[internal/server/normalize_test.go](../../internal/server/normalize_test.go).
+[internal/server/normalize_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/normalize_test.go).
 
 ---
 
 ## 4. The normalization tests
 
-[internal/server/normalize_test.go](../../internal/server/normalize_test.go)
+[internal/server/normalize_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/normalize_test.go)
 asserts the invariant directly at the adapter boundary:
 
 | Test                                                  | Asserts                                                                                  |
@@ -180,7 +180,7 @@ place.
   JSON, and plugin invocations — the engine sees the same input from
   all four.
 - The invariant is fenced by
-  [internal/server/normalize_test.go](../../internal/server/normalize_test.go)
+  [internal/server/normalize_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/normalize_test.go)
   as pure-function tests at the adapter boundary, no end-to-end
   parity matrix required.
 - This is strictly stronger than the parity-matrix approach the

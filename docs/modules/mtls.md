@@ -4,7 +4,7 @@ Extracts identity from a TLS peer certificate. Two ingestion paths:
 in-process `Request.PeerCerts` (Mode B / native gRPC) and Envoy's
 `x-forwarded-client-cert` header (Mode A).
 
-**Source:** [pkg/identity/mtls](../../pkg/identity/mtls/mtls.go) — registered as `mtls`.
+**Source:** [pkg/identity/mtls](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/mtls/mtls.go) — registered as `mtls`.
 
 ## When to use
 
@@ -130,4 +130,4 @@ x-forwarded-client-cert: By=spiffe://td/ns/api/sa/lwauth;Hash=...;URI=spiffe://t
 
 - SPIFFE / SPIRE specs.
 - Envoy `x-forwarded-client-cert` header format.
-- Source: [pkg/identity/mtls/mtls.go](../../pkg/identity/mtls/mtls.go).
+- Source: [pkg/identity/mtls/mtls.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/mtls/mtls.go).

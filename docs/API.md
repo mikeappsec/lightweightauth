@@ -15,7 +15,7 @@ of truth.
 
 ## HTTP — port `:8080`
 
-Always mounted by [internal/server/http.go](../internal/server/http.go):
+Always mounted by [internal/server/http.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/http.go):
 
 | Method | Path | Purpose | Status codes |
 |---|---|---|---|
@@ -25,7 +25,7 @@ Always mounted by [internal/server/http.go](../internal/server/http.go):
 | `GET`  | `/metrics`       | Prometheus scrape. Surfaces the M9 counter/histogram set (`lwauth_decisions_total`, `lwauth_decision_latency_seconds`, `lwauth_identifier_total`, `lwauth_cache_*`). | `200` |
 
 Mounted dynamically when an `oauth2` identifier is configured
-([pkg/identity/oauth2/oauth2.go](../pkg/identity/oauth2/oauth2.go)):
+([pkg/identity/oauth2/oauth2.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/oauth2/oauth2.go)):
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -38,7 +38,7 @@ Mounted dynamically when an `oauth2` identifier is configured
 | `POST` | `/oauth2/device/poll`       | Device-grant token poll. `200`/`202`/`4xx` with the IdP body verbatim on terminal errors. |
 
 Any third-party module that implements
-[`module.HTTPMounter`](../pkg/module/module.go) mounts under its own
+[`module.HTTPMounter`](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/module/module.go) mounts under its own
 prefix the same way.
 
 ### `POST /v1/authorize` — wire shape
@@ -84,7 +84,7 @@ Response body:
 
 ## gRPC — port `:9001`
 
-Always registered by [pkg/lwauthd/lwauthd.go](../pkg/lwauthd/lwauthd.go):
+Always registered by [pkg/lwauthd/lwauthd.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/lwauthd/lwauthd.go):
 
 | Service | RPC(s) | Purpose |
 |---|---|---|
@@ -94,7 +94,7 @@ Always registered by [pkg/lwauthd/lwauthd.go](../pkg/lwauthd/lwauthd.go):
 | _(server reflection)_                 | (the standard set)         | `google.golang.org/grpc/reflection`; lets `grpcurl` enumerate services without a `.proto` file. Disable in production via build flags if undesired. |
 
 Wired only when a control-plane embeds `pkg/configstream`
-([pkg/configstream/grpc.go](../pkg/configstream/grpc.go)):
+([pkg/configstream/grpc.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/configstream/grpc.go)):
 
 | Service | RPC | Purpose |
 |---|---|---|

@@ -2,11 +2,11 @@
 
 Lets a config entry pull in an identifier, authorizer, or response
 mutator that lives in a **separate process** and speaks the
-[`lightweightauth.plugin.v1`](../../api/proto/lightweightauth/plugin/v1/plugin.proto)
+[`lightweightauth.plugin.v1`](https://github.com/mikeappsec/lightweightauth/blob/main/api/proto/lightweightauth/plugin/v1/plugin.proto)
 gRPC contract. The pipeline cannot tell built-ins from plugins apart —
 same caching, same observability, same audit emission.
 
-**Source:** [pkg/plugin/grpc](../../pkg/plugin/grpc/) — registered as
+**Source:** [pkg/plugin/grpc](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/plugin/grpc/) — registered as
 `grpc-plugin` under all three module kinds.
 
 ## When to use
@@ -186,7 +186,7 @@ The signature, key id, and algorithm travel as gRPC trailing metadata
 length-prefixed canonical encoding that includes a version tag, the
 type of the response message, the alg/kid, and every field of the
 response with map keys sorted lexicographically — see
-[pkg/plugin/sign/sign.go](../../pkg/plugin/sign/sign.go) for the
+[pkg/plugin/sign/sign.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/plugin/sign/sign.go) for the
 exact byte layout. Plugins in any language can implement it; v1.1
 ships a Go helper in `pkg/plugin/sign`.
 
@@ -254,7 +254,7 @@ For operators who want lwauth itself to own the plugin process — most
 commonly when running outside an orchestrator, or when the plugin is
 private to a single replica and a sidecar would be overkill — v1.1
 ships an opt-in supervisor under
-[pkg/plugin/supervisor](../../pkg/plugin/supervisor/). Add a
+[pkg/plugin/supervisor](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/plugin/supervisor/). Add a
 `lifecycle` block:
 
 ```yaml

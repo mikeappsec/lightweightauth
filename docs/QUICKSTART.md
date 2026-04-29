@@ -169,7 +169,7 @@ docker compose -f deploy/docker/compose.yaml down -v
 
 ## Path C — Kubernetes (Helm)
 
-The chart at [deploy/helm/lightweightauth](../deploy/helm/lightweightauth/)
+The chart at [deploy/helm/lightweightauth](https://github.com/mikeappsec/lightweightauth/tree/main/deploy/helm/lightweightauth/)
 runs lwauth in either **file mode** (default; ConfigMap + fsnotify
 reload) or **CRD mode** (`controller.enabled=true`; watches an
 `AuthConfig` CR).

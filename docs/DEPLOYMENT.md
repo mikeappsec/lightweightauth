@@ -60,7 +60,7 @@ docker compose -f deploy/docker/compose.yaml up
 curl -i http://localhost:8000/whatever
 ```
 
-Sample boot config: [deploy/envoy/sample.yaml](../deploy/envoy/sample.yaml)
+Sample boot config: [deploy/envoy/sample.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/deploy/envoy/sample.yaml)
 — this is the *minimum that boots*. The **minimum that's safe in
 production** (body-binding flags, forwarded-header trust, mTLS anchor
 wiring, header redaction) is documented separately in
@@ -90,7 +90,7 @@ For pure-gRPC stacks where introducing a proxy is overkill.
 
 ## Helm chart
 
-Lives at [deploy/helm/lightweightauth](../deploy/helm/lightweightauth/).
+Lives at [deploy/helm/lightweightauth](https://github.com/mikeappsec/lightweightauth/tree/main/deploy/helm/lightweightauth/).
 
 ```sh
 helm install lwauth ./deploy/helm/lightweightauth \
@@ -124,7 +124,7 @@ helm install lwauth ./deploy/helm/lightweightauth \
 For the data-plane, install one of:
 
 - An Envoy chart of your choice, configured with `ext_authz` pointing at
-  the `lwauth` Service (sample config under [deploy/envoy/](../deploy/envoy/)).
+  the `lwauth` Service (sample config under [deploy/envoy/](https://github.com/mikeappsec/lightweightauth/tree/main/deploy/envoy/)).
 - The `lightweightauth-proxy` chart (sibling repo) for Mode B.
 
 ## CRDs

@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln fips fips-test fips-verify docker-fips
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln fips fips-test fips-verify docker-fips docs docs-serve docs-deps
 
 GO     ?= go
 BIN    ?= bin
@@ -139,6 +139,34 @@ docker-fips:
 		--build-arg COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown) \
 		--build-arg GOFIPS140_VER=$(GOFIPS140_VER) \
 		-t $(IMAGE):$(TAG)-fips .
+
+# DOC-COOKBOOK-1 (Tier C1, v1.1): the cookbook + per-module reference
+# under docs/ is rendered into a static site by mkdocs-material. The
+# release pipeline runs `make docs`; contributors preview locally with
+# `make docs-serve`. Both go through `make docs-deps` so the same
+# pinned `docs/requirements.txt` is the single source of truth for
+# tool versions — a floating mkdocs-material that breaks the nav at
+# release time would be exactly the kind of "works on my machine"
+# regression the strict build is meant to catch.
+PYTHON ?= python
+
+docs-deps:
+	$(PYTHON) -m pip install --quiet --upgrade -r docs/requirements.txt
+
+# Build matches what CI runs. `--strict` promotes every mkdocs warning
+# to a build failure: an orphan page, a broken in-docs link, an unknown
+# nav entry, an anchor typo. Source-tree references are absolute
+# https://github.com/... URLs (rewritten in C1.6) so they resolve
+# identically on the rendered site and on GitHub without the strict
+# build flagging them.
+docs: docs-deps
+	$(PYTHON) -m mkdocs build --strict
+
+# Live-reload preview. Binds to localhost only so a developer running
+# this on a laptop on a hostile network does not accidentally publish
+# the in-progress site to the LAN.
+docs-serve: docs-deps
+	$(PYTHON) -m mkdocs serve --dev-addr 127.0.0.1:8000
 
 clean:
 	rm -rf $(BIN)

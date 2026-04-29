@@ -4,7 +4,7 @@ Default cache backend. A bounded in-process LRU shared across all
 modules that consult `cache.Backend` (introspection, JWKS metadata,
 DPoP replay, decision cache, ...).
 
-**Source:** [pkg/cache](../../pkg/cache) — registered as `memory`.
+**Source:** [pkg/cache](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/cache) — registered as `memory`.
 
 ## When to use
 
@@ -57,5 +57,5 @@ per replica). With [`valkey`](cache-valkey.md) it would be one.
 
 ## References
 
-- Source: [pkg/cache/memory.go](../../pkg/cache/memory.go).
+- Source: [pkg/cache/memory.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/cache/memory.go).
 - DESIGN.md §5 — decision cache.
