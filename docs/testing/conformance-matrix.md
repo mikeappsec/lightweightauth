@@ -39,10 +39,10 @@ funnel into **the same `pipeline.Engine`**. The only thing that differs
 is the **adapter** that turns the wire-format request into the
 internal `module.Request`:
 
-| Door  | Wire type                    | Adapter                                                  |
-|-------|------------------------------|----------------------------------------------------------|
-| A     | `envoy.CheckRequest`         | [extauthz.toRequest](../../internal/server/extauthz.go)  |
-| B     | `lightweightauth.v1.AuthorizeRequest` | [native.toRequest](../../internal/server/native.go) |
+| Door  | Wire type                             | Adapter                                                                       |
+|-------|---------------------------------------|-------------------------------------------------------------------------------|
+| A     | `envoy.CheckRequest`                  | [requestFromCheck](../../internal/server/grpc.go) in `internal/server/grpc.go` |
+| B     | `lightweightauth.v1.AuthorizeRequest` | [requestFromAuthorize](../../internal/server/native.go) in `internal/server/native.go` |
 
 > **The contract:** for any logically equivalent input, both adapters
 > must produce a `module.Request` that the engine cannot tell apart.
@@ -54,41 +54,95 @@ internal `module.Request`:
 
 ## 2. The bug class, in one picture
 
-Suppose someone refactors header plumbing and accidentally lower-cases
-the `Authorization` header value only on Door B:
+The two adapters look almost identical — both copy headers into
+`module.Request.Headers` one key at a time:
 
-```
-        SAME logical request:
-        ┌──────────────────────────────────────────────┐
-        │ method=GET, path=/things                     │
-        │ Authorization: Bearer eyJhbGciOiJSUzI1NiIs… │
-        └──────────────────────────────────────────────┘
-               │                              │
-       Door A  │                              │  Door B
-               ▼                              ▼
-   module.Request{                    module.Request{
-     Headers: {                         Headers: {
-       "authorization":                   "authorization":
-         "Bearer eyJhbGc…"                  "bearer eyjhbgc…"   ◄── MUTATED
-     }                                  }
-   }                                  }
-               │                              │
-               ▼                              ▼
-        jwt.Identify()                 jwt.Identify()
-        ──► Identity{alice, admin}     ──► ErrInvalidCredential
-               │                              │
-               ▼                              ▼
-        rbac.Authorize()               (engine returns 401)
-        ──► Allow:true
-               │                              │
-               ▼                              ▼
-          HTTP 200                       HTTP 401  ◄── PARITY BROKEN
+```go
+// requestFromCheck (Door A, grpc.go)
+for k, v := range r.Http.Headers {
+    out.Headers[k] = []string{v}
+}
+
+// requestFromAuthorize (Door B, native.go)
+for k, v := range in.GetHeaders() {
+    out.Headers[k] = []string{v}
+}
 ```
 
-Per-module unit tests don't catch this because they call `Identify()`
-directly with a hand-built `module.Request`. The Envoy-only integration
-test doesn't catch it either. **Only a parity test that drives the
-same input through both doors catches it.**
+Same code shape — but the **inputs are not the same**. Envoy delivers
+headers with **lowercase** keys (HTTP/2 mandates lowercase on the
+wire). Native SDK callers typically send **title-case** keys because
+Go's `net/http` and most client libraries title-case by convention. So
+in practice:
+
+```
+   Door A:  out.Headers["authorization"] = …       (lowercase)
+   Door B:  out.Headers["Authorization"] = …       (Title-case)
+```
+
+This works **today** because every shipped identifier reads headers
+through the case-insensitive helper `r.Header(name)` (see
+[pkg/module/request.go](../../pkg/module/request.go)) — for example
+JWT does:
+
+```go
+raw := r.Header(i.header)   // case-insensitive: matches "Authorization" or "authorization"
+```
+
+Now imagine a future contributor adds a new identifier or authorizer
+and writes:
+
+```go
+raw := r.Headers["X-Tenant"][0]   // ◄── direct map lookup, case-SENSITIVE
+```
+
+What breaks:
+
+```
+         SAME logical request:  X-Tenant: acme
+         ┌──────────────────────────────────┐
+         │ method=GET, path=/things         │
+         │ X-Tenant: acme                   │
+         └──────────────────────────────────┘
+                │                          │
+        Door A  │                          │  Door B
+                ▼                          ▼
+    module.Request{                  module.Request{
+      Headers: {                       Headers: {
+        "x-tenant":                      "X-Tenant":          ◄── title-case
+          ["acme"]                        ["acme"]
+      }                                }
+    }                                }
+                │                          │
+                ▼                          ▼
+        new authorizer:                new authorizer:
+        r.Headers["X-Tenant"]          r.Headers["X-Tenant"]
+          ──► nil  (key is             ──► "acme"  ✓
+               "x-tenant")
+                │                          │
+                ▼                          ▼
+            DENY 403                     ALLOW 200    ◄── PARITY BROKEN
+```
+
+The per-module unit test passes — it builds `module.Request` directly
+with whatever key the test author wrote. The Envoy-only integration
+test passes — Envoy is lowercase, so the test data "happens to work".
+But the **same user** gets allowed through the native SDK and denied
+through Envoy. Only a parity test that drives **the same logical
+input through both doors** catches this.
+
+This is the canonical shape of a transport-adapter bug:
+- it works in isolation,
+- it works on whichever door the author happened to test against,
+- it silently flips the verdict on the other door.
+
+The matrix exists to fence every shipped module against this class.
+
+> **Side note on Bearer / bearer:** the scheme prefix is matched with
+> `strings.EqualFold` ([pkg/identity/jwt/jwt.go](../../pkg/identity/jwt/jwt.go)),
+> so `"Bearer eyJ…"` and `"bearer eyJ…"` *are* treated identically.
+> The bug class isn't about token-value casing — it's about
+> **header-key casing** and other adapter-shape asymmetries.
 
 ---
 
