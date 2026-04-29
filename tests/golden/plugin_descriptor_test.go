@@ -12,7 +12,16 @@ package golden
 // Removing a message, removing a field, renumbering, or changing a field's
 // type is NOT allowed within v1.x and will fail this test.
 //
-// To regenerate the descriptor (e.g. on a v2 cycle), run:
+// Security carve-out: a field that is itself the vulnerability (e.g. a
+// caller-supplied byte blob that the server would otherwise have to treat
+// as already-verified trust material) MAY be removed and its field number
+// `reserved` even within a v1.x line. When that happens, regenerate the
+// golden in the same commit as the proto change and document the removal
+// in docs/security/v1.0-review.md. Future contributors are still protected
+// because protoc enforces `reserved` ranges at compile time.
+//
+// To regenerate the descriptor (e.g. on a v2 cycle, or for a security
+// carve-out), run:
 //   UPDATE_GOLDEN=1 go test ./tests/golden/...
 // and review the diff carefully before committing.
 

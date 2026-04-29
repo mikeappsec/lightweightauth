@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -178,7 +177,16 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		Path:     in.Path,
 		Headers:  lowercaseHeaderKeys(in.Headers),
 	}
-	dec, id, _ := eng.Evaluate(context.WithoutCancel(r.Context()), req)
+	// Use the request's own context. Stripping cancellation here
+	// (e.g. context.WithoutCancel) would leave plugin RPCs, IdP
+	// fetches, OpenFGA / OPA evaluations, and decision-cache work
+	// running after the client is gone, which an attacker could
+	// exploit by firing many short-lived /v1/authorize requests to
+	// amplify upstream load. Audit emission is synchronous within
+	// the pipeline and rides on whatever the engine produces — it
+	// does not need an uncancellable context to land in the slog
+	// handler.
+	dec, id, _ := eng.Evaluate(r.Context(), req)
 	// Engine emits a verbose internal reason (e.g. "hmac: signature
 	// mismatch") that the audit log captures. Public callers see only
 	// a generic status-aligned string so policy and module internals

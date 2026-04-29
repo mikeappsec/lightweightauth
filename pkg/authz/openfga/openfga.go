@@ -195,7 +195,16 @@ func (a *authorizer) check(ctx context.Context, user, relation, object string) (
 			preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			return fmt.Errorf("%w: openfga check: status %d: %s", module.ErrUpstream, resp.StatusCode, bytes.TrimSpace(preview))
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		// Cap successful response decode. A misbehaving or compromised
+		// OpenFGA endpoint could otherwise return an arbitrarily large
+		// successful JSON body and burn memory/CPU during decode. The
+		// response shape is a few small fields ({"allowed":bool,
+		// "resolution":...}); 64 KiB is several orders of magnitude
+		// more than legitimate traffic ever needs. Decode through a
+		// LimitReader so an oversize body fails with json.Decoder's
+		// "unexpected EOF" rather than running out of memory.
+		const openfgaMaxResponseBytes = 64 << 10
+		if err := json.NewDecoder(io.LimitReader(resp.Body, openfgaMaxResponseBytes)).Decode(&out); err != nil {
 			return fmt.Errorf("%w: openfga decode: %v", module.ErrUpstream, err)
 		}
 		return nil

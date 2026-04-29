@@ -11,6 +11,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
@@ -47,6 +50,7 @@ func (s *NativeAuthServer) Authorize(ctx context.Context, req *authv1.AuthorizeR
 		return nil, status.Error(codes.Unavailable, "lwauth: no engine loaded")
 	}
 	mreq := requestFromAuthorize(req)
+	mreq.PeerCerts = verifiedPeerCertFromContext(ctx)
 	dec, id, _ := eng.Evaluate(ctx, mreq)
 	return responseFromDecision(dec, id), nil
 }
@@ -62,6 +66,10 @@ func (s *NativeAuthServer) Authorize(ctx context.Context, req *authv1.AuthorizeR
 // close the socket on its own terms.
 func (s *NativeAuthServer) AuthorizeStream(stream authv1.Auth_AuthorizeStreamServer) error {
 	ctx := stream.Context()
+	// The verified TLS peer cert is a property of the gRPC
+	// connection, not of any individual message, so we extract it
+	// once and reuse it for every request on the stream.
+	verifiedCert := verifiedPeerCertFromContext(ctx)
 	for {
 		in, err := stream.Recv()
 		if err != nil {
@@ -74,7 +82,9 @@ func (s *NativeAuthServer) AuthorizeStream(stream authv1.Auth_AuthorizeStreamSer
 		if eng == nil {
 			return status.Error(codes.Unavailable, "lwauth: no engine loaded")
 		}
-		dec, id, _ := eng.Evaluate(ctx, requestFromAuthorize(in))
+		mreq := requestFromAuthorize(in)
+		mreq.PeerCerts = verifiedCert
+		dec, id, _ := eng.Evaluate(ctx, mreq)
 		if err := stream.Send(responseFromDecision(dec, id)); err != nil {
 			return err
 		}
@@ -98,6 +108,15 @@ func (s *NativeAuthServer) AuthorizeStream(stream authv1.Auth_AuthorizeStreamSer
 //     Host from envoy.AttributeContext_HttpRequest.Host (the HTTP
 //     authority); using peer.RemoteAddr unconditionally on Door B
 //     would break DPoP's htu binding and HMAC's canonical string.
+//
+// Trust note: PeerCerts is NEVER populated from the request body.
+// Trusting application-level cert bytes would let any caller forge a
+// certificate with a chosen subject and have the mtls identifier
+// treat it as verified, bypassing every authentication anchor. The
+// proto reserves field number 3 in PeerInfo so no future field
+// silently reuses the slot. PeerCerts is populated by the caller of
+// requestFromAuthorize from the gRPC connection's verified TLS
+// chain only — see [verifiedPeerCertFromContext].
 func requestFromAuthorize(in *authv1.AuthorizeRequest) *module.Request {
 	out := &module.Request{Headers: map[string][]string{}}
 	if in == nil {
@@ -121,13 +140,8 @@ func requestFromAuthorize(in *authv1.AuthorizeRequest) *module.Request {
 	if hosts, ok := out.Headers["host"]; ok && len(hosts) > 0 && hosts[0] != "" {
 		out.Host = hosts[0]
 	}
-	if peer := in.GetPeer(); peer != nil {
-		if out.Host == "" {
-			out.Host = peer.GetRemoteAddr()
-		}
-		if cert := peer.GetCertChain(); len(cert) > 0 {
-			out.PeerCerts = cert
-		}
+	if p := in.GetPeer(); p != nil && out.Host == "" {
+		out.Host = p.GetRemoteAddr()
 	}
 	if ctxMap := in.GetContext(); len(ctxMap) > 0 {
 		out.Context = make(map[string]any, len(ctxMap))
@@ -136,6 +150,53 @@ func requestFromAuthorize(in *authv1.AuthorizeRequest) *module.Request {
 		}
 	}
 	return out
+}
+
+// verifiedPeerCertFromContext returns the DER-encoded leaf certificate
+// of the gRPC client that opened the current connection, when (and
+// only when) the connection used TLS and the server-side handshake
+// produced verified peer certificates.
+//
+// This is the trusted source of Request.PeerCerts. The mtls
+// identifier treats PeerCerts as already-verified DER bytes (no
+// chain check), so the bytes MUST come from a TLS stack that did the
+// chain verification — not from anything the client put on the wire
+// after the handshake.
+//
+// Returns nil when:
+//   - the connection is plaintext (no TLS),
+//   - the client did not present a cert (server is not configured
+//     for mTLS), or
+//   - the auth info is some non-TLS credential type.
+func verifiedPeerCertFromContext(ctx context.Context) []byte {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p == nil || p.AuthInfo == nil {
+		return nil
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil
+	}
+	// VerifiedChains is populated by the TLS stack only after
+	// successful chain validation against the server's configured
+	// client CA pool. PeerCertificates without VerifiedChains means
+	// the server is not requiring/verifying client certs; in that
+	// mode we have no trusted DER to publish to the engine.
+	cs := tlsInfo.State
+	if !isTLSConnVerified(&cs) {
+		return nil
+	}
+	return cs.VerifiedChains[0][0].Raw
+}
+
+func isTLSConnVerified(cs *tls.ConnectionState) bool {
+	if cs == nil {
+		return false
+	}
+	if len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
+		return false
+	}
+	return cs.VerifiedChains[0][0] != nil
 }
 
 // responseFromDecision is the dual of [ok]/[denied] for Door B. It

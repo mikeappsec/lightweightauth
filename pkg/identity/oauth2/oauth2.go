@@ -222,7 +222,12 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 	if err := cache.Register(cfg.JWKSURL); err != nil {
 		return nil, fmt.Errorf("%w: oauth2 jwks register: %v", module.ErrConfig, err)
 	}
-	if _, err := cache.Refresh(context.Background(), cfg.JWKSURL); err != nil {
+	// Bound the initial JWKS fetch so a blackholed IdP cannot stall
+	// startup. See pkg/identity/jwt for the longer-form rationale;
+	// same deadline used here.
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer refreshCancel()
+	if _, err := cache.Refresh(refreshCtx, cfg.JWKSURL); err != nil {
 		return nil, fmt.Errorf("%w: oauth2 jwks fetch %s: %v", module.ErrUpstream, cfg.JWKSURL, err)
 	}
 	keyset := jwk.NewCachedSet(cache, cfg.JWKSURL)

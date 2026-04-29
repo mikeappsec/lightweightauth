@@ -55,11 +55,15 @@ type Request struct {
 	Peer     *Peer
 }
 
-// Peer mirrors authv1.PeerInfo without the proto types.
+// Peer mirrors authv1.PeerInfo without the proto types. Note: peer
+// certificates are NOT carried in the request body — lwauth derives
+// the verified peer cert from its own gRPC TLS stack (mTLS
+// handshake, server-side client-CA pool). To use mTLS-based
+// authorization, dial lwauth with a client TLS config; do not try to
+// forward certs as application data.
 type Peer struct {
 	RemoteAddr string
 	SpiffeID   string
-	CertChain  []byte
 }
 
 // Response mirrors authv1.AuthorizeResponse with a flat shape callers
@@ -152,7 +156,6 @@ func requestToProto(req *Request) *authv1.AuthorizeRequest {
 		out.Peer = &authv1.PeerInfo{
 			RemoteAddr: req.Peer.RemoteAddr,
 			SpiffeId:   req.Peer.SpiffeID,
-			CertChain:  req.Peer.CertChain,
 		}
 	}
 	return out
