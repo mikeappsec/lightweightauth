@@ -1,7 +1,16 @@
 # Pinned to make the docs build reproducible and to keep the CI image
 # small. mkdocs-material 9.5.x is the current stable line; pymdown-
-# extensions 10.x is what 9.5.x is tested against. Do not float either
-# pin without rebuilding `make docs` and confirming the rendered nav,
-# code blocks, and admonitions still look right.
+# extensions 10.x is what 9.5.x is tested against. Do not float any of
+# these pins without rebuilding `make docs` and confirming the rendered
+# nav, code blocks, and admonitions still look right.
+#
+# Pygments is pinned because pymdown-extensions <= 10.11 passes
+# `filename=None` to Pygments' HtmlFormatter; Pygments 2.19+ rejects
+# that with `'NoneType' object has no attribute 'replace'`. 2.18.0 is
+# the last release that tolerates the None and is what we render
+# against. The pymdown-extensions bump to 10.14 carries the upstream
+# fix for the same surface, so once 10.14 is in we hold the Pygments
+# pin too as belt-and-braces against a future regression.
 mkdocs-material==9.5.39
-pymdown-extensions==10.11
+pymdown-extensions==10.14
+Pygments==2.18.0
