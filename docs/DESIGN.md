@@ -1678,51 +1678,49 @@ A5. **K-CRYPTO-2 (was 21) — FIPS 140-3 build mode.** Optional
 Not user-visible features, but they catch whole classes of
 regressions before users do.
 
-B1. **M12-CONF-MATRIX (was 20) — Full conformance matrix.** Slice
-    2 of M12 landed the Door A vs Door B parity harness using
-    `apikey + rbac` as the single fixture. Promote it to a
-    matrix that walks every shipped identifier (`jwt`,
-    `oauth2-introspection`, `mtls`, `hmac`, `dpop` wrapper,
-    `oauth2`) and authorizer (`opa`, `cel`, `composite`,
-    `openfga`) so a transport-level regression in any module is
-    caught at PR time.
+B1. **M12-REQUEST-NORM (was M12-CONF-MATRIX) — Canonical
+    `module.Request` invariants.** Originally framed as a
+    Door A × Door B conformance *matrix* that would assert
+    parity for every (identifier, authorizer) cell. While
+    drafting that matrix we caught the underlying problem:
+    parity tests can only catch the asymmetries we anticipate;
+    the right fix is to make the asymmetries *unrepresentable*
+    by normalizing at the adapter boundary.
 
-    *Status: shipped on `v1.1-tier-b`* —
-    [internal/server/matrix_test.go](../internal/server/matrix_test.go)
-    walks an 8-cell matrix (full walkthrough with diagrams in
-    [docs/testing/conformance-matrix.md](testing/conformance-matrix.md)):
-    - `apikey` × {`rbac`, `cel`, `opa`, `composite-allOf`,
-      `openfga`} — every shipped authorizer, exercised under
-    a stable identity transport;
-    - {`jwt`, `oauth2-introspection`} × `rbac` — additional
-    identifiers whose transports (Bearer + JWKS, Bearer +
-    introspection endpoint) round-trip cleanly through both
-    Door A and Door B.
+    *Status: shipped on `v1.1-tier-b`* — see the full rule set
+    and rationale in
+    [docs/testing/request-invariants.md](testing/request-invariants.md).
 
-    Each cell compiles a real engine, boots both doors over a
-    single bufconn gRPC server, and asserts allow/deny + HTTP
-    status parity for one allow input and one deny input.
+    Canonical `module.Request` shape, enforced at every entry
+    point ([requestFromCheck](../internal/server/grpc.go) for
+    Door A, [requestFromAuthorize](../internal/server/native.go)
+    for Door B, [HTTPHandler.authorize](../internal/server/http.go)
+    for Door C, [reqToProto](../pkg/plugin/grpc/translate.go)
+    for Door D):
 
-    The matrix immediately surfaced two real findings, recorded
-    here so they can't drift unnoticed:
-    1. **M12-PROTO-HOST (new follow-up).** HMAC and other
-       request-binding identifiers cannot achieve Door A vs
-       Door B parity until `lightweightauth.v1.AuthorizeRequest`
-       gains `host` and `body_sha256` fields. Door A receives
-       Host via `envoy.AttributeContext_HttpRequest.Host`; Door
-       B today plumbs only the gRPC peer's remote address into
-       `module.Request.Host`, so any signature bound to the
-       HTTP Host header verifies on Door A and fails on Door B.
-       Until the proto extension lands, HMAC remains a
-       Door A-only identifier and is excluded from the matrix
-       with a TODO at the cell site.
-    2. **mtls / dpop / oauth2 deferred.** mTLS needs XFCC
-       header injection on Door A vs `PeerCerts` on Door B;
-       DPoP wraps an inner identifier so a parity cell needs
-       inner-fixture composition; OAuth2 redirect flow needs a
-       full IdP. Tracked in the file-level TODO of
-       `matrix_test.go` so the next slice has a concrete
-       starting point.
+    - `Method` uppercase ASCII;
+    - `Headers` keys always lowercase (HTTP/2 normal form);
+    - `Host` = HTTP authority (preferred from the `host`
+      header), never the gRPC peer's TCP address;
+    - `PeerCerts` = DER bytes of the verified leaf cert, or
+      nil — never an XFCC string. The previous Door A code
+      stuffed XFCC into `PeerCerts` which made
+      `x509.ParseCertificate` fail on every in-process
+      request; the mtls module now relies solely on the
+      header path, which it always supported.
+
+    Modules are authored against `module.Request` without
+    branching on the transport. Adding Door E (e.g. an HTTP
+    `/authorize` endpoint, a CLI shim, a WASM host) means
+    writing one decoder that obeys the invariants — no module
+    code or test changes required.
+
+    Unit tests fence each invariant in
+    [internal/server/normalize_test.go](../internal/server/normalize_test.go);
+    the existing single-fixture parity self-test in
+    [internal/server/conformance_test.go](../internal/server/conformance_test.go)
+    remains as a smoke check that Door A and Door B agree end-
+    to-end.
 
 B2. **M12-BROKER-MW (was 19) — Multi-writer `configstream.Broker`.**
     Lift the implicit single-writer contract on `Broker.Publish`

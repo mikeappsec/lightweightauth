@@ -96,6 +96,20 @@ type authorizeRequest struct {
 	TenantID string              `json:"tenantId,omitempty"`
 }
 
+// lowercaseHeaderKeys enforces the [module.Request.Headers] invariant.
+// Returning a fresh map (rather than mutating in place) avoids
+// surprising the JSON decoder's owner.
+func lowercaseHeaderKeys(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return map[string][]string{}
+	}
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[strings.ToLower(k)] = v
+	}
+	return out
+}
+
 type authorizeResponse struct {
 	Allow            bool              `json:"allow"`
 	Status           int               `json:"status,omitempty"`
@@ -142,7 +156,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		Method:   strings.ToUpper(in.Method),
 		Host:     in.Host,
 		Path:     in.Path,
-		Headers:  in.Headers,
+		Headers:  lowercaseHeaderKeys(in.Headers),
 	}
 	dec, id, _ := eng.Evaluate(context.WithoutCancel(r.Context()), req)
 	// Engine emits a verbose internal reason (e.g. "hmac: signature

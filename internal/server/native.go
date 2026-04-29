@@ -83,8 +83,21 @@ func (s *NativeAuthServer) AuthorizeStream(stream authv1.Auth_AuthorizeStreamSer
 
 // requestFromAuthorize is the only place that knows about authv1's
 // shape. It is the dual of [requestFromCheck] for Door A and produces
-// the same module.Request given equivalent inputs (this is what makes
-// the conformance tests possible).
+// an identical module.Request given equivalent inputs (this is what
+// makes Door A vs Door B parity hold for every shipped module).
+//
+// Normalization rules (see [module.Request.Headers] invariant):
+//   - Header keys are lowercased. Native gRPC clients (Go SDK,
+//     grpcurl, ...) typically send title-case keys; HTTP/2 mandates
+//     lowercase on the wire on the Door A side. Lowercasing here
+//     means modules can use direct map lookups identically across
+//     both transports.
+//   - Host is taken from the "host" header first (the HTTP authority
+//     the client targeted) and falls back to the gRPC peer's remote
+//     address only when no host header was sent. Door A populates
+//     Host from envoy.AttributeContext_HttpRequest.Host (the HTTP
+//     authority); using peer.RemoteAddr unconditionally on Door B
+//     would break DPoP's htu binding and HMAC's canonical string.
 func requestFromAuthorize(in *authv1.AuthorizeRequest) *module.Request {
 	out := &module.Request{Headers: map[string][]string{}}
 	if in == nil {
@@ -99,10 +112,19 @@ func requestFromAuthorize(in *authv1.AuthorizeRequest) *module.Request {
 	out.Body = in.GetBody()
 	out.TenantID = in.GetTenantId()
 	for k, v := range in.GetHeaders() {
-		out.Headers[k] = []string{v}
+		out.Headers[strings.ToLower(k)] = []string{v}
+	}
+	// Prefer the HTTP authority from the "host" header (matches Door
+	// A's Http.Host semantics). Only fall back to the gRPC peer's
+	// remote address — which is a transport-level IP, not an HTTP
+	// authority — when the caller did not set the header.
+	if hosts, ok := out.Headers["host"]; ok && len(hosts) > 0 && hosts[0] != "" {
+		out.Host = hosts[0]
 	}
 	if peer := in.GetPeer(); peer != nil {
-		out.Host = peer.GetRemoteAddr() // best-effort; Door A also leaves Host empty for non-HTTP
+		if out.Host == "" {
+			out.Host = peer.GetRemoteAddr()
+		}
 		if cert := peer.GetCertChain(); len(cert) > 0 {
 			out.PeerCerts = cert
 		}

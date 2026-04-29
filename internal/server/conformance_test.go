@@ -28,13 +28,9 @@ import (
 //	Door B handler ──► nativev1.toRequest() ─┘
 //
 // is symmetric: equivalent inputs produce equivalent decisions.
-//
-// The caller supplies the AuthConfig so the same harness can drive the
-// single-fixture parity test below AND the broader identifier ×
-// authorizer matrix in matrix_test.go (M12-CONF-MATRIX).
-func bootBothDoors(t *testing.T, ac *config.AuthConfig) (authv3.AuthorizationClient, authv1.AuthClient) {
+func bootBothDoors(t *testing.T) (authv3.AuthorizationClient, authv1.AuthClient) {
 	t.Helper()
-	eng, err := config.Compile(ac)
+	eng, err := config.Compile(nativeTestConfig())
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
@@ -76,7 +72,7 @@ func bootBothDoors(t *testing.T, ac *config.AuthConfig) (authv3.AuthorizationCli
 //     the parity that matters (allow/deny + status code) is asserted.
 func TestConformance_DoorAEqualsDoorB(t *testing.T) {
 	t.Parallel()
-	envoyCli, nativeCli := bootBothDoors(t, nativeTestConfig())
+	envoyCli, nativeCli := bootBothDoors(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
