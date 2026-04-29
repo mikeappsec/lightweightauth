@@ -12,5 +12,5 @@
 # fix for the same surface, so once 10.14 is in we hold the Pygments
 # pin too as belt-and-braces against a future regression.
 mkdocs-material==9.5.39
-pymdown-extensions==10.14
+pymdown-extensions==10.16.1
 Pygments==2.18.0
