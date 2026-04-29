@@ -1730,6 +1730,20 @@ B2. **M12-BROKER-MW (was 19) — Multi-writer `configstream.Broker`.**
     Small change but it shifts a documented invariant, hence
     v1.1 rather than a v1.0 patch.
 
+    *Status: shipped (v1.1).* Version assignment stays serialised
+    under the broker mutex; delivery moved outside it. Each
+    `subscription` carries a `highWater uint64` that `deliver`
+    consults to drop any snapshot `<= highWater`, so two
+    concurrent writers can race past each other without ever
+    regressing a subscriber's pending slot. `Subscribe` seeds
+    `highWater` from `b.current.Version` at prime time to fence
+    the new-subscriber-versus-concurrent-Publish race. Fenced by
+    `TestBrokerStress_MultiWriter` (8 writers × 500 publishes ×
+    16 subscribers, asserts final version, per-subscriber
+    monotonicity, drain-to-final, goleak) and the deterministic
+    `TestBrokerDeliver_RejectsStaleVersion` in
+    [pkg/configstream/stress_test.go](../pkg/configstream/stress_test.go).
+
 B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     Generate an OpenAPI 3.1 doc for the HTTP surface (`POST
     /v1/authorize`, `/healthz`, `/readyz`, `/metrics`, and
