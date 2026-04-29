@@ -1,0 +1,84 @@
+# DOC-COOKBOOK-1 (Tier C1, v1.1): publish the rendered mkdocs site to
+# GitHub Pages whenever main moves. Sits alongside docs.yaml (which
+# only builds and uploads an artifact for PR review) so the publish
+# permissions never apply to PR builds from forks.
+#
+# The build is reproduced rather than reused-from-docs.yaml so the
+# publish job has a single, self-contained workflow run to audit
+# (commit SHA → build inputs → deployed bytes) and so a manual
+# workflow_dispatch can republish from main without first scheduling
+# a docs.yaml run.
+
+name: docs-publish
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'Makefile'
+      - '.github/workflows/docs-publish.yaml'
+  # Allow a manual republish from the Actions tab without having to
+  # land a no-op docs commit first (e.g. recovering from a Pages
+  # outage or re-running after a failed deployment).
+  workflow_dispatch:
+
+# Default scope is read-only; the publish job below opts in to the
+# narrowest permissions Pages needs. `pages: write` lets Actions
+# upload the artifact and trigger the deployment; `id-token: write`
+# is required by actions/deploy-pages so it can mint the OIDC token
+# Pages uses to verify the upload came from this workflow run.
+permissions:
+  contents: read
+
+# One in-flight Pages deployment at a time. A second push to main
+# while the first publish is still uploading will queue rather than
+# race; cancel-in-progress is intentionally false so the SHA that
+# kicked off the publish is the SHA that lands on the site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: install pinned docs toolchain
+        run: python -m pip install --upgrade -r docs/requirements.txt
+
+      # `make docs` is `mkdocs build --strict` (see Makefile). A nav
+      # warning, broken in-docs link, anchor typo, or orphan page is
+      # a publish-blocking error here, not just a warning.
+      - name: build docs site
+        run: make docs
+
+      - name: configure pages
+        uses: actions/configure-pages@v5
+
+      - name: upload pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
