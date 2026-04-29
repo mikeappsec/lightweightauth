@@ -13,4 +13,4 @@
 # pin too as belt-and-braces against a future regression.
 mkdocs-material==9.5.39
 pymdown-extensions==10.16.1
-Pygments==2.18.0
+Pygments==2.20.0
