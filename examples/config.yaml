@@ -45,6 +45,6 @@ authorizers:
 # response: []  # response mutators (e.g. mint downstream JWT) come in M3
 
 # cache:        # opt-in decision cache (DESIGN.md §5)
-#   key: ["sub", "method", "pathTemplate"]
+#   key: ["sub", "method", "path"]
 #   ttl: "30s"
 #   negativeTtl: "5s"

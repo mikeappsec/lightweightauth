@@ -31,12 +31,23 @@ import "github.com/mikeappsec/lightweightauth/pkg/configstream"
 
 br := configstream.NewBroker()                // 1 publisher, N subscribers
 gs := grpc.NewServer()
-configstream.Register(gs, br)                 // mounts ConfigDiscovery
+authz := func(ctx context.Context) error {
+  // Inspect peer TLS state / metadata and return a gRPC status error
+  // on unauthenticated or unauthorized callers.
+  return nil
+}
+configstream.NewServer(br, authz).Register(gs) // mounts ConfigDiscovery
 go gs.Serve(lis)
 
 // In your reconciler, after a successful Compile():
-br.Publish(snapshot)                          // []byte JSON, version-tagged
+br.Publish(authConfig)                        // *config.AuthConfig, version-tagged
 ```
+
+`NewServer` requires a non-nil `Authorizer`. Passing `nil` panics so
+embedders cannot accidentally expose full `AuthConfig` snapshots by
+registering the service on an unauthenticated listener. If you truly
+intend an open stream in a trusted test harness, pass an explicit
+allow-all function in that code.
 
 `Broker.Publish` is the **single-writer** path. Calling Publish from
 multiple goroutines is supported but has a known caveat (an older
@@ -52,10 +63,11 @@ import "github.com/mikeappsec/lightweightauth/pkg/configstream"
 conn, _ := grpc.NewClient("control-plane:9001", grpc.WithTransportCredentials(...))
 defer conn.Close()
 
-err := configstream.Stream(ctx, conn, "node-id-here", func(snap []byte, version uint64) error {
-    cfg, err := config.Parse(snap)
-    if err != nil { return err }
-    return engineHolder.Swap(cfg)              // your Compile-and-Swap path
+err := configstream.Stream(ctx, conn, "node-id-here", func(ctx context.Context, version uint64, cfg *config.AuthConfig) error {
+  eng, err := config.Compile(cfg)
+  if err != nil { return err }
+  engineHolder.Swap(eng)                     // your Compile-and-Swap path
+  return nil
 })
 ```
 
@@ -64,19 +76,20 @@ The helper:
   scope the snapshot to the caller.
 - Calls `handler` synchronously per snapshot — return non-nil to abort
   the stream.
-- Reconnects automatically with bounded backoff on transport errors.
+- Is one-shot; reconnect/backoff logic belongs in the caller so it can
+  share fleet-specific jitter and shutdown policy.
 
 ## Wire shape
 
 ```protobuf
 service ConfigDiscovery {
   rpc StreamAuthConfig(StreamAuthConfigRequest)
-      returns (stream StreamAuthConfigResponse);
+      returns (stream AuthConfigSnapshot);
 }
 
-message StreamAuthConfigResponse {
-  bytes  snapshot = 1;   // JSON-encoded AuthConfig
+message AuthConfigSnapshot {
   uint64 version  = 2;   // monotonic per-Broker
+  bytes  spec_json = 3;  // JSON-encoded AuthConfig
 }
 ```
 
@@ -113,10 +126,9 @@ Validated under reconnect storms in
   instance. On control-plane restart, the counter resets to 0 — clients
   must treat version comparison as "snapshot bytes != prior snapshot"
   rather than "version > prior version".
-- **Authorization.** The service has no built-in authn. Operators
-  protect it via mTLS at the listener level (the helm chart's
-  `controlPlane.tls` block) or by fronting it with the standard
-  `lwauth` data plane.
+- **Authorization.** `NewServer` requires an application authorizer for
+  every stream. Operators should also protect the listener with mTLS or
+  an equivalent private control-plane boundary.
 - **Multi-tenant.** A single Broker pushes the cluster-wide snapshot;
   tenant filtering is the subscriber's responsibility (the `nodeId`
   argument lets the server scope replies in custom builds).

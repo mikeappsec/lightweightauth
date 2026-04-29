@@ -14,11 +14,16 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/config"
 )
 
+// allowAll is the test-only Authorizer that admits every stream. The
+// production constructor refuses a nil Authorizer; tests pass this to
+// exercise the snapshot path without a real auth layer.
+var allowAll Authorizer = func(_ context.Context) error { return nil }
+
 func startBufServer(t *testing.T, b *Broker) (*grpc.ClientConn, func()) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer()
-	NewServer(b).Register(gs)
+	NewServer(b, allowAll).Register(gs)
 	go func() {
 		_ = gs.Serve(lis)
 	}()

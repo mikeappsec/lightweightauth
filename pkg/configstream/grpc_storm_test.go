@@ -88,7 +88,7 @@ func TestGRPC_MultiClientReconnectStorm(t *testing.T) {
 
 	lis := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer()
-	NewServer(b).Register(gs)
+	NewServer(b, allowAll).Register(gs)
 	go func() { _ = gs.Serve(lis) }()
 	// Cleanups run LIFO: goleak last, after GracefulStop has finished
 	// unwinding the server transport goroutines.
@@ -245,7 +245,7 @@ func TestGRPC_ServerCancelClosesAllClients(t *testing.T) {
 
 	lis := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer()
-	NewServer(b).Register(gs)
+	NewServer(b, allowAll).Register(gs)
 	go func() { _ = gs.Serve(lis) }()
 
 	t.Cleanup(func() { verifyNoBrokerLeaks(t) })

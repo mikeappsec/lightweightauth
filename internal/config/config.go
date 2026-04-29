@@ -53,7 +53,10 @@ type ModuleSpec struct {
 // See DESIGN.md §5.
 type CacheSpec struct {
 	// Key lists the request/identity fields whose hash forms the cache key.
-	// Example: ["sub", "method", "pathTemplate"].
+	// Recognised values: "sub", "tenant", "method", "host", "path",
+	// "header:<Name>", "claim:<Name>". Unknown values are rejected at load
+	// time so a typo cannot silently drop a dimension from the key.
+	// Example: ["sub", "method", "path"].
 	Key []string `json:"key,omitempty" yaml:"key,omitempty"`
 	// TTL is the cache entry lifetime; zero disables the decision cache.
 	TTL string `json:"ttl,omitempty" yaml:"ttl,omitempty"`

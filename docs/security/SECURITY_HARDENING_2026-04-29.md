@@ -23,6 +23,13 @@ Six items were closed:
 | HTTP authorize               | The handler honours client cancellation instead of detaching context.  |
 | JWKS startup                 | Initial JWKS refresh runs under an explicit 30 s deadline.             |
 
+A second pass closed two further items:
+
+| Area                         | Change                                                                 |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| Decision-cache key fields    | Unknown `cache.key` entries are rejected at config-load time.          |
+| ConfigDiscovery gRPC server  | Constructor requires an explicit `Authorizer`; nil panics, errors return `Unauthenticated`. |
+
 ## Changes in detail
 
 ### 1. Native gRPC peer identity
@@ -132,6 +139,47 @@ daemon startup indefinitely.
 Both call sites now wrap the refresh in `context.WithTimeout(ctx, 30s)`.
 Steady-state refreshes already had their own deadline and are unchanged.
 
+### 7. Decision-cache key validation
+
+**Files:** `internal/cache/decision.go`,
+`internal/config/config.go`,
+`tests/golden/authconfig/05-cache-and-ratelimit.yaml`,
+`examples/config.yaml`,
+`docs/DESIGN.md`.
+
+`cache.key` previously skipped any value `resolveField` did not
+recognise, with the comment "future fields don't break old configs". The
+documented golden example used `pathTemplate`, which is not implemented,
+so the operator-facing string `[sub, method, pathTemplate]` silently
+became the cache key `sub|method`. A single allow decision could then
+replay across every path the same subject hit with the same HTTP method.
+
+`NewDecision` now rejects unknown fields and returns `module.ErrConfig`.
+The recognised set is the one `resolveField` actually implements: `sub`,
+`tenant`, `method`, `host`, `path`, `header:<Name>`, `claim:<Name>`.
+DESIGN.md, the example config, and the golden are corrected to use
+`path`. A future path-template normaliser can be added as a recognised
+field; it is not silently aliased now.
+
+### 8. ConfigDiscovery requires an Authorizer
+
+**File:** `pkg/configstream/grpc.go`.
+
+`AuthConfigSnapshot` bytes are trust material: every consumer pod
+compiles them into its live `Engine`, and a malicious snapshot can flip
+the entire policy surface. The stock daemon does not register the
+`ConfigDiscovery` server on a public listener, but the convenience
+`NewServer(b)` constructor allowed an embedder to attach it to any
+`grpc.ServiceRegistrar` with no authentication.
+
+`NewServer` now requires an `Authorizer func(ctx context.Context) error`
+and panics on nil. `StreamAuthConfig` runs the authorizer against the
+stream context before any snapshot is sent. A `status.Error` from the
+authorizer is preserved verbatim; any other error is normalised to
+`codes.Unauthenticated`. Embedders who genuinely want an open endpoint
+must pass an explicit allow-everything function so the choice is
+visible in their own code review.
+
 ## Verification
 
 - `go test ./... -race -count=1 -timeout=300s` — all packages green.
@@ -142,11 +190,12 @@ Steady-state refreshes already had their own deadline and are unchanged.
   - `internal/server/native_security_test.go`
   - `internal/pipeline/engine_security_test.go`
   - `internal/controller/idp_resolve_security_test.go`
+  - `internal/cache/decision_security_test.go`
+  - `pkg/configstream/grpc_security_test.go`
 
 ## Out of scope
 
-- Decision-cache key construction. The current key is unambiguous; no
-  change required.
-- The unauthenticated `ConfigDiscovery` service interface. The stock
-  daemon does not register it on a public listener; embedders that wire
-  it up are responsible for fronting it with their own auth.
+- Decision-cache key field set. The recognised list (`sub`, `tenant`,
+  `method`, `host`, `path`, `header:<Name>`, `claim:<Name>`) is now
+  enforced at config-load time. New dimensions (e.g. a real
+  path-template normaliser) are an additive change for a later release.

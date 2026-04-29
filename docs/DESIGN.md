@@ -724,8 +724,11 @@ Three distinct caches, each with a different invalidation story:
      and re-evaluate the policy each time. Safer, less speedup.
 
    - **Recommendation:** support both. Default = (b). Allow operators to
-     declare `cache: { key: ["sub", "method", "pathTemplate"], ttl: 30s }`
-     in `AuthConfig` to opt into (a).
+     declare `cache: { key: ["sub", "method", "path"], ttl: 30s }`
+     in `AuthConfig` to opt into (a). Unknown field names are rejected
+     at config-load time so a typo (e.g. `pathTemplate`) cannot silently
+     collapse the key and let an allow decision replay across requests
+     that differed only on the missing dimension.
 
 ### Cache implementation choices
 

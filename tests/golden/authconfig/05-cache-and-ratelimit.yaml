@@ -19,7 +19,7 @@ authorizers:
       allow: [admin]
 
 cache:
-  key: [sub, method, pathTemplate]
+  key: [sub, method, path]
   ttl: 30s
   negativeTtl: 5s
   backend: memory
