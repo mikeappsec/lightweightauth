@@ -87,7 +87,7 @@ register their own type names the same way; see
 
 ## How these get into a Helm release
 
-The chart at [deploy/helm/lightweightauth](../../deploy/helm/lightweightauth)
+The chart at [deploy/helm/lightweightauth](https://github.com/mikeappsec/lightweightauth/tree/main/deploy/helm/lightweightauth)
 exposes one inline `AuthConfig` via `config.inline` (file mode) and
 optionally a CRD-watching controller via `controller.enabled` (CRD mode).
 Each module's `config:` block from this directory drops directly into one

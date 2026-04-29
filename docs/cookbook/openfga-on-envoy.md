@@ -332,5 +332,4 @@ breaker trips.
 - [`cache.backend: valkey`](../modules/cache-valkey.md)
 - [Envoy + lwauth deployment guide](../deployment/envoy.md)
 - [DESIGN.md §5](../DESIGN.md) — decision cache and authorizer composition.
-- [SECURITY_HARDENING_2026-04-29 §7](../security/SECURITY_HARDENING_2026-04-29.md) — `cache.key` validation.
 - [OpenFGA reference](https://openfga.dev).

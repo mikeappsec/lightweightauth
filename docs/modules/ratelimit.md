@@ -4,7 +4,7 @@ Token-bucket limiter keyed by `Request.TenantID`. Runs at the very top
 of the pipeline so a misbehaving tenant cannot exhaust shared module
 resources (an OPA hot loop, an OpenFGA call, an introspection RPC).
 
-**Source:** [pkg/ratelimit](../../pkg/ratelimit/ratelimit.go).
+**Source:** [pkg/ratelimit](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/ratelimit/ratelimit.go).
 **Wired into:** `pipeline.Engine.Evaluate` via `Options.RateLimiter`.
 
 ## When to use
@@ -133,7 +133,7 @@ per-replica floor — a transient `N × rps` worst case, not unbounded.
 
 ### Wire protocol
 
-The Valkey backend ([pkg/ratelimit/valkey](../../pkg/ratelimit/valkey/valkey.go))
+The Valkey backend ([pkg/ratelimit/valkey](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/ratelimit/valkey/valkey.go))
 runs an atomic Lua script per call:
 
 ```lua
@@ -169,5 +169,5 @@ authorize  ✓  rbac
 ## References
 
 - DESIGN: [DESIGN.md §M11](../DESIGN.md) "per-tenant rate limits".
-- Source: [pkg/ratelimit/ratelimit.go](../../pkg/ratelimit/ratelimit.go).
-- Tests: [pkg/ratelimit/ratelimit_test.go](../../pkg/ratelimit/ratelimit_test.go).
+- Source: [pkg/ratelimit/ratelimit.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/ratelimit/ratelimit.go).
+- Tests: [pkg/ratelimit/ratelimit_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/ratelimit/ratelimit_test.go).

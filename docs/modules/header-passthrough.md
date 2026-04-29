@@ -4,7 +4,7 @@ Forwards only the named headers to upstream, dropping everything else
 auth-related. Inverse of [`header-remove`](header-remove.md): you list
 what stays, not what goes.
 
-**Source:** [pkg/mutator/headers](../../pkg/mutator/headers/headers.go) — registered as `header-passthrough`.
+**Source:** [pkg/mutator/headers](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/headers/headers.go) — registered as `header-passthrough`.
 
 ## When to use
 
@@ -64,4 +64,4 @@ header count: 7.
 
 ## References
 
-- Source: [pkg/mutator/headers/headers.go](../../pkg/mutator/headers/headers.go).
+- Source: [pkg/mutator/headers/headers.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/headers/headers.go).

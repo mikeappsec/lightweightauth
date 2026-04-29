@@ -4,7 +4,7 @@ Static, declarative role gate. Pulls the role list out of an `Identity`
 field (claim, source, or subject) and checks it against an allow-list.
 The cheapest authorizer in the kit.
 
-**Source:** [pkg/authz/rbac](../../pkg/authz/rbac/rbac.go) — registered as `rbac`.
+**Source:** [pkg/authz/rbac](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/rbac/rbac.go) — registered as `rbac`.
 
 ## When to use
 
@@ -68,5 +68,5 @@ JWT carries `"roles": ["editor", "viewer"]`. Config has
 
 ## References
 
-- Source: [pkg/authz/rbac/rbac.go](../../pkg/authz/rbac/rbac.go).
+- Source: [pkg/authz/rbac/rbac.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/rbac/rbac.go).
 - DESIGN.md §5 — authorization layer.

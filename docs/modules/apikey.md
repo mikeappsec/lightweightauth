@@ -3,7 +3,7 @@
 Validates static API keys carried in a header. Three production storage
 backends (argon2id-hashed) plus a plaintext static map for tests.
 
-**Source:** [pkg/identity/apikey](../../pkg/identity/apikey/apikey.go) — registered as `apikey`.
+**Source:** [pkg/identity/apikey](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/apikey/apikey.go) — registered as `apikey`.
 
 ## When to use
 
@@ -97,4 +97,4 @@ X-Api-Key: ak_alice_2026
 ## References
 
 - argon2id: RFC 9106.
-- Source: [pkg/identity/apikey/apikey.go](../../pkg/identity/apikey/apikey.go), [store.go](../../pkg/identity/apikey/store.go).
+- Source: [pkg/identity/apikey/apikey.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/apikey/apikey.go), [store.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/apikey/store.go).

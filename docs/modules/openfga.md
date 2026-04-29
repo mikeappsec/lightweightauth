@@ -4,7 +4,7 @@ Asks an OpenFGA / Auth0 FGA store whether `(user, relation, object)`
 holds. Decisions are cached per `(authorizationModelId, user, relation,
 object)` against the shared `cache.Backend`.
 
-**Source:** [pkg/authz/openfga](../../pkg/authz/openfga/openfga.go) — registered as `openfga`.
+**Source:** [pkg/authz/openfga](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/openfga/openfga.go) — registered as `openfga`.
 
 ## When to use
 
@@ -91,4 +91,4 @@ cache MISS → `POST /stores/{id}/check` → `{"allowed": true}` → permit; cac
 ## References
 
 - OpenFGA: <https://openfga.dev>.
-- Source: [pkg/authz/openfga/openfga.go](../../pkg/authz/openfga/openfga.go).
+- Source: [pkg/authz/openfga/openfga.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/openfga/openfga.go).

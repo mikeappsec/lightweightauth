@@ -6,7 +6,7 @@ consumers can never block `Publish`. Late subscribers are primed with
 the current snapshot so a mid-flight pod restart catches up
 immediately.
 
-**Source:** [pkg/configstream](../../pkg/configstream/broker.go).
+**Source:** [pkg/configstream](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/configstream/broker.go).
 **Service:** `lightweightauth.v1.ConfigDiscovery` /
 `StreamAuthConfig` (one server-streaming RPC).
 
@@ -113,7 +113,7 @@ latest", never "every snapshot delivered".
 ## Storm resilience (M12 slice 5)
 
 Validated under reconnect storms in
-[pkg/configstream/grpc_storm_test.go](../../pkg/configstream/grpc_storm_test.go):
+[pkg/configstream/grpc_storm_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/configstream/grpc_storm_test.go):
 
 - 16 clients × 3 reconnects + 1 long-lived over single HTTP/2 conn vs
   100-publish stream — runs <250 ms under `-race`.
@@ -136,6 +136,6 @@ Validated under reconnect storms in
 ## References
 
 - DESIGN: [DESIGN.md §M11](../DESIGN.md) "xDS-style push".
-- Stress + storm tests: [pkg/configstream/stress_test.go](../../pkg/configstream/stress_test.go),
-  [pkg/configstream/grpc_storm_test.go](../../pkg/configstream/grpc_storm_test.go).
-- Source: [pkg/configstream/broker.go](../../pkg/configstream/broker.go).
+- Stress + storm tests: [pkg/configstream/stress_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/configstream/stress_test.go),
+  [pkg/configstream/grpc_storm_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/configstream/grpc_storm_test.go).
+- Source: [pkg/configstream/broker.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/configstream/broker.go).

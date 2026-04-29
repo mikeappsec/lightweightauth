@@ -4,7 +4,7 @@ Evaluates a Common Expression Language program against `(identity,
 request)`. Compiled once at config load; per-request evaluation is
 allocation-light.
 
-**Source:** [pkg/authz/cel](../../pkg/authz/cel/cel.go) — registered as `cel`.
+**Source:** [pkg/authz/cel](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/cel/cel.go) — registered as `cel`.
 
 ## When to use
 
@@ -78,4 +78,4 @@ Same identity, request `GET /tenants/globex/things` → `false` → deny.
 ## References
 
 - CEL language spec: <https://github.com/google/cel-spec>.
-- Source: [pkg/authz/cel/cel.go](../../pkg/authz/cel/cel.go).
+- Source: [pkg/authz/cel/cel.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/cel/cel.go).

@@ -192,7 +192,7 @@ srv := grpc.NewServer(grpc.UnaryInterceptor(
 
 Each adapter is ~150–200 LOC. The pipeline never sees protobuf — it works
 on `module.Request` / `module.Decision` (see
-[pkg/module/module.go](../pkg/module/module.go)). That's what makes adding a
+[pkg/module/module.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/module/module.go)). That's what makes adding a
 third door (HTTP REST, MQTT, …) cheap later.
 
 ### Modes of deployment for "routing through the service"
@@ -207,7 +207,7 @@ third door (HTTP REST, MQTT, …) cheap later.
 ### Trade-offs
 
 - **Sharing the pipeline across HTTP + gRPC** keeps logic identical but means
-  the `Request` abstraction (see [pkg/module/module.go](../pkg/module/module.go))
+  the `Request` abstraction (see [pkg/module/module.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/module/module.go))
   must be transport-agnostic. We pay a small marshalling cost in the Envoy
   adapter — acceptable.
 - **Ext_authz vs native gRPC**: ext_authz is *check-only* (no body access by
@@ -227,7 +227,7 @@ third door (HTTP REST, MQTT, …) cheap later.
 
 ### Recommendation
 A **three-stage pipeline** with narrow Go interfaces (already sketched in
-[pkg/module/module.go](../pkg/module/module.go)):
+[pkg/module/module.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/module/module.go)):
 
 ```
 Identifier(s)  →  Authorizer(s)  →  ResponseMutator(s)
@@ -275,7 +275,7 @@ service MutatorPlugin {
 ```
 
 Inside `lwauth`, an adapter implements the same Go interfaces from
-[pkg/module/module.go](../pkg/module/module.go) but forwards each call
+[pkg/module/module.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/module/module.go) but forwards each call
 over gRPC. The pipeline cannot tell the difference between a built-in
 identifier and an out-of-process one.
 
@@ -535,7 +535,7 @@ Mode A in spirit. We'll accept community contributions but won't lead.
 2. **Helm chart** at `deploy/helm/lightweightauth-proxy/` (in the proxy
    repo) for users who want Mode B without the core CRDs/controller — e.g.
    a single-binary edge gateway.
-3. **CRDs** under [api/crd](../api/crd/):
+3. **CRDs** under [api/crd](https://github.com/mikeappsec/lightweightauth/tree/main/api/crd/):
    - `AuthConfig` — main resource: identifiers, authorizers, response mutators
      (mirrors the YAML in §2). Namespaced.
    - `AuthPolicy` — binds an `AuthConfig` to a route/host pattern.
@@ -597,7 +597,7 @@ indirection — keep §2's "minimalistic" promise).
 > JWT validation (default), OAuth2 flows (client credentials, auth code,
 > implicit), mTLS, HMAC, API key.
 
-Recommended built-ins, all under [pkg/identity](../pkg/identity/):
+Recommended built-ins, all under [pkg/identity](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/identity/):
 
 | Module | Library | Notes & trade-offs |
 |--------|---------|--------------------|
@@ -673,7 +673,7 @@ to cover the four models that account for ~all real-world authz needs:
    Zanzibar — it is a multi-year project and excellent open-source
    implementations exist.
 4. **Custom** — the `Authorizer` interface (see
-   [pkg/module/module.go](../pkg/module/module.go)) plus the out-of-process
+   [pkg/module/module.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/module/module.go)) plus the out-of-process
    plugin mechanism (§2) covers anything we don't ship.
 
 ### Composing models
@@ -1537,7 +1537,7 @@ S1. **SEC-PROXY-1 — Mode B proxy request fidelity & deny redaction.**
 
 S2. **SEC-MTLS-1 — XFCC trust requires an anchor.** ✅ shipped.
     Factory-time guard in
-    [pkg/identity/mtls/mtls.go](../pkg/identity/mtls/mtls.go) now
+    [pkg/identity/mtls/mtls.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/mtls/mtls.go) now
     fails closed when `trustXFCC == true && pool == nil &&
     len(trustedIssuers) == 0`, closing the symmetric mistake of
     the slice-1 fix where an XFCC-enabled config without an anchor
@@ -1587,8 +1587,8 @@ A1. **F-PLUGIN-2 (was 24) — Signature on plugin replies.** Slice 8
     silently degrading. X.509 / asymmetric is a forward-compatible
     follow-up; the trailer scheme already routes alg through to the
     host. New package
-    [pkg/plugin/sign](../pkg/plugin/sign/) and the
-    [signing config block](../pkg/plugin/grpc/sign.go) on every
+    [pkg/plugin/sign](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/plugin/sign/) and the
+    [signing config block](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/plugin/grpc/sign.go) on every
     `grpc-plugin` factory.
 
 A2. **K-AUTHN-2 (was 22) — Negative-cache invalid introspection.**
@@ -1602,7 +1602,7 @@ A2. **K-AUTHN-2 (was 22) — Negative-cache invalid introspection.**
     out. The Guard circuit-breaker still owns the per-(tenant,
     upstream) coarse policy; this cache adds per-credential
     coalescing on top. See
-    [pkg/identity/introspection/introspection.go](../pkg/identity/introspection/introspection.go).
+    [pkg/identity/introspection/introspection.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/introspection/introspection.go).
 
 A3. **K-DOS-1 (was 23) — Distributed rate-limit aggregation.**
     `pkg/ratelimit` was per-replica through v1.0; under N pods a
@@ -1618,9 +1618,9 @@ A3. **K-DOS-1 (was 23) — Distributed rate-limit aggregation.**
     charged so a single replica still can't exceed its `rps`; on
     backend error the limiter falls back to local (or, with
     `failOpen: true`, allows). New backend abstraction
-    [pkg/ratelimit/backend.go](../pkg/ratelimit/backend.go) keeps
+    [pkg/ratelimit/backend.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/ratelimit/backend.go) keeps
     the core package dependency-free; concrete impl in
-    [pkg/ratelimit/valkey](../pkg/ratelimit/valkey/) registers via
+    [pkg/ratelimit/valkey](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/ratelimit/valkey/) registers via
     `init()` from the `pkg/builtins` blank-import.
 
 A4. **M10-PLUGIN-LIFECYCLE (supervisor half, was 25) — Plugin
@@ -1629,7 +1629,7 @@ A4. **M10-PLUGIN-LIFECYCLE (supervisor half, was 25) — Plugin
     the supervisor half ships in v1.1.
 
     ✅ v1.1 ships the opt-in supervisor on `v1.1-tier-a`. New
-    package [pkg/plugin/supervisor](../pkg/plugin/supervisor/)
+    package [pkg/plugin/supervisor](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/plugin/supervisor/)
     spawns the child via `os/exec`, probes
     `grpc.health.v1.Health.Check` every `interval` over the same
     transport credentials the data plane uses, and after
@@ -1655,12 +1655,12 @@ A5. **K-CRYPTO-2 (was 21) — FIPS 140-3 build mode.** Optional
     than the older `GOEXPERIMENT=boringcrypto` route — pure-Go,
     no CGO, ~3 % overhead instead of the legacy 10–20 %. New
     Makefile targets `fips`, `fips-test`, `fips-verify`,
-    `docker-fips`. New [Dockerfile.fips](../Dockerfile.fips)
+    `docker-fips`. New [Dockerfile.fips](https://github.com/mikeappsec/lightweightauth/blob/main/Dockerfile.fips)
     publishes `<image>:<tag>-fips` with the
     `org.lightweightauth.fips140=enabled` OCI label so
     image-policy admission webhooks have two independent ways
     (tag suffix + label) to refuse a stock image landing in a
-    regulated namespace. New [pkg/buildinfo](../pkg/buildinfo/)
+    regulated namespace. New [pkg/buildinfo](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/buildinfo/)
     surfaces `Version`, `Commit`, `GoVersion()`, `FIPSEnabled()`;
     the metrics recorder exposes `lwauth_fips_enabled` (always
     present, value 0/1) and `lwauth_build_info` (constant
@@ -1670,7 +1670,7 @@ A5. **K-CRYPTO-2 (was 21) — FIPS 140-3 build mode.** Optional
     `fips_enabled=true` at build time so a toolchain regression
     fails the image build instead of a deployment. CI gains
     `fips-test` and `build-fips` jobs in
-    [.github/workflows/build.yaml](../.github/workflows/build.yaml).
+    [.github/workflows/build.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/.github/workflows/build.yaml).
     Operator-facing docs:
     [docs/operations/fips.md](operations/fips.md) lists which
     primitives switch backends and gives admission-webhook /
@@ -1695,10 +1695,10 @@ B1. **M12-REQUEST-NORM (was M12-CONF-MATRIX) — Canonical
     [docs/testing/request-invariants.md](testing/request-invariants.md).
 
     Canonical `module.Request` shape, enforced at every entry
-    point ([requestFromCheck](../internal/server/grpc.go) for
-    Door A, [requestFromAuthorize](../internal/server/native.go)
-    for Door B, [HTTPHandler.authorize](../internal/server/http.go)
-    for Door C, [reqToProto](../pkg/plugin/grpc/translate.go)
+    point ([requestFromCheck](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/grpc.go) for
+    Door A, [requestFromAuthorize](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/native.go)
+    for Door B, [HTTPHandler.authorize](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/http.go)
+    for Door C, [reqToProto](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/plugin/grpc/translate.go)
     for Door D):
 
     - `Method` uppercase ASCII;
@@ -1719,9 +1719,9 @@ B1. **M12-REQUEST-NORM (was M12-CONF-MATRIX) — Canonical
     code or test changes required.
 
     Unit tests fence each invariant in
-    [internal/server/normalize_test.go](../internal/server/normalize_test.go);
+    [internal/server/normalize_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/normalize_test.go);
     the existing single-fixture parity self-test in
-    [internal/server/conformance_test.go](../internal/server/conformance_test.go)
+    [internal/server/conformance_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/conformance_test.go)
     remains as a smoke check that Door A and Door B agree end-
     to-end.
 
@@ -1745,7 +1745,7 @@ B2. **M12-BROKER-MW (was 19) — Multi-writer `configstream.Broker`.**
     16 subscribers, asserts final version, per-subscriber
     monotonicity, drain-to-final, goleak) and the deterministic
     `TestBrokerDeliver_RejectsStaleVersion` in
-    [pkg/configstream/stress_test.go](../pkg/configstream/stress_test.go).
+    [pkg/configstream/stress_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/configstream/stress_test.go).
 
 B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     Generate an OpenAPI 3.1 doc for the HTTP surface (`POST
@@ -1758,9 +1758,9 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     vendoring.
 
     *Status: shipped (v1.1).* Spec checked in at
-    [api/openapi/lwauth.yaml](../api/openapi/lwauth.yaml) and
+    [api/openapi/lwauth.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/api/openapi/lwauth.yaml) and
     embedded into the lwauthd binary by the
-    [api/openapi](../api/openapi/openapi.go) package. Two
+    [api/openapi](https://github.com/mikeappsec/lightweightauth/blob/main/api/openapi/openapi.go) package. Two
     endpoints share one source: `GET /openapi.yaml` returns the
     bytes verbatim (preserving comments + ordering); `GET
     /openapi.json` returns a lazily-converted, cached JSON form.
@@ -1771,12 +1771,12 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     own per-module docs rather than in this transport-layer
     spec — the lwauthd binary doesn't know which mounters a
     given config will compose. Buf module name set in
-    [buf.yaml](../buf.yaml) (`buf.build/mikeappsec/lightweightauth`)
+    [buf.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/buf.yaml) (`buf.build/mikeappsec/lightweightauth`)
     so `buf push` publishes the api/proto tree to the BSR.
     Fenced by `TestHTTPHandler_OpenAPI_JSON`,
     `TestHTTPHandler_OpenAPI_YAML`, and
     `TestHTTPHandler_DisableOpenAPI` in
-    [internal/server/openapi_test.go](../internal/server/openapi_test.go).
+    [internal/server/openapi_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/openapi_test.go).
 
 #### Tier C — new features (v1.1+)
 

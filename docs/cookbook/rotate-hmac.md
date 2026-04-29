@@ -332,4 +332,3 @@ keep them around. The third is a one-time check.
   streams the rotated `AuthConfig` to every replica without a
   daemon restart.
 - [DESIGN.md §4](../DESIGN.md) — identity & credential modules.
-- [SECURITY_HARDENING_2026-04-29](../security/SECURITY_HARDENING_2026-04-29.md) §8 — ConfigDiscovery is gated, so the snapshot stream a controller serves to your daemons is not a sneak path past this rotation.

@@ -15,9 +15,7 @@ adapter — pick the deployment shape that fits, share the same modules.
 - **Operating it?** [Deployment](DEPLOYMENT.md), the Envoy guide under
   [deployment/envoy.md](deployment/envoy.md), and the FIPS build target
   in [operations/fips.md](operations/fips.md).
-- **Reviewing security posture?** The latest pass is
-  [security/SECURITY_HARDENING_2026-04-29.md](security/SECURITY_HARDENING_2026-04-29.md);
-  the long-form review sits at
+- **Reviewing security posture?** The long-form review sits at
   [security/v1.0-review.md](security/v1.0-review.md).
 
 The site you are reading is built from the same Markdown that ships in

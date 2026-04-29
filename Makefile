@@ -153,12 +153,14 @@ PYTHON ?= python
 docs-deps:
 	$(PYTHON) -m pip install --quiet --upgrade -r docs/requirements.txt
 
-# Build matches what CI runs. Validation policy in mkdocs.yml keeps
-# nav errors blocking but downgrades source-tree links (e.g.
-# `../../pkg/.../foo.go`) to warnings, since those render correctly on
-# GitHub even though the static site cannot resolve them.
+# Build matches what CI runs. `--strict` promotes every mkdocs warning
+# to a build failure: an orphan page, a broken in-docs link, an unknown
+# nav entry, an anchor typo. Source-tree references are absolute
+# https://github.com/... URLs (rewritten in C1.6) so they resolve
+# identically on the rendered site and on GitHub without the strict
+# build flagging them.
 docs: docs-deps
-	$(PYTHON) -m mkdocs build
+	$(PYTHON) -m mkdocs build --strict
 
 # Live-reload preview. Binds to localhost only so a developer running
 # this on a laptop on a hostile network does not accidentally publish

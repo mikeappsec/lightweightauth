@@ -58,15 +58,14 @@ helm install lwauth oci://ghcr.io/mikeappsec/lightweightauth/charts/lightweighta
 
 The chart defaults already match what Istio wants on the wire: HTTP
 on `:8080`, gRPC `ext_authz` on `:9001`. See
-[deploy/helm/lightweightauth/values.yaml](../../deploy/helm/lightweightauth/values.yaml)
+[deploy/helm/lightweightauth/values.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/deploy/helm/lightweightauth/values.yaml)
 for the full surface. `failure_mode_allow` is decided on the **Istio**
 side (step 2), not on the daemon.
 
 !!! warning "Network policy first"
     Apply your `NetworkPolicy` before the workload starts trusting
     lwauth. Anyone who can reach `lwauth.lwauth-system.svc:9001` can
-    issue `Check` calls; the controller-side snapshot stream is gated
-    (see [SECURITY_HARDENING_2026-04-29 §8](../security/SECURITY_HARDENING_2026-04-29.md))
+    issue `Check` calls; the controller-side snapshot stream is gated,
     but the data-plane port is intentionally not — Envoy is the trust
     boundary, and only Envoy / the mesh should reach `:9001`.
 
@@ -169,8 +168,7 @@ kubectl -n lwauth-system logs deploy/lwauth -c lwauth | \
 ```
 
 A typo in `cache.key` does **not** silently degrade the cache key
-(that path is fenced — see
-[SECURITY_HARDENING_2026-04-29 §7](../security/SECURITY_HARDENING_2026-04-29.md));
+(unknown fields are rejected at config-load time);
 the controller surfaces the error on the CR's `status.conditions` and
 keeps the previous good snapshot live until you fix it.
 

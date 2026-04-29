@@ -70,16 +70,24 @@ markdown_extensions:
 plugins:
   - search
 
+# Files outside the published surface ----------------------------------------
+# Internal pentest artifacts never ship: a contributor who drops a
+# `PENTEST_REPORT_*.md` under docs/ during a review must not have it
+# auto-published just because they forgot to gitignore it. The pattern
+# is matched against the docs_dir-relative path.
+exclude_docs: |
+  **/PENTEST_REPORT_*.md
+
 # Validation policy ----------------------------------------------------------
-# Many in-tree docs link out to source files using paths like
-# `../../pkg/.../foo.go`. Those resolve correctly on GitHub but not on
-# the rendered static site. Rewriting each one to an absolute repo URL
-# is its own follow-up; until then we warn (not fail) on broken
-# source-tree references so a broken nav or a broken in-docs link still
-# fails the build but a deep link into Go code does not.
+# Strict by default: any unresolved nav entry, broken in-docs link, or
+# orphan file fails the build. Source-tree references (Go files, proto
+# files, deploy manifests) are linked as absolute https://github.com/...
+# URLs so they resolve identically on the rendered site and on GitHub;
+# this lets us keep the strictest policy without paying the false-
+# positive tax that the relative `../../pkg/...` style used to cost.
 validation:
   nav:
-    omitted_files: warn
+    omitted_files: warn  # surfaced in dev; promoted by --strict in CI
     not_found: warn
     absolute_links: warn
   links:
@@ -143,5 +151,3 @@ nav:
       - Request invariants: testing/request-invariants.md
   - Security:
       - v1.0 security review: security/v1.0-review.md
-      - 2026-04-28 review delta: security/SECURITY_REVIEW_DELTA_2026-04-28.md
-      - 2026-04-29 hardening pass: security/SECURITY_HARDENING_2026-04-29.md

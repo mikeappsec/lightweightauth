@@ -4,7 +4,7 @@ Runs a list of child authorizers under a combinator. The only authorizer
 that takes other authorizers; lets you express "fast path then slow
 path", "must pass all", or "any one is enough" without code.
 
-**Source:** [pkg/authz/composite](../../pkg/authz/composite/composite.go) — registered as `composite`.
+**Source:** [pkg/authz/composite](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/composite/composite.go) — registered as `composite`.
 
 ## When to use
 
@@ -78,5 +78,5 @@ config:
 
 ## References
 
-- Source: [pkg/authz/composite/composite.go](../../pkg/authz/composite/composite.go).
+- Source: [pkg/authz/composite/composite.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/composite/composite.go).
 - DESIGN.md §5 — composing authorizers.

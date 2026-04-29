@@ -6,7 +6,7 @@ hold a refreshed access token for browser-facing flows. Cookies are
 sealed with AEAD (AES-256-GCM), so integrity, confidentiality, and
 binding-to-key are all enforced by a single tag.
 
-**Source:** [pkg/session](../../pkg/session/cookie.go) — used internally by `pkg/identity/oauth2`.
+**Source:** [pkg/session](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/session/cookie.go) — used internally by `pkg/identity/oauth2`.
 
 ## When to use
 
@@ -97,4 +97,4 @@ plaintext    = JSON-encoded session.Session
 
 - DESIGN: [DESIGN.md §M3](../DESIGN.md), [DESIGN.md §M11](../DESIGN.md).
 - Cryptography review: [security/v1.0-review.md §1](../security/v1.0-review.md).
-- Source: [pkg/session/cookie.go](../../pkg/session/cookie.go).
+- Source: [pkg/session/cookie.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/session/cookie.go).

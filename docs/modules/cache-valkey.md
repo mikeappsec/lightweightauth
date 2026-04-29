@@ -4,7 +4,7 @@ Valkey-/Redis-protocol-compatible shared cache. Used cluster-wide for
 introspection results, DPoP `jti` replay, decision cache (M5), and the
 M14 revocation lists (when enabled).
 
-**Source:** [pkg/cache](../../pkg/cache) — registered as `valkey`.
+**Source:** [pkg/cache](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/cache) — registered as `valkey`.
 
 ## When to use
 
@@ -96,5 +96,5 @@ IdP saw exactly one call.
 ## References
 
 - Valkey docs: <https://valkey.io>.
-- Source: [pkg/cache/valkey.go](../../pkg/cache/valkey.go).
+- Source: [pkg/cache/valkey.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/cache/valkey.go).
 - DESIGN.md §5 (decision cache), §M14 (revocation).
