@@ -43,6 +43,13 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Needed by actions/configure-pages with enablement: true so
+      # the first run on a repo that has never had Pages enabled
+      # turns it on. Drop this back to default (contents: read only)
+      # once Pages is bootstrapped if you want the smaller scope.
+      pages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +70,13 @@ jobs:
 
       - name: configure pages
         uses: actions/configure-pages@v5
+        with:
+          # First run on a repo that has never had Pages turned on
+          # will enable it automatically (Settings -> Pages shows
+          # only "Verified domains" until then). Subsequent runs
+          # no-op. Requires the deploy job's pages: write scope,
+          # which is already in place below.
+          enablement: true
 
       - name: upload pages artifact
         uses: actions/upload-pages-artifact@v3
