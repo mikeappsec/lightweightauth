@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
@@ -134,8 +135,9 @@ type authorizeRequest struct {
 }
 
 // lowercaseHeaderKeys enforces the [module.Request.Headers] invariant
-// AND rejects case-collisions (F9). Returning a fresh map (rather than
-// mutating in place) avoids surprising the JSON decoder's owner.
+// AND rejects case-collisions (F9) AND rejects multi-value arrays
+// (F13). Returning a fresh map (rather than mutating in place) avoids
+// surprising the JSON decoder's owner.
 //
 // Without the collision check, a body containing both "X-Api-Key" and
 // "x-api-key" would deserialize into two distinct map entries that
@@ -144,6 +146,16 @@ type authorizeRequest struct {
 // pick different surviving values. That makes auth non-deterministic
 // (a 50/50 between a valid and an invalid credential, by design).
 // We refuse the request instead.
+//
+// F13: a JSON body of shape {"x-api-key":["bogus","valid"]} is
+// well-formed JSON, never trips the dup-key walker, and never trips
+// the case-collision check above. But [module.Request.Header] returns
+// vs[0] only, so the verdict flips between 200 and 401 purely on
+// slice order. HTTP front layers (Envoy, nginx, CDNs) fold duplicate
+// header lines inconsistently, so the same wire bytes can yield
+// different orderings on different paths — a parser-differential
+// identical in shape to the F9 / F6 lanes. We refuse arrays with
+// len>1 here so credential identifiers see exactly one value.
 func lowercaseHeaderKeys(in map[string][]string) (map[string][]string, error) {
 	if len(in) == 0 {
 		return map[string][]string{}, nil
@@ -154,9 +166,47 @@ func lowercaseHeaderKeys(in map[string][]string) (map[string][]string, error) {
 		if _, dup := out[lk]; dup {
 			return nil, fmt.Errorf("case-collision on header key %q", lk)
 		}
+		if len(v) > 1 {
+			return nil, fmt.Errorf("multi-value header %q (got %d values); send a single value", lk, len(v))
+		}
 		out[lk] = v
 	}
 	return out, nil
+}
+
+// hostAuthorityRe matches a permissive but CRLF-free HTTP authority
+// (host[:port]). Any character outside this set — control chars,
+// CRLF, whitespace — fails (F15). The :port group caps at 5 digits.
+var hostAuthorityRe = regexp.MustCompile(`^[A-Za-z0-9._\-]+(:[0-9]{1,5})?$`)
+
+// maxTenantIDLen bounds the body's tenantId field. 256 bytes is far
+// larger than any legitimate tenant id (UUIDs, slugs, namespaced
+// strings) and small enough that an attacker can't pile log noise
+// or response-header payload into it (F15).
+const maxTenantIDLen = 256
+
+// validateAuthorizeShape checks the structural sanity of the parsed
+// body — fields that flow into module.Request and from there into
+// audit logs and module-emitted response headers. Today no in-tree
+// module reflects Host or TenantID into a header value, but the
+// surface is one config knob away (e.g. an OAuth2 module deriving
+// `WWW-Authenticate: Bearer realm="<host>"`); we validate at the
+// door so a future module can't be turned into a CRLF-injection
+// vector by a previously-accepted input shape.
+func validateAuthorizeShape(in *authorizeRequest) error {
+	if in.Host != "" && !hostAuthorityRe.MatchString(in.Host) {
+		return fmt.Errorf("invalid host: must match host[:port] with no CRLF")
+	}
+	if n := len(in.TenantID); n > maxTenantIDLen {
+		return fmt.Errorf("tenantId too long: %d bytes > %d", n, maxTenantIDLen)
+	}
+	for i := 0; i < len(in.TenantID); i++ {
+		c := in.TenantID[i]
+		if c < 0x20 || c > 0x7e {
+			return fmt.Errorf("tenantId contains non-printable byte 0x%02x at offset %d", c, i)
+		}
+	}
+	return nil
 }
 
 type authorizeResponse struct {
@@ -239,11 +289,23 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	// F9: reject case-collisions in the headers map BEFORE we touch
-	// the engine. Two header keys that case-fold to the same name
-	// (e.g. "X-Api-Key" + "x-api-key") would otherwise yield a
-	// non-deterministic survivor (Go map iteration order) and flip
-	// the auth verdict at random.
+	// F15: validate structural shape of operator-controllable string
+	// fields (Host, TenantID) before they flow into the engine. CRLF
+	// in Host or oversize / non-printable TenantID is refused with
+	// 400 instead of being silently propagated to module code.
+	if err := validateAuthorizeShape(&in); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// F9 / F13: reject case-collisions AND multi-value arrays in the
+	// headers map BEFORE we touch the engine. Two header keys that
+	// case-fold to the same name (e.g. "X-Api-Key" + "x-api-key")
+	// would otherwise yield a non-deterministic survivor (Go map
+	// iteration order) and flip the auth verdict at random; a
+	// single key with a multi-value JSON array (e.g. ["bogus",
+	// "valid"]) would yield a verdict that depends entirely on
+	// slice index 0, which the front-layer normalisation can pick
+	// in either order.
 	headers, herr := lowercaseHeaderKeys(in.Headers)
 	if herr != nil {
 		http.Error(w, "bad json: "+herr.Error(), http.StatusBadRequest)

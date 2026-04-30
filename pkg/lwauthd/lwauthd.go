@@ -99,6 +99,19 @@ type Options struct {
 	HTTPIdleTimeout       time.Duration // default 120s
 	HTTPMaxHeaderBytes    int           // default 1 MiB
 
+	// gRPC server connection-management knobs (F14). Zero values
+	// pick safe defaults that match the HTTP listener guards. See
+	// [buildGRPCServerOptions] for the wiring; they bound how long
+	// an idle / long-lived / silent gRPC connection can hold a
+	// server goroutine and FD.
+	GRPCKeepaliveMinTime       time.Duration // default 30s  (enforcement: client ping floor)
+	GRPCKeepaliveTime          time.Duration // default 1m   (server-initiated ping period)
+	GRPCKeepaliveTimeout       time.Duration // default 20s  (server ping ack deadline)
+	GRPCMaxConnectionIdle      time.Duration // default 5m   (close idle conns after)
+	GRPCMaxConnectionAge       time.Duration // default 30m  (rotate any conn after)
+	GRPCMaxConnectionAgeGrace  time.Duration // default 30s  (graceful close window)
+	GRPCMaxConcurrentStreams   int           // default 1024 (HTTP/2 streams per conn)
+
 	// WatchConfigFile, if true, starts an fsnotify watcher on
 	// ConfigPath that hot-reloads the engine on every change. Cheap;
 	// safe to leave on. Default: false (M4 keeps it explicit).

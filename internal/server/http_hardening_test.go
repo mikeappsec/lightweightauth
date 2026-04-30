@@ -338,3 +338,123 @@ func TestHTTPHandler_RejectsCaseCollidingTopLevelFields(t *testing.T) {
 		}
 	}
 }
+
+// TestHTTPHandler_RejectsMultiValueHeader is the F13 regression
+// guard. A JSON body with a multi-value header array (e.g.
+// {"x-api-key":["bogus","valid"]}) is well-formed JSON, never trips
+// the dup-key walker (F6) or the case-collision check (F9), but
+// (*Request).Header returns vs[0] only — so the verdict flips
+// between 200 and 401 purely on slice order. Front layers (Envoy,
+// nginx, CDNs) fold duplicate header lines inconsistently, creating
+// a parser-differential. The door must reject len > 1 with 400 so
+// credential identifiers see exactly one value.
+func TestHTTPHandler_RejectsMultiValueHeader(t *testing.T) {
+	t.Parallel()
+	holder := server.NewEngineHolder(nil)
+	h := server.NewHTTPHandlerWithOptions(holder, server.HTTPHandlerOptions{})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	cases := []string{
+		// Two distinct values for the same credential header.
+		`{"method":"GET","path":"/x","headers":{"x-api-key":["bogus","valid"]}}`,
+		// Same value duplicated — still order-significant on read.
+		`{"method":"GET","path":"/x","headers":{"authorization":["a","b","c"]}}`,
+		// Mixed multi-value + canonical single header.
+		`{"method":"GET","path":"/x","headers":{"x-api-key":["a","b"],"x-tenant":["t1"]}}`,
+	}
+	for i, raw := range cases {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/authorize",
+			strings.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("[%d] Do: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("[%d] status = %d, want 400 (body=%q)", i, resp.StatusCode, raw)
+		}
+	}
+
+	// Negative control: a single-valued array (len == 1) is the
+	// normal shape and must not be rejected by the F13 guard.
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/authorize",
+		strings.NewReader(`{"method":"GET","path":"/x","headers":{"x-api-key":["only"]}}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("control Do: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusBadRequest {
+		t.Errorf("single-value control got 400 (it must not trip F13)")
+	}
+}
+
+// TestHTTPHandler_RejectsStructuralJunkInHostAndTenant is the F15
+// regression guard. CRLF in `host` and oversize / non-printable
+// `tenantId` must be refused with 400 at the door, before the
+// values land in module.Request and any future module reflects
+// them into a response header.
+func TestHTTPHandler_RejectsStructuralJunkInHostAndTenant(t *testing.T) {
+	t.Parallel()
+	holder := server.NewEngineHolder(nil)
+	h := server.NewHTTPHandlerWithOptions(holder, server.HTTPHandlerOptions{})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	cases := []string{
+		// CRLF in host -> potential header injection vector.
+		`{"method":"GET","path":"/x","host":"evil.example\r\nX-Injected: yes"}`,
+		// Bare LF.
+		`{"method":"GET","path":"/x","host":"evil.example\nX-Injected: yes"}`,
+		// Whitespace in host.
+		`{"method":"GET","path":"/x","host":"a b"}`,
+		// Tab.
+		`{"method":"GET","path":"/x","host":"evil.example\tx"}`,
+		// TenantID with embedded newline.
+		`{"method":"GET","path":"/x","tenantId":"t1\nlevel=ERROR fake-log"}`,
+		// TenantID with NUL.
+		`{"method":"GET","path":"/x","tenantId":"t1\u0000pad"}`,
+		// TenantID > 256 bytes.
+		`{"method":"GET","path":"/x","tenantId":"` + strings.Repeat("A", 257) + `"}`,
+	}
+	for i, raw := range cases {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/authorize",
+			strings.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("[%d] Do: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("[%d] status = %d, want 400 (body=%q)", i, resp.StatusCode, raw)
+		}
+	}
+
+	// Negative controls: the canonical authority and tenant shapes
+	// continue to pass the F15 guard.
+	good := []string{
+		`{"method":"GET","path":"/x","host":"api.example.com"}`,
+		`{"method":"GET","path":"/x","host":"api.example.com:8443"}`,
+		`{"method":"GET","path":"/x","host":"10.0.0.1:80"}`,
+		`{"method":"GET","path":"/x","tenantId":"acme-prod-eu"}`,
+		`{"method":"GET","path":"/x","tenantId":"` + strings.Repeat("A", 256) + `"}`,
+	}
+	for i, raw := range good {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/authorize",
+			strings.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("control[%d] Do: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusBadRequest {
+			t.Errorf("control[%d] tripped F15 guard (body=%q)", i, raw)
+		}
+	}
+}
+
