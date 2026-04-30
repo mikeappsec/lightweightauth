@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openfga
+  labels: { app: openfga }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: openfga } }
+  template:
+    metadata:
+      labels: { app: openfga }
+    spec:
+      containers:
+        - name: openfga
+          image: openfga/openfga:v1.10.4
+          args: ["run"]
+          env:
+            # Local-only: in-memory store, no auth, no TLS. Production
+            # uses --datastore-engine=postgres and OIDC for the API.
+            - { name: OPENFGA_DATASTORE_ENGINE, value: memory }
+            - { name: OPENFGA_AUTHN_METHOD,    value: none }
+            - { name: OPENFGA_LOG_LEVEL,       value: info }
+            # Listen on all interfaces; addresses default to localhost
+            # which kubelet probes can't reach.
+            - { name: OPENFGA_HTTP_ADDR,       value: "0.0.0.0:8080" }
+            - { name: OPENFGA_GRPC_ADDR,       value: "0.0.0.0:8081" }
+            - { name: OPENFGA_PLAYGROUND_ENABLED, value: "false" }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: grpc, containerPort: 8081 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openfga
+  labels: { app: openfga }
+spec:
+  selector: { app: openfga }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+    - { name: grpc, port: 8081, targetPort: grpc }

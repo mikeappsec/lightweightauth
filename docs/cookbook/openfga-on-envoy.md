@@ -55,43 +55,49 @@ Two things must be true before the wiring will work:
    with a Service (the Helm chart does), the cluster-local DNS name
    above is what you point at; if you front it with a route on the
    mesh, prefer that.
-2. The token in `extraEnv.FGA_TOKEN` (step 2) has at least
-   `check:read` on the target store. lwauth never writes to FGA —
-   it only ever issues `Check` calls.
+2. The preshared token from the FGA install (step 2's `apiToken:`)
+   has at least `check:read` on the target store. lwauth never
+   writes to FGA — it only ever issues `Check` calls.
 
 A minimal Helm install of FGA with a static token (development /
 staging shape; production should mint via OIDC):
 
 ```bash
-helm install openfga oci://ghcr.io/openfga/openfga \
+helm repo add openfga https://openfga.github.io/helm-charts
+helm install openfga openfga/openfga \
   --namespace openfga --create-namespace \
-  --set auth.method=preshared \
-  --set auth.preshared.keys[0]=$(openssl rand -base64 32) \
+  --set authn.method=preshared \
+  --set authn.preshared.keys[0]=$(openssl rand -base64 32) \
   --set datastore.engine=postgres \
   --set datastore.uri=postgresql://...
 ```
 
-Capture the preshared key into the lwauth Secret you already use for
-sensitive config:
+Capture the preshared key into a Kubernetes Secret in the lwauth
+namespace; you'll feed it into the AuthConfig in step 2 (literal
+value — see the `apiToken` warning there):
 
 ```bash
-kubectl -n lwauth-system create secret generic lwauth-secrets \
-  --from-literal=fga=<the-preshared-key> \
+kubectl -n lwauth-system create secret generic openfga-token \
+  --from-literal=token=<the-preshared-key> \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ## 2. Compose `openfga` under `composite` with an RBAC fast path
 
-The `AuthConfig` below assumes you already have a `jwt` identifier
-(the [Istio recipe](istio-grpc-rbac.md) lands one if you don't). The
-new bits are:
+The `AuthConfig` below uses a `jwt` identifier (the
+[Istio recipe](istio-grpc-rbac.md) lands one if you don't); for a
+local kind dry-run swap that for `apikey` —
+[examples/cookbook/openfga-on-envoy/authconfig.yaml](https://github.com/mikeappsec/lightweightauth/tree/main/examples/cookbook/openfga-on-envoy/authconfig.yaml)
+is the wired-up shape used in step 6. The new bits in either case
+are:
 
-- The `composite` authorizer in `firstAllow` mode. Children run in
+- The `composite` authorizer in `anyOf` mode. Children run in
   declared order; the first `Permit` short-circuits.
 - An `rbac` admin gate as the cheap first child. Admins never touch
   FGA.
 - An `openfga` child that derives the `(user, relation, object)`
-  triple from CEL.
+  triple via Go `text/template` over a fixed
+  `{.Identity, .Request}` input.
 
 ```yaml
 # documents-authconfig.yaml
@@ -112,11 +118,10 @@ spec:
     - name: gate
       type: composite
       config:
-        # firstAllow = stop at the first child that returns Permit.
-        # Order children cheap -> expensive so the fast paths cache
-        # well and FGA only sees traffic the cheaper checks rejected.
-        mode: firstAllow
-        children:
+        # anyOf = stop at the first child that returns Permit. Order
+        # children cheap -> expensive so the fast paths cache well
+        # and FGA only sees traffic the cheaper checks rejected.
+        anyOf:
           - name: admins
             type: rbac
             config:
@@ -128,34 +133,41 @@ spec:
           - name: rebac
             type: openfga
             config:
-              apiUrl: https://openfga.openfga.svc.cluster.local:8081
+              # OpenFGA's HTTP API is on :8080. Port :8081 is gRPC --
+              # the lwauth `openfga` adapter speaks HTTP, so pointing
+              # it at :8081 produces an opaque `EOF` / `bad protocol`
+              # at first request and is one of the most common
+              # misconfigurations seen in the wild.
+              apiUrl: http://openfga.openfga.svc.cluster.local:8080
               storeId: 01HX...                  # your store id
               authorizationModelId: 01HX...     # pin the model
-              apiToken: ${FGA_TOKEN}
+              apiToken: <preshared-key>          # optional; sent as Bearer
               timeout: 150ms
-              # CEL bindings: identity.* and request.* are the same
-              # vocabulary the cel authorizer uses. The CEL is
-              # evaluated once per request before the cache lookup,
-              # so keep these expressions side-effect free and cheap.
+              # check.{user,relation,object} are Go text/template
+              # snippets evaluated against {.Identity, .Request}.
+              # Available bindings:
+              #   .Identity.Subject, .Identity.Claims (map)
+              #   .Request.Method, .Request.Path, .Request.Host
+              #   .Request.PathParts (path split on '/', no leading
+              #     empty element -- /documents/42 -> ["documents","42"])
+              #   .Request.Headers (lowercased keys, first value only)
+              # Trim whitespace inside template actions ({{- -}}) so
+              # the rendered relation has no stray newline.
               check:
-                user:     '"user:" + identity.subject'
-                # Map HTTP method to FGA relation. Anything other
-                # than these explicit branches falls through to a
-                # deny-by-default below.
-                relation: |
-                  request.method == "GET"  ? "viewer" :
-                  request.method == "POST" ? "editor" :
-                  request.method == "PUT"  ? "editor" :
-                  request.method == "DELETE" ? "owner" :
-                  ""
-                object: |
-                  '"document:" + request.path.split("/")[2]'
-              # Optional but recommended: a deny-by-default sentinel
-              # when CEL produces an empty relation. Without this an
-              # unknown method would call FGA with relation:"" and
-              # FGA would deny anyway, but you would pay one round
-              # trip to learn that.
-              denyOnEmptyRelation: true
+                user: 'user:{{ .Identity.Subject }}'
+                relation: |-
+                  {{- if eq .Request.Method "GET" -}}viewer
+                  {{- else if eq .Request.Method "POST" -}}editor
+                  {{- else if eq .Request.Method "PUT" -}}editor
+                  {{- else if eq .Request.Method "DELETE" -}}owner
+                  {{- end -}}
+                # /documents/<id>... -> PathParts[1] is the document id.
+                object: 'document:{{ index .Request.PathParts 1 }}'
+              # An empty relation/user/object short-circuits to a
+              # deterministic 403 inside the adapter -- no FGA round
+              # trip is paid to learn that an unknown method maps to
+              # nothing. (No config flag is needed; this is the
+              # adapter's default behaviour.)
 
   # See step 3 for the full cache block; the snippet above intentionally
   # omits it so each step stays focused.
@@ -163,7 +175,14 @@ spec:
 
 ```bash
 kubectl apply -f documents-authconfig.yaml
+kubectl -n documents wait authconfig/documents \
+  --for=condition=Ready --timeout=60s
 ```
+
+If `Ready=False` the controller's `status.conditions[0].message`
+carries the compile error verbatim (template parse, unknown module
+type, missing field). Fix the YAML and re-apply; no daemon restart
+needed.
 
 !!! tip "Why RBAC first"
     The cheap-then-expensive ordering is the single biggest knob
@@ -172,6 +191,17 @@ kubectl apply -f documents-authconfig.yaml
     rejects obviously-malformed paths shaves another single-digit
     percent. Both are easier to ship now than to retrofit when FGA
     is paged at 03:00.
+
+!!! warning "`apiToken` is read literally"
+    The `apiToken:` field is forwarded to FGA as
+    `Authorization: Bearer <value>` exactly as written — there is no
+    `${FGA_TOKEN}` env-substitution. To inject a Secret, render the
+    AuthConfig from a templated source (Helm, Kustomize) or feed the
+    value through the lwauth controller's
+    `IdentityProvider`-style indirection. Older drafts of this
+    recipe shipped `apiToken: ${FGA_TOKEN}`; that produces a
+    request header `Authorization: Bearer ${FGA_TOKEN}` (the literal
+    six characters), which FGA rejects with `401`.
 
 ## 3. Point the decision cache at shared Valkey
 
@@ -295,24 +325,38 @@ for i in $(seq 1 20); do
     -H "authorization: Bearer $TOKEN" \
     https://documents.example.com/documents/42
 done | sort | uniq -c
-# expect: the first ~5 are 503 with non-trivial latency, every one
-#         after that is 503 in single-digit ms (breaker open).
+# expect: every call is 503 in single-digit ms.
 kubectl -n openfga scale deploy openfga --replicas=1
 ```
 
 Step 4 is the single test most likely to reveal a misconfiguration.
-If you see steady-state slow 503s instead of fast-fail 503s, the
-guard config did not stick or the breaker thresholds are higher
-than they should be — start with `lwauth_upstream_state{name="rebac"}`
-in Prometheus, which transitions 0 → 1 (closed → open) as the
-breaker trips.
+If you see steady-state *slow* 503s (>200 ms each) you are paying
+the FGA timeout on every call — the breaker isn't tripping, which
+usually means `failureThreshold` is higher than it should be or the
+adapter is being rebuilt on each request (config hot-reload thrash).
+Start with `lwauth_upstream_state{name="rebac"}` in Prometheus,
+which transitions 0 → 1 (closed → open) as the breaker trips.
+
+!!! note "Why scale-to-zero is a soft test"
+    `kubectl scale … --replicas=0` removes Service endpoints
+    immediately, so dial-fail returns instantly even *before* the
+    breaker opens. The slow-then-fast pattern earlier drafts of this
+    recipe described shows up only when FGA is reachable but
+    unresponsive (a hung pod, an iptables `DROP`, a saturated
+    upstream) — that's where the timeout actually fires and the
+    breaker has work to do. To exercise that path locally use
+    `kubectl exec openfga-0 -- pkill -STOP openfga` instead, which
+    keeps the TCP listener up but stalls every `Check` until the
+    250 ms timeout.
 
 ## 6. What to look at next
 
-- **Per-tenant FGA stores.** `storeId` is a CEL expression too; you
-  can route different tenants to different stores by reading
-  `identity.claims.tenant`. See
-  [`openfga`](../modules/openfga.md).
+- **Per-tenant FGA stores.** `storeId` in the openfga adapter is a
+  static string, not a template — to route tenants to different
+  stores, declare one openfga child per store under
+  [`composite.anyOf`](../modules/composite.md) and gate each with
+  a [`cel`](../modules/cel.md) child that matches the tenant claim.
+  See [`openfga`](../modules/openfga.md) for the available config.
 - **Mixing OpenFGA with OPA.** Use [`opa`](../modules/opa.md) for the
   *macro* policy ("which users may even attempt this surface?") and
   `openfga` for the *per-resource* relationship check; combine via
@@ -322,6 +366,91 @@ breaker trips.
 - **The HMAC story.** If you ship CLIs that hit this same surface
   with long-lived signing keys, the next recipe is
   [Rotate HMAC secrets without downtime](rotate-hmac.md).
+
+## Appendix A: Run the whole recipe on a local kind cluster
+
+This is the path the recipe is dryrun-tested against on every
+release. It substitutes the production-shaped pieces (jwt, postgres-
+backed FGA, OIDC token, cluster TLS) for their local-only
+equivalents (apikey, in-memory FGA, no auth on FGA, plaintext
+HTTP) so you can exercise the openfga adapter end-to-end without
+provisioning a database or an IdP.
+
+The artifacts referenced below live under
+[`examples/cookbook/openfga-on-envoy/`](https://github.com/mikeappsec/lightweightauth/tree/main/examples/cookbook/openfga-on-envoy)
+and reuse `kind-cilium.yaml` + `backend.yaml` from the
+[gate-upstream-service recipe](gate-upstream-service.md).
+
+```bash
+# 1. Cluster + CNI that actually enforces NetworkPolicy.
+kind create cluster --name lwauth \
+  --config examples/cookbook/gate-upstream-service/kind-cilium.yaml
+cilium install --version 1.19.3 \
+  --set kubeProxyReplacement=true \
+  --set k8sServiceHost=lwauth-control-plane --set k8sServicePort=6443
+kind load docker-image lwauth:dev --name lwauth   # if testing a local build
+
+# 2. Namespace + workloads.
+kubectl create namespace lwauth-demo
+kubectl -n lwauth-demo apply -f examples/cookbook/openfga-on-envoy/openfga.yaml
+kubectl -n lwauth-demo apply -f examples/cookbook/gate-upstream-service/backend.yaml
+kubectl -n lwauth-demo wait --for=condition=Available \
+  deploy/openfga deploy/backend --timeout=120s
+
+# 3. Bootstrap the FGA store + model + tuples (alice viewer doc:42,
+#    carol owner doc:42). The script echoes RESULT_STORE and
+#    RESULT_MODEL on stdout; capture them for step 4.
+kubectl -n lwauth-demo run fga-init \
+  --image=curlimages/curl:8.10.1 --restart=Never --rm -i --command -- \
+  sh -s < examples/cookbook/openfga-on-envoy/fga-bootstrap.sh
+
+# 4. Render and apply the AuthConfig (replace placeholders with the
+#    IDs from step 3). The chart hasn't been installed yet, but
+#    --set crds.install=true on step 5 lays the CRDs in time --
+#    apply the AuthConfig AFTER step 5.
+helm install lwauth ./deploy/helm/lightweightauth -n lwauth-demo \
+  --set image.repository=lwauth --set image.tag=dev --set image.pullPolicy=IfNotPresent \
+  --set controller.enabled=true --set controller.authConfigName=demo \
+  --set gateway.enabled=true --set gateway.upstream.service=backend \
+  --wait --timeout 4m
+
+STORE=<from-step-3>; MODEL=<from-step-3>
+sed -e "s/STORE_ID_PLACEHOLDER/$STORE/" -e "s/MODEL_ID_PLACEHOLDER/$MODEL/" \
+  examples/cookbook/openfga-on-envoy/authconfig.yaml \
+  | kubectl -n lwauth-demo apply -f -
+kubectl -n lwauth-demo wait authconfig/demo \
+  --for=condition=Ready --timeout=60s
+
+# 5. Probe through the gateway.
+kubectl -n lwauth-demo port-forward svc/lwauth-gateway 8080:80 &
+PF=$!; trap "kill $PF" EXIT; sleep 2
+
+# admin RBAC fast-path  -> 404 (auth passed, httpbin has no /documents/42)
+curl -s -o /dev/null -w 'admin   POST = %{http_code}\n' \
+  -X POST -H 'x-api-key: demo-key-admin' http://localhost:8080/documents/42
+# alice viewer doc:42  -> 404 (FGA Check returned allowed)
+curl -s -o /dev/null -w 'alice   GET  = %{http_code}\n' \
+  -H 'x-api-key: demo-key-alice' http://localhost:8080/documents/42
+# bob has no tuple    -> 403 (FGA Check returned not allowed)
+curl -s -o /dev/null -w 'bob     GET  = %{http_code}\n' \
+  -H 'x-api-key: demo-key-bob' http://localhost:8080/documents/42
+# carol owner DELETE  -> 404 (FGA Check returned allowed; DELETE -> owner)
+curl -s -o /dev/null -w 'carol   DEL  = %{http_code}\n' \
+  -X DELETE -H 'x-api-key: demo-key-carol' http://localhost:8080/documents/42
+# alice editor (no tuple, POST -> editor) -> 403
+curl -s -o /dev/null -w 'alice   POST = %{http_code}\n' \
+  -X POST -H 'x-api-key: demo-key-alice' http://localhost:8080/documents/42
+```
+
+The `404` responses are the success signal: the gateway forwarded
+to the upstream and the upstream (httpbin) just doesn't have a
+`/documents/42` route. Swap httpbin for a real backend and the
+`404`s become `200`s — the auth shape doesn't change.
+
+```bash
+# 6. Cleanup.
+kind delete cluster --name lwauth
+```
 
 ## References
 

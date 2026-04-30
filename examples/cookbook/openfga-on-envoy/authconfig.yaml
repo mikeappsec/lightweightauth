@@ -1,0 +1,79 @@
+# OpenFGA-backed AuthConfig demo.
+#
+# Identification: x-api-key -> subject + roles (apikey identifier
+#   uses the `static:` map; in production swap for `hashed.file`).
+#     demo-key-admin -> admin, roles=[documents-admin]
+#     demo-key-alice -> alice, roles=[user]   (FGA tuple: alice viewer doc:42)
+#     demo-key-bob   -> bob,   roles=[user]   (no tuple -> deny)
+#     demo-key-carol -> carol, roles=[user]   (FGA tuple: carol owner doc:42)
+#
+# Authorization: composite/anyOf with two children. anyOf == "first
+# Permit wins"; children run in declared order so admins skip the
+# FGA round-trip entirely.
+#   1. rbac admin gate
+#   2. openfga ReBAC -- maps method -> relation, path -> object,
+#                       calls /stores/.../check on the FGA HTTP API
+#                       (port 8080; 8081 is gRPC).
+#
+# storeId / authorizationModelId are placeholders; the bootstrap
+# script captures them and rewrites this file before kubectl apply.
+apiVersion: lightweightauth.io/v1alpha1
+kind: AuthConfig
+metadata:
+  name: demo
+spec:
+  identifierMode: firstMatch
+  identifiers:
+    - name: key
+      type: apikey
+      config:
+        headerName: x-api-key
+        static:
+          demo-key-admin: { subject: admin, roles: [documents-admin] }
+          demo-key-alice: { subject: alice, roles: [user] }
+          demo-key-bob:   { subject: bob,   roles: [user] }
+          demo-key-carol: { subject: carol, roles: [user] }
+
+  authorizers:
+    - name: gate
+      type: composite
+      config:
+        # anyOf = first Permit wins. Order children cheap -> expensive
+        # so admins never touch FGA.
+        anyOf:
+          - name: admins
+            type: rbac
+            config:
+              rolesFrom: claim:roles
+              allow: [documents-admin]
+
+          - name: rebac
+            type: openfga
+            config:
+              # OpenFGA HTTP API on :8080 (NOT :8081 -- that's gRPC).
+              apiUrl: http://openfga:8080
+              storeId: STORE_ID_PLACEHOLDER
+              authorizationModelId: MODEL_ID_PLACEHOLDER
+              timeout: 500ms
+              # Go text/template -- vocabulary is .Identity.Subject,
+              # .Request.Method, .Request.PathParts (split on /).
+              # /documents/<id>  -> PathParts = ["documents","<id>"]
+              # so PathParts[1] is the document id.
+              check:
+                user: 'user:{{ .Identity.Subject }}'
+                relation: |-
+                  {{- if eq .Request.Method "GET" -}}viewer
+                  {{- else if eq .Request.Method "POST" -}}editor
+                  {{- else if eq .Request.Method "PUT" -}}editor
+                  {{- else if eq .Request.Method "DELETE" -}}owner
+                  {{- end -}}
+                object: 'document:{{ index .Request.PathParts 1 }}'
+              resilience:
+                breaker:
+                  failureThreshold: 5
+                  coolDown: 30s
+                  halfOpenSuccesses: 1
+                retries:
+                  maxRetries: 1
+                  backoffBase: 25ms
+                  backoffMax: 100ms
