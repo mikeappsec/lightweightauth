@@ -262,3 +262,79 @@ func TestHTTPHandler_ReadOnlyEndpointsRejectWriteVerbs(t *testing.T) {
 		}
 	}
 }
+
+// TestHTTPHandler_RejectsHeaderCaseCollision is the F9 regression
+// guard. Two header keys that case-fold to the same name (e.g.
+// "X-Api-Key" + "x-api-key") MUST be rejected with 400 — otherwise
+// Go map iteration order picks a non-deterministic survivor and the
+// auth verdict flaps across calls with the same JSON body.
+//
+// The test runs the same request 50 times and asserts every call
+// got 400. With the bug present, the assertion would fail roughly
+// half the time (200 mixed in).
+func TestHTTPHandler_RejectsHeaderCaseCollision(t *testing.T) {
+	t.Parallel()
+	holder := server.NewEngineHolder(nil)
+	h := server.NewHTTPHandlerWithOptions(holder, server.HTTPHandlerOptions{})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	bodies := []string{
+		// Same header, two cases, one valid and one invalid value.
+		`{"method":"GET","path":"/x","headers":{"X-Api-Key":["good"],"x-api-key":["bad"]}}`,
+		`{"method":"GET","path":"/x","headers":{"x-api-key":["bad"],"X-Api-Key":["good"]}}`,
+		// Three-way collision.
+		`{"method":"GET","path":"/x","headers":{"Authorization":["a"],"AUTHORIZATION":["b"],"authorization":["c"]}}`,
+	}
+	for _, raw := range bodies {
+		for i := 0; i < 50; i++ {
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/authorize",
+				strings.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("trial %d: status = %d, want 400 (body=%q)", i, resp.StatusCode, raw)
+			}
+		}
+	}
+}
+
+// TestHTTPHandler_RejectsCaseCollidingTopLevelFields is the F10
+// regression guard. encoding/json matches struct tags
+// case-insensitively, so `"PATH"` and `"path"` both land on
+// authorizeRequest.Path with last-wins. Strict decoder
+// (DisallowUnknownFields) refuses the non-canonical case at parse
+// time.
+func TestHTTPHandler_RejectsCaseCollidingTopLevelFields(t *testing.T) {
+	t.Parallel()
+	holder := server.NewEngineHolder(nil)
+	h := server.NewHTTPHandlerWithOptions(holder, server.HTTPHandlerOptions{})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	cases := []string{
+		// Wrong-case alias of a known field.
+		`{"PATH":"/admin","method":"GET"}`,
+		`{"Method":"GET","path":"/x"}`,
+		`{"method":"GET","path":"/x","HEADERS":{}}`,
+		// Genuinely unknown field.
+		`{"method":"GET","path":"/x","extra":"surprise"}`,
+	}
+	for i, raw := range cases {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/authorize",
+			strings.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("[%d] Do: %v", i, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("[%d] status = %d, want 400 (body=%q)", i, resp.StatusCode, raw)
+		}
+	}
+}

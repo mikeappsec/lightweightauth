@@ -35,6 +35,11 @@ import (
 type NativeAuthServer struct {
 	authv1.UnimplementedAuthServer
 	Engines *EngineHolder
+	// MaxRequestBytes caps the AuthorizeRequest.body field. 0 ->
+	// defaultMaxRequestBytes (1 MiB); <0 -> unlimited (test-only).
+	// Pairs with the HTTP cap and the Door A cap (F11) so a caller
+	// can't bypass the HTTP 1 MiB limit by speaking gRPC instead.
+	MaxRequestBytes int64
 }
 
 // NewNativeAuthServer returns a NativeAuthServer ready for
@@ -48,6 +53,9 @@ func (s *NativeAuthServer) Authorize(ctx context.Context, req *authv1.AuthorizeR
 	eng := s.Engines.Load()
 	if eng == nil {
 		return nil, status.Error(codes.Unavailable, "lwauth: no engine loaded")
+	}
+	if limit := bodyLimit(s.MaxRequestBytes); limit > 0 && int64(len(req.GetBody())) > limit {
+		return nil, status.Error(codes.ResourceExhausted, "lwauth: request body too large")
 	}
 	mreq := requestFromAuthorize(req)
 	mreq.PeerCerts = verifiedPeerCertFromContext(ctx)
@@ -81,6 +89,9 @@ func (s *NativeAuthServer) AuthorizeStream(stream authv1.Auth_AuthorizeStreamSer
 		eng := s.Engines.Load()
 		if eng == nil {
 			return status.Error(codes.Unavailable, "lwauth: no engine loaded")
+		}
+		if limit := bodyLimit(s.MaxRequestBytes); limit > 0 && int64(len(in.GetBody())) > limit {
+			return status.Error(codes.ResourceExhausted, "lwauth: request body too large")
 		}
 		mreq := requestFromAuthorize(in)
 		mreq.PeerCerts = verifiedCert
