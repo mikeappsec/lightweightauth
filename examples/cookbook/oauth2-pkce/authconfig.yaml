@@ -1,0 +1,34 @@
+# AuthConfig that delegates identity to lwauth-idp via JWT validation.
+# Authorization stays simple (RBAC on the `scope` claim) so the dryrun
+# can exercise both deny and allow paths without OPA boilerplate.
+apiVersion: lightweightauth.io/v1alpha1
+kind: AuthConfig
+metadata:
+  name: demo
+  namespace: demo
+spec:
+  identifierMode: firstMatch
+  identifiers:
+    - name: jwt
+      type: jwt
+      config:
+        # JWKS lives at the IdP's cluster-internal URL. The jwt module
+        # caches keys with a 10-min refresh + Cache-Control fast-path,
+        # so a kid rotation surfaces without restart.
+        jwksUrl: http://lwauth-idp.demo.svc.cluster.local:9090/.well-known/jwks.json
+        # Pin iss exactly to what the IdP signs into the access_token.
+        # A token from any other issuer (or with the wrong iss) is
+        # rejected before the authorizer runs.
+        issuerUrl: http://lwauth-idp.demo.svc.cluster.local:9090
+        # The IdP bakes "lwauth-demo" into the aud claim of every
+        # access_token issued for demo-client; mismatch = 401.
+        audiences: [lwauth-demo]
+  authorizers:
+    - name: gate
+      type: rbac
+      config:
+        # The IdP also surfaces `scopes` as an array claim (mirror of
+        # the space-separated `scope` string) so the rbac module can
+        # use direct `claim:scopes` lookup without splitting strings.
+        rolesFrom: claim:scopes
+        allow: [openid]
