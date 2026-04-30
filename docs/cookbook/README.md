@@ -1,38 +1,19 @@
-# LightweightAuth Cookbook
+# lwauth cookbook
 
-End-to-end recipes for landing lightweightauth in real deployments. Each
-recipe walks the full path from an empty cluster to a verified request,
-calls out the failure modes operators hit in practice, and links to the
-matching per-module reference under [../modules/](../modules/README.md)
-for the deeper "why" once a recipe sends you in the right direction.
+Each recipe in this folder is a runnable, dryrun-tested guide that
+takes you from a fresh kind cluster to a working lwauth deployment for
+one specific scenario. All scripts use stdlib-only Python or
+PowerShell so a clean checkout works without `pip install`.
 
-Pick a recipe by **what you already have**, not by what you want to add:
+| Recipe | What it shows |
+|---|---|
+| [gate-upstream-service](gate-upstream-service.md) | Wire Envoy + lwauth ext_authz in front of a backend; NetworkPolicy enforced by Cilium so direct-to-backend bypasses fail. |
+| [oauth2-pkce](oauth2-pkce.md) | Full Authorization Code + PKCE flow against `lwauth-idp`; gateway verifies JWTs minted by the IdP via JWKS. |
+| [openfga-on-envoy](openfga-on-envoy.md) | ReBAC with OpenFGA: tuples, model bootstrap, AuthConfig with `composite{anyOf:[rbac, openfga]}`. |
+| [istio-grpc-rbac](istio-grpc-rbac.md) | lwauth as the ext_authz provider in an Istio mesh, gating gRPC services with role-based policy. |
+| [rotate-hmac](rotate-hmac.md) | Rolling an HMAC shared secret with zero downtime via the multi-secret overlap window. |
 
-| Starting point                                         | Recipe |
-| ------------------------------------------------------ | ------ |
-| You run gRPC services behind Istio and need RBAC at the edge. | [Istio + lwauth + RBAC for gRPC](istio-grpc-rbac.md) |
-| You already terminate HTTP at Envoy and want fine-grained ReBAC. | [OpenFGA on an existing Envoy deployment](openfga-on-envoy.md) |
-| You ship long-lived HMAC keys to clients and need to rotate them. | [Rotate HMAC secrets without downtime](rotate-hmac.md) |
-
-## Conventions used in every recipe
-
-- **`AuthConfig`** snippets are presented as YAML you can drop into a
-  `kubectl apply`; the equivalent embedded-library wiring is shown in a
-  collapsed block below the YAML.
-- **Paths** start at the repository root unless otherwise noted.
-- **Failure modes** are flagged with `!!!` admonitions when a mistake
-  produces a working-looking system that is silently insecure. Read those
-  even if you skim the rest.
-- **Verification** at the end of each recipe is a copy-pasteable
-  `curl` / `grpcurl` / `lwauthctl` command that exits non-zero if the
-  recipe is broken — suitable for wiring into CI smoke tests.
-
-## What is *not* here
-
-- A tutorial-style "your first AuthConfig". That is
-  [QUICKSTART.md](../QUICKSTART.md); recipes here assume you have a
-  daemon running and are integrating it with something specific.
-- The full `config:` reference for any one module. Each recipe links the
-  matching page under `docs/modules/` for that.
-- Decisions about *which* identifier or authorizer to use. That tree
-  lives at the top of [modules/README.md](../modules/README.md).
+Every recipe ends with a teardown stanza so you can iterate without
+piling up Helm releases. Open an issue if a recipe drifts from the
+chart or controller surface — these are first-class artefacts, not
+documentation.

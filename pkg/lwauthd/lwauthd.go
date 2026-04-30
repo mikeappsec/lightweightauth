@@ -265,8 +265,8 @@ func Run(opts Options) error {
 		return fmt.Errorf("grpc tls: %w", err)
 	}
 	grpcSrv := grpc.NewServer(grpcOpts...)
-	authv3.RegisterAuthorizationServer(grpcSrv, server.NewExtAuthzServer(holder))
-	authv1.RegisterAuthServer(grpcSrv, server.NewNativeAuthServer(holder))
+	authv3.RegisterAuthorizationServer(grpcSrv, &server.ExtAuthzServer{Engines: holder, MaxRequestBytes: opts.MaxRequestBytes})
+	authv1.RegisterAuthServer(grpcSrv, &server.NativeAuthServer{Engines: holder, MaxRequestBytes: opts.MaxRequestBytes})
 
 	hs := health.NewServer()
 	hs.SetServingStatus("envoy.service.auth.v3.Authorization", healthpb.HealthCheckResponse_SERVING)

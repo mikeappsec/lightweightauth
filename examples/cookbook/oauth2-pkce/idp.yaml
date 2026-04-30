@@ -1,0 +1,62 @@
+# lwauth-idp Deployment + Service for the local-kind PKCE cookbook.
+#
+# The IdP's `--issuer` is set to the cluster-internal URL so:
+#   - JWTs carry iss = http://lwauth-idp.demo.svc.cluster.local:9090
+#   - lwauth's `jwt` identifier fetches JWKS at the same URL
+# The driver script reaches the IdP from outside the cluster via
+# `kubectl port-forward`; tokens issued through that path still carry
+# the cluster-internal iss because that's what the lwauth verifier
+# validates against.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lwauth-idp
+  namespace: demo
+  labels: { app: lwauth-idp }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: lwauth-idp } }
+  template:
+    metadata:
+      labels: { app: lwauth-idp }
+    spec:
+      containers:
+        - name: idp
+          image: lwauth-idp:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - --issuer=http://lwauth-idp.demo.svc.cluster.local:9090
+            - --listen=:9090
+          ports:
+            - { name: http, containerPort: 9090 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 9090 }
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: 9090 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lwauth-idp
+  namespace: demo
+spec:
+  selector: { app: lwauth-idp }
+  ports:
+    - { name: http, port: 9090, targetPort: 9090 }

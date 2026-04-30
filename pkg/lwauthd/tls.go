@@ -51,17 +51,30 @@ func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error)
 
 // buildGRPCServerOptions returns the grpc.ServerOption slice for the
 // gRPC listener. When TLS is configured it adds credentials.NewTLS;
-// when client CA is also set it requires mTLS. Returns an empty slice
-// in plaintext mode.
+// when client CA is also set it requires mTLS. Always sets a
+// transport-level MaxRecvMsgSize that matches the application-level
+// body cap (F11), so the cap holds whether or not the per-RPC
+// adapters get to it first.
 func buildGRPCServerOptions(opts Options) ([]grpc.ServerOption, error) {
 	tlsCfg, err := buildServerTLS(opts.GRPCTLSCertFile, opts.GRPCTLSKeyFile, opts.GRPCTLSClientCAFile)
 	if err != nil {
 		return nil, err
 	}
-	if tlsCfg == nil {
-		return nil, nil
+	var out []grpc.ServerOption
+	if tlsCfg != nil {
+		out = append(out, grpc.Creds(credentials.NewTLS(tlsCfg)))
 	}
-	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}, nil
+	// Match the HTTP cap. opts.MaxRequestBytes==0 -> 1 MiB default;
+	// a negative value disables the cap (test-only) and we leave the
+	// gRPC default in place.
+	limit := opts.MaxRequestBytes
+	if limit == 0 {
+		limit = 1 << 20
+	}
+	if limit > 0 {
+		out = append(out, grpc.MaxRecvMsgSize(int(limit)))
+	}
+	return out, nil
 }
 
 // loadCAPool reads a PEM-encoded CA bundle into an *x509.CertPool.

@@ -63,11 +63,41 @@ type AuthConfig struct {
 }
 
 // AuthConfigStatus is the typical K8s status sub-resource shape.
+//
+// Conditions follows the standard metav1.Condition pattern so generic
+// tooling (kubectl wait --for=condition=Ready, Argo health checks,
+// kstatus) can read the resource without special knowledge. The flat
+// Ready bool is preserved as a deprecated mirror of the Ready
+// condition's status; new code should read Conditions instead.
 type AuthConfigStatus struct {
+	// Conditions describe the resource's progress through its
+	// reconciliation lifecycle. The Ready condition is set to True
+	// when the engine has been compiled and swapped in successfully.
+	// +optional
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+
+	// Ready mirrors the Ready condition's status as a flat bool.
+	// Deprecated: read Conditions instead. Retained for one release
+	// for backwards compatibility with existing monitoring queries.
 	Ready              bool   `json:"ready,omitempty"`
 	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	Message            string `json:"message,omitempty"`
 }
+
+// ConditionTypeReady is the canonical Ready condition type. Reasons
+// are short, machine-readable strings — Compiled, CompileError,
+// IdPRefError — kept in one place so callers don't typo-drift.
+const (
+	ConditionTypeReady = "Ready"
+
+	ReasonCompiled     = "Compiled"
+	ReasonCompileError = "CompileError"
+	ReasonIdPRefError  = "IdPRefError"
+)
 
 // +kubebuilder:object:root=true
 

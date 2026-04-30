@@ -14,6 +14,8 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -87,11 +89,7 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 	}
 	if err := ResolveIdPRefs(&ac.Spec, idps.Items); err != nil {
 		logger.Error(err, "idpRef resolution failed; previous engine kept running")
-		ac.Status = v1alpha1.AuthConfigStatus{
-			Ready:              false,
-			ObservedGeneration: ac.Generation,
-			Message:            err.Error(),
-		}
+		setReady(&ac, metav1.ConditionFalse, v1alpha1.ReasonIdPRefError, err.Error())
 		_ = r.Client.Status().Update(ctx, &ac)
 		return reconcile.Result{}, nil //nolint:nilerr // surfaced on status
 	}
@@ -101,11 +99,7 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		// Surface compile errors on the CR's status so kubectl describe
 		// shows them, but don't crash the manager.
 		logger.Error(err, "compile failed; previous engine kept running")
-		ac.Status = v1alpha1.AuthConfigStatus{
-			Ready:              false,
-			ObservedGeneration: ac.Generation,
-			Message:            err.Error(),
-		}
+		setReady(&ac, metav1.ConditionFalse, v1alpha1.ReasonCompileError, err.Error())
 		_ = r.Client.Status().Update(ctx, &ac)
 		return reconcile.Result{}, nil //nolint:nilerr // we recorded it on status
 	}
@@ -120,16 +114,30 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		r.Broker.Publish(&specCopy)
 	}
 
-	ac.Status = v1alpha1.AuthConfigStatus{
-		Ready:              true,
-		ObservedGeneration: ac.Generation,
-		Message:            "compiled and swapped",
-	}
+	setReady(&ac, metav1.ConditionTrue, v1alpha1.ReasonCompiled, "compiled and swapped")
 	if err := r.Client.Status().Update(ctx, &ac); err != nil {
 		// Status updates are best-effort; the engine swap already happened.
 		logger.Error(err, "status update failed")
 	}
 	return reconcile.Result{}, nil
+}
+
+// setReady writes a single Ready condition into ac.Status.Conditions
+// and mirrors it onto the deprecated flat fields. Centralising the
+// status mutation here means callers can never forget to keep the
+// flat bool, the conditions[] entry, and ObservedGeneration in sync.
+func setReady(ac *v1alpha1.AuthConfig, status metav1.ConditionStatus, reason, message string) {
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionTypeReady,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: ac.Generation,
+	}
+	meta.SetStatusCondition(&ac.Status.Conditions, cond)
+	ac.Status.Ready = status == metav1.ConditionTrue
+	ac.Status.ObservedGeneration = ac.Generation
+	ac.Status.Message = message
 }
 
 // SetupWithManager registers the reconciler. The watch predicate filters

@@ -1,0 +1,28 @@
+# netpol-backend.yaml — the layer that makes the gateway non-bypassable.
+#
+# Without this manifest, any other Pod in the cluster can dial
+# backend.<ns>.svc:8000 directly and skip the gateway. The chart's
+# own NetworkPolicy locks lwauth's :9001; this one locks the upstream.
+#
+# !! Requires a CNI that enforces NetworkPolicy (Calico, Cilium,
+# kube-router, GKE Dataplane V2). On Docker Desktop's default CNI or
+# a stock kind cluster this manifest applies cleanly but does not
+# actually block — see kind-cilium.yaml for a local cluster that does.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: backend-only-from-gateway }
+spec:
+  podSelector:
+    matchLabels: { app: backend }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # Match the gateway rendered by the chart's gateway.enabled=true
+        # block. The chart stamps these labels on the gateway Pod;
+        # if you bring your own Envoy/Istio/etc, adjust the selectors.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+              app.kubernetes.io/name: lightweightauth
+      ports:
+        - { port: 8000, protocol: TCP }

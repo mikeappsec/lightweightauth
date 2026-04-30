@@ -14,7 +14,21 @@ set networkPolicy.enabled: false.
 {{- if .Values.networkPolicy.enabled }}
 {{- $nsSel := .Values.networkPolicy.allowedFrom.namespaceSelectors -}}
 {{- $podSel := .Values.networkPolicy.allowedFrom.podSelectors -}}
-{{- $hasPeers := or (gt (len $nsSel) 0) (gt (len $podSel) 0) -}}
+{{- /*
+When the chart's own gateway is enabled, auto-admit it. Without this
+every operator who flips gateway.enabled=true also has to remember to
+add a matching podSelector under networkPolicy.allowedFrom — the most
+common foot-gun in the cookbook before this lived in the chart.
+*/ -}}
+{{- $gwSel := list -}}
+{{- if .Values.gateway.enabled -}}
+{{- $gwSel = list (dict
+  "app.kubernetes.io/name" "lightweightauth"
+  "app.kubernetes.io/instance" .Release.Name
+  "app.kubernetes.io/component" "gateway"
+) -}}
+{{- end -}}
+{{- $hasPeers := or (or (gt (len $nsSel) 0) (gt (len $podSel) 0)) (gt (len $gwSel) 0) -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -38,6 +52,11 @@ spec:
             matchLabels:
               {{- toYaml . | nindent 14 }}
         {{- end }}
+        {{- range $gwSel }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
       ports:
         - port: {{ $.Values.service.httpPort }}
           protocol: TCP
@@ -46,7 +65,8 @@ spec:
   {{- else }}
   # No allowedFrom selectors configured -> deny-all ingress.
   # Set networkPolicy.allowedFrom.namespaceSelectors or .podSelectors
-  # to admit callers.
+  # to admit callers (or set gateway.enabled=true and the chart's
+  # own gateway will be admitted automatically).
   ingress: []
   {{- end }}
 {{- end }}

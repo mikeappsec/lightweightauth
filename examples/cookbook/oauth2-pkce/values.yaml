@@ -1,0 +1,31 @@
+# Helm values for the OAuth2-PKCE cookbook.
+# Install with:
+#   helm install lwauth ./deploy/helm/lightweightauth \
+#     --namespace demo --create-namespace \
+#     -f examples/cookbook/oauth2-pkce/values.yaml
+
+image:
+  repository: lwauth
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# Watch the AuthConfig in the demo namespace; ConfigMap path is unused.
+controller:
+  enabled: true
+  watchNamespace: demo
+  authConfigName: demo
+
+# Gateway sits in front of the backend. Envoy → ext_authz → lwauth.
+gateway:
+  enabled: true
+  upstream:
+    # Plain Service name; the gateway template suffixes
+    # `.<release-namespace>.svc.cluster.local` itself, so passing the
+    # FQDN here would collapse to `backend.demo.svc.cluster.local.demo.svc.cluster.local`.
+    service: backend
+    port: 8080
+  service:
+    type: NodePort
+
+# Single replica is fine for a dryrun.
+replicaCount: 1

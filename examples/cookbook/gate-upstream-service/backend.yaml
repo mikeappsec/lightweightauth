@@ -1,0 +1,33 @@
+# backend.yaml — the httpbin upstream the gateway protects.
+#
+# `command: ["go-httpbin"]` is required because the
+# mccutchen/go-httpbin image declares no ENTRYPOINT — without it,
+# `args: ["-port", "8000"]` would resolve as the exec target and the
+# container fails with `exec '-port': executable file not found`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels: { app: backend }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: backend } }
+  template:
+    metadata: { labels: { app: backend } }
+    spec:
+      containers:
+        - name: httpbin
+          image: mccutchen/go-httpbin:v2.15.0
+          command: ["go-httpbin"]
+          args: ["-port", "8000"]
+          ports: [{ containerPort: 8000, name: http }]
+          readinessProbe:
+            httpGet: { path: /status/200, port: 8000 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+spec:
+  selector: { app: backend }
+  ports: [{ name: http, port: 8000, targetPort: 8000 }]

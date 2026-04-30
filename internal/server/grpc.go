@@ -32,6 +32,12 @@ import (
 type ExtAuthzServer struct {
 	authv3.UnimplementedAuthorizationServer
 	Engines *EngineHolder
+	// MaxRequestBytes caps the request body lwauth ingests from
+	// Envoy's HttpRequest.Body. 0 -> defaultMaxRequestBytes (1 MiB);
+	// <0 -> unlimited (test-only). Pairs with the HTTP cap (F11) so
+	// HMAC / body-claim / OPA-on-body modules behave identically
+	// across doors.
+	MaxRequestBytes int64
 }
 
 // NewExtAuthzServer constructs an ExtAuthzServer. The returned value is
@@ -53,6 +59,19 @@ func (s *ExtAuthzServer) Check(ctx context.Context, in *authv3.CheckRequest) (*a
 	eng := s.Engines.Load()
 	if eng == nil {
 		return denied(http.StatusServiceUnavailable, codes.Unavailable, "lwauth: no engine loaded"), nil
+	}
+
+	// F11: bound the body Envoy forwarded with `with_request_body`.
+	// Without this, an operator who configured `max_request_bytes:
+	// 4194304` on the Envoy filter pays 4 MiB allocations per
+	// concurrent Check; the gRPC transport default (also 4 MiB) is
+	// the only ceiling, and the HTTP 1 MiB cap is undermined.
+	if limit := bodyLimit(s.MaxRequestBytes); limit > 0 {
+		if r := in.GetAttributes().GetRequest(); r != nil && r.Http != nil {
+			if int64(len(r.Http.Body)) > limit {
+				return denied(http.StatusRequestEntityTooLarge, codes.ResourceExhausted, "lwauth: request body too large"), nil
+			}
+		}
 	}
 
 	req := requestFromCheck(in)

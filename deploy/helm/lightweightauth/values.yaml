@@ -101,6 +101,79 @@ networkPolicy:
     podSelectors: []
 
 # ---------------------------------------------------------------------------
+# Gateway (optional Envoy ext_authz proxy)
+# ---------------------------------------------------------------------------
+# When `gateway.enabled` is true the chart renders a small Envoy
+# Deployment + Service + ConfigMap configured to call lwauth's gRPC
+# ext_authz endpoint and forward allowed traffic to a single upstream
+# Service. This replaces ~60 lines of hand-rolled Envoy YAML in the
+# cookbook recipe and keeps two things consistent that operators
+# typically get wrong:
+#
+#   1. `failure_mode_allow: false` — fail closed if lwauth is down.
+#   2. HTTP/2 to lwauth — ext_authz is gRPC; without explicit h2 the
+#      proxy speaks HTTP/1.1 and every Check call returns UNAVAILABLE.
+#
+# The gateway Pod is automatically admitted to lwauth's NetworkPolicy
+# (no need to add a podSelector under networkPolicy.allowedFrom) and
+# its labels are stable across releases:
+#
+#     app.kubernetes.io/name: lightweightauth
+#     app.kubernetes.io/instance: <release>
+#     app.kubernetes.io/component: gateway
+#
+# so you can target it from your own NetworkPolicy on the upstream.
+# `examples/cookbook/gate-upstream-service/netpol-backend.yaml`
+# is the worked example.
+gateway:
+  enabled: false
+
+  # Required when enabled: the in-cluster Service the gateway forwards
+  # to. `service` is mandatory; `port` defaults to 8000.
+  upstream:
+    service: ""
+    port: 8000
+    # type: STRICT_DNS | LOGICAL_DNS — leave default unless you have a
+    # reason; STRICT_DNS plays well with kube-dns + ClusterIP.
+    type: STRICT_DNS
+    connectTimeout: 1s
+
+  image:
+    repository: envoyproxy/envoy
+    tag: v1.32-latest
+    pullPolicy: IfNotPresent
+
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  # Tunables for the ext_authz filter. Defaults match the cookbook's
+  # production-grade config. Do NOT set failureModeAllow=true unless
+  # you understand that it turns lwauth outages into authorization
+  # bypasses.
+  extAuthz:
+    failureModeAllow: false
+    timeout: 0.25s
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  # logLevel passes straight to envoy's --log-level flag.
+  logLevel: warn
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
 # Pod / container security context
 # ---------------------------------------------------------------------------
 # Defaults satisfy the "restricted" Pod Security Admission profile
@@ -130,11 +203,19 @@ containerSecurityContext:
 # RBAC scope
 # ---------------------------------------------------------------------------
 # When controller.enabled and controller.watchNamespace is set, prefer
-# a namespace-scoped Role/RoleBinding over a ClusterRole. Cluster-scope
-# is only required when watching across namespaces (watchNamespace=="").
-# Set to false to force ClusterRole even for a single-namespace watch.
+# a namespace-scoped Role/RoleBinding for AuthConfig + AuthPolicy over
+# a ClusterRole. Cluster-scope is only required when watching across
+# namespaces (watchNamespace=="").
+#
+# IdentityProvider is a cluster-scoped CRD; the chart always emits a
+# small ClusterRole granting list/watch on it regardless of this flag,
+# because a namespace Role cannot grant access to cluster-scoped
+# resources. Set identityProviderClusterRole.enabled=false if you want
+# to bind that permission yourself out-of-band.
 controllerRBAC:
   preferNamespaceScope: true
+  identityProviderClusterRole:
+    enabled: true
 
 # ---------------------------------------------------------------------------
 # Metrics + observability
