@@ -2104,3 +2104,251 @@ maintainer. We expect this to be rare; staying at tier 2 is fine forever.
 ## 10. Still-open questions
 
 _(none today; add new ones here as they come up during review.)_
+
+---
+
+## 11. Enterprise features (key & policy rotation, advanced caching, HA)
+
+This section is **forward-looking**. It collects the features operators
+running lwauth at organisational scale will eventually ask for, and pins
+down a design *now* so that when they land they slot into the existing
+pipeline / cache / controller surfaces instead of reshaping them. None of
+this is implemented yet — milestones are noted per-feature.
+
+The themes are: **(a)** never make an operator restart a Pod to roll a
+key or a policy; **(b)** make the cache a tunable knob, not a
+correctness foot-gun; **(c)** make a multi-replica deployment behave
+like one logical service. Everything below assumes the existing
+primitives — `EngineHolder` atomic swap (§6), `cache.Backend` registry
+(M7), `AuthConfig` / `IdentityProvider` CRDs (§3), and the `Recorder`
+metrics surface (M9) — and adds *only* the missing edges.
+
+### 11.1 Seamless key rotation (runtime)
+
+Six key materials need rotation. None of them should require a Pod
+restart, an `AuthConfig` re-apply, or a window of broken auth.
+
+| Key material | Where it lives today | Verifier behaviour during rotation | Proposed rotation knob |
+|---|---|---|---|
+| **JWKS / IdP signing keys** | `pkg/identity/jwt`, refreshed every 10 min or on `Cache-Control: max-age` (§5) | Already multi-key by `kid`; verifier picks the JWK whose `kid` matches the token header | Background refresh stays as designed; expose `forceRefresh()` on the JWKS cache + a `lwauth_jwks_refresh_total{issuer,outcome}` counter so SREs can prove the new `kid` is loaded *before* the IdP starts signing with it |
+| **HMAC shared secrets** (`pkg/identity/hmac`) | Single `secret` per identifier | Single key — flips the moment the secret changes, breaks any in-flight request signed under the old one | Add `secrets: [{kid, secret, notBefore?, notAfter?}]`; verifier tries `kid` first, falls back to enabled secrets in declaration order; signers (e.g. `jwt-issue`) always pick the newest non-expired |
+| **`jwt-issue` mutator signing keys** | `pkg/mutator/jwtissue`, single `signingKey` | Same: a single-key flip drops in-flight tokens at the moment of swap | Same overlap-window shape: `signingKeys: [{kid, key, alg, active: true}]`; new tokens pick the newest `active:true`, verifiers downstream read `kid` from the JWS header |
+| **OAuth2 client secrets** (`pkg/clientauth`, M8) | `IdentityProvider.spec.clientSecret` | Single secret | Promote to `clientSecrets: [{secret, retiredAt?}]`; outbound caller tries newest first, falls back to retired ones until `retiredAt + grace` (default 24 h) so a botched IdP rotation self-heals on revert |
+| **API keys** (`pkg/identity/apikey`) | argon2id store; per-`keyId` records | Already multi-key (per-`keyId` lookup); rotation = add new + retire old | No design change. Document the “issue, distribute, retire” pattern in the cookbook; add `lwauth_apikey_lookup_total{outcome}` so retirement can be verified by absence of hits |
+| **mTLS trust bundle** (`pkg/identity/mtls`) | `trustedIssuers` Subject-DN list, leaf trust via process root pool | Process-level: changing it required restart | `caBundle: { configMap: …, intervalSec: 60 }`; reloader re-parses on change and atomically swaps the `*x509.CertPool` via `atomic.Pointer`. Same fsnotify path used by the file watcher; mirrors the engine swap idiom |
+
+#### Rotation choreography
+
+The general shape is **dual-publish → drain → retire**, with the
+controller surfacing each phase on `IdentityProvider.status.conditions`
+(same `metav1.Condition` mechanism the AuthConfig fix landed in this
+branch):
+
+```yaml
+# IdentityProvider.status.conditions
+- type: KeysRotating
+  status: "True"
+  reason: OverlapWindow
+  message: "kid=2026-05 published; kid=2026-04 still accepted until 2026-05-01T00:00:00Z"
+- type: Ready
+  status: "True"
+```
+
+Two new Prometheus metrics make rotations observable:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `lwauth_key_active{material,kid}` | gauge (0/1) | `material` ∈ {jwks, hmac, jwtissue, mtls_ca}, `kid` |
+| `lwauth_key_verify_total` | counter | `material`, `kid`, `outcome` ∈ {ok, expired, unknown_kid} |
+
+A rotation is "done" when `lwauth_key_verify_total{kid="<old>"}` flatlines
+across all replicas — a property that can be alerted on without any
+human-in-the-loop verification.
+
+#### Lock-in versus optionality
+
+We deliberately do **not** plan to bake a rotation *scheduler* into
+core. KMS / Vault / cert-manager / SPIFFE Workload API users all have
+opinions. Core ships the verifier-side overlap window and the status
+surface; rotation cadence stays in whatever already drives secrets in
+the operator's cluster.
+
+### 11.2 Seamless policy rotation (runtime)
+
+Policy rotation is mechanically simpler than key rotation — the engine
+swap is already atomic via `EngineHolder` — but operators need three
+things on top of "the swap works":
+
+1. **Versioning** — know what policy answered which decision.
+2. **Canary / shadow** — try a new policy on a slice of traffic before
+   committing.
+3. **Diffing** — see which decisions would change between v_n and
+   v_{n+1} *without* changing them.
+
+#### Versioning
+
+Add `spec.version: <opaque-string>` to `AuthConfig`; the controller
+echoes it on `status.appliedVersion` once compile + atomic swap succeed.
+The Prometheus `lwauth_decisions_total` counter gains a `policy_version`
+label (low cardinality — bounded by the number of versions live across
+the rolling window). The audit pipeline (M9) tags every decision line
+with the same value, so a postmortem can reliably correlate "this allow
+came from policy v=2026-05-02".
+
+#### Canary mode
+
+```yaml
+spec:
+  authorizers:
+    - name: prod
+      type: rbac
+      # ...existing prod policy
+  canary:
+    weight: 10                  # % of traffic
+    sample: header:x-canary     # OR: sticky by hash(sub)
+    authorizer:
+      type: opa
+      policy: file:///etc/lwauth/abac-next.rego
+```
+
+Engine evaluates **both** authorizers concurrently. The canary's verdict
+is **logged** (audit + metrics) but the request gets the prod verdict
+unless `canary.enforce: true` is set. Two new metric labels
+(`policy_track ∈ {prod, canary}`, `agreement ∈ {match, prod_allow_canary_deny, prod_deny_canary_allow}`)
+let an SRE confirm "canary diverges on 0.02% of requests, all of which
+are X" before promoting it.
+
+The composite authorizer (M5) provides the underlying machinery: canary
+is mechanically `composite{anyOf:[…], observe:<canary>}` with a
+side-channel for the observed verdict. We document it as a top-level
+field because that's how operators think about it.
+
+#### Shadow / dry-run AuthConfig
+
+A standalone `AuthConfig` with `spec.mode: shadow` performs the full
+identify → authorize → mutate pipeline but **never** affects the verdict
+returned to Envoy / Door B. It exists purely to feed the audit + metrics
+streams. Composes naturally with canary: ship a new policy as `shadow`
+for a week, promote to `canary: { weight: 10 }` once the audit log
+shows no surprises, promote to default once `agreement=match` saturates.
+
+#### Decision diffing CLI
+
+`lwauth diff --left v=2026-05-01 --right v=2026-05-02 --replay <audit.jsonl>`
+re-evaluates a captured audit log against two compiled engines and
+prints the divergence (what would have changed, grouped by `(method,
+path-template, deny_reason)`). This is a debugging tool, not a hot path;
+it lives in `cmd/lwauth-diff` and shells out to the same compile
+machinery the controller uses.
+
+### 11.3 Caching improvements (multi-tier, tag-based, prewarmed)
+
+Current cache design (§5, M5+M7): single-tier per layer (in-process LRU
+*or* Valkey), TTL invalidation, `singleflight` coalescing, negative
+caching. That gets us a long way — and it is what the cookbook recipes
+exercise today — but four enterprise-scale failure modes show up beyond
+that:
+
+| Failure mode | Today's behaviour | Proposed mitigation |
+|---|---|---|
+| **Cold pod starts cold** — replica added by HPA serves p99 misses for the first ~minute | Each pod's LRU fills independently | Two-tier read-through: L1 = in-process LRU (already in `internal/cache/lru.go`), L2 = Valkey (already in `internal/cache/valkey`). On L1 miss, read L2 before evaluating; on evaluate, write through both. New replicas warm L1 from L2 in O(p99 latency). |
+| **Stampede on hot key after revoke** | TTL expiry → all replicas evaluate at once → singleflight is per-pod, so N replicas = N concurrent evaluations | Promote `singleflight` to a *cross-replica* primitive via Valkey `SETNX` lock with a short hold (ex. 100 ms); whichever replica wins writes the answer and the rest read it from L2. Falls back gracefully to per-pod singleflight if Valkey is unreachable. |
+| **Manual revocation can't beat TTL** | Operators wait for TTL to elapse, or restart pods | Tag-based invalidation. Cache writes carry tags `{tenant=…, sub=…, policy_version=…}`; revocation publishes a `cache.invalidate` event over Valkey pub/sub, every replica drops L1 entries matching the tags. New `lwauth_cache_invalidations_total{scope}` counter. |
+| **Stale-while-revalidate** for upstream lookups (introspection / OpenFGA `Check`) goes silent on upstream outage | TTL hits → entry evicted → next request hits ErrUpstream | Add `staleTtl` per layer: on `ErrUpstream` and `now > expiresAt && now < expiresAt + staleTtl`, serve the stale value and fire a background refresh. Behaviour is opt-in per `AuthConfig.cache.serveStaleOnUpstreamError: true`. |
+
+#### Freshness budget
+
+`AuthConfig.cache.maxStaleness: 30s` becomes the *user-facing* knob —
+"my decisions may be at most 30s out of date". The implementation
+chooses TTL + staleTtl + tag-invalidation parameters under the hood to
+honour it. This is the same idiom HTTP `Cache-Control: max-age` /
+`stale-while-revalidate` uses; operators already have intuition for it.
+
+#### Per-tenant prefix isolation
+
+Today `cache.backend.keyPrefix` isolates AuthConfigs sharing one Valkey.
+Add automatic per-tenant prefixing — `keyPrefix: "{authconfig}/{tenant}/"`
+— so a tenant invalidation can `SCAN` + `DEL` an entire tenant's slice
+without touching others. Tenant ID flows in via the existing
+`module.Request.Context.TenantID` (resolved decisions, multi-tenancy day
+one).
+
+#### Prewarming via `AuthorizeStream`
+
+Door B's `AuthorizeStream` (M8) already supports long-lived sessions.
+Document — and ship a Go SDK helper for — the pattern of issuing a
+"prewarm" Authorize for high-value subjects (e.g. on session
+establishment) so the first real request hits L1. This is operator
+opt-in and policy-shape-dependent; we don't enable it by default.
+
+#### Cache observability additions
+
+| Metric | Type | Labels |
+|---|---|---|
+| `lwauth_cache_layer_hits_total` | counter | `cache`, `layer` ∈ {l1, l2}, `tenant` |
+| `lwauth_cache_stale_served_total` | counter | `cache`, `tenant` |
+| `lwauth_cache_invalidations_total` | counter | `scope` ∈ {tag_subject, tag_policy_version, tag_tenant, full} |
+| `lwauth_cache_lock_wait_seconds` | histogram | `cache` |
+
+### 11.4 HA, leader election, and decision audit
+
+Three smaller enterprise concerns that share a section because they
+each need ~one design paragraph:
+
+**HA / leader election.** lwauth pods are stateless on the hot path —
+`AuthConfig` is the only durable state and it lives in the K8s API. The
+*controller* loop, however, currently runs in every replica
+(`controller-runtime` default), which is fine but wasteful. Adopt
+`controller-runtime`'s built-in `LeaderElection: true` so only one
+replica reconciles; the rest still serve traffic. ConfigMap-based
+election in the lwauth namespace, 30 s lease, no new dependency. Helm
+exposes `controller.leaderElection.enabled` (default `true` when
+`replicas > 1`).
+
+**Per-AuthConfig SLOs / quotas.** Operators want both "my tenant gets at
+most 1000 RPS" (quota) and "my tenant's p99 stays under 5 ms" (SLO).
+- *Quota* lands as a token-bucket on the request-path keyed by
+  `tenantID`, backed by Valkey for cross-replica sharing. New
+  `AuthConfig.spec.rateLimit: { rps, burst }`. Over-quota = 429
+  (HTTP) / `RESOURCE_EXHAUSTED` (gRPC), audit-tagged.
+- *SLO* is reporting only — the existing latency histogram, sliced by
+  `tenant`, fed to whatever SLO platform (Sloth, Grafana SLO) the
+  operator already runs. Core ships an example recording rule, not its
+  own SLO engine.
+
+**Audit pipeline.** Today decisions emit Prometheus + OTel spans (M9).
+Add a structured audit *sink* with three implementations:
+| Sink | Use case |
+|---|---|
+| `stdout-jsonl` | default; 12-factor; piped into whatever log system is already running |
+| `loki` | direct push, for clusters that want decision logs separate from app logs |
+| `kafka` | high-volume / long-retention compliance use case |
+
+`audit.sample: { rate: 0.01, always: ["deny", "shadow_disagreement"] }`
+keeps cost bounded without dropping the records that matter
+(denies + canary disagreements are always logged). Audit lines carry
+the W3C `traceparent` already exposed by `tracing.TraceIDFromContext`,
+so an audit entry deep-links to a trace in one click.
+
+### 11.5 Why this lives in core (and what doesn't)
+
+These features fit core because they extend primitives that *already
+exist* there (engine swap, cache backend registry, controller status,
+metrics recorder). Three explicit non-goals to keep the surface honest:
+
+- **A built-in rotation scheduler.** cert-manager / Vault / KMS already
+  do this. We expose the verifier overlap window and the status surface;
+  the *when* stays out of core.
+- **A managed canary controller.** Argo Rollouts / Flagger already do
+  traffic shaping. We expose canary at the policy layer; integration
+  with traffic-shaping is documentation, not code.
+- **An SLO engine.** Sloth / Grafana SLO / Pyrra exist. We export the
+  histograms and ship example recording rules.
+
+These features land incrementally — none of them requires a single big
+release. Suggested ordering, if a maintainer picks this up: **11.1
+JWKS+HMAC overlap → 11.2 versioning + shadow → 11.3 two-tier read-through
+→ 11.1 mTLS bundle reload → 11.3 tag invalidation → 11.4 leader election
+→ 11.2 canary → 11.4 audit sinks → 11.3 cross-replica singleflight → 11.4
+quotas**. Each slice is independently shippable and independently
+revertable.
