@@ -64,50 +64,95 @@ Service `port: 8000` matters to the rest of the recipe.
 
 [`mccutchen/go-httpbin`]: https://github.com/mccutchen/go-httpbin
 
+### Optional: a local kind cluster that *does* enforce NetworkPolicy
+
+If you're testing this recipe on Docker Desktop, Rancher Desktop, or a
+stock kind cluster, NetworkPolicy is silently ignored — probes 5.3 and
+5.4 will return `200` instead of `000` and the gateway is bypassable.
+The shortest path to a local cluster that *does* enforce policy is
+kind with kindnet disabled and Cilium installed as the CNI:
+
+```bash
+cat <<'YAML' > /tmp/kind-cilium.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lwauth
+networking:
+  disableDefaultCNI: true   # so Cilium can be the only CNI
+  kubeProxyMode: none       # so Cilium can fully replace kube-proxy
+nodes:
+  - role: control-plane
+  - role: worker
+YAML
+
+kind create cluster --config /tmp/kind-cilium.yaml
+# Nodes will sit NotReady until the CNI is installed — expected.
+
+cilium install --version 1.19.3 \
+  --set kubeProxyReplacement=true \
+  --set k8sServiceHost=lwauth-control-plane \
+  --set k8sServicePort=6443
+cilium status --wait
+```
+
+!!! tip "If `cilium status --wait` times out"
+    The Cilium agent image is ~260 MiB and the pull from quay.io can
+    take several minutes on a cold cluster. The wait timeout fires
+    long before that. Re-run `cilium status` (no `--wait`) or
+    `kubectl -n kube-system get pods -l k8s-app=cilium -o wide`
+    once the pulls finish — if both agent pods are `1/1 Running`
+    you're good, regardless of what the wizard said.
+
+If you're running a locally-built lwauth image rather than pulling
+from GHCR, side-load it into the cluster before the Helm install.
+`kind load` copies the image into every node, so on a multi-node
+cluster expect a few seconds per worker:
+
+```bash
+kind load docker-image lwauth:dev --name lwauth
+```
+
+For a local image you also need to override the chart's image
+fields, since the chart defaults pull from GHCR:
+
+```bash
+# Add these to the helm install in step 2:
+#   --set image.repository=lwauth
+#   --set image.tag=dev
+#   --set image.pullPolicy=IfNotPresent
+```
+
 ## 1. Namespace and upstream
+
+The four manifests this recipe applies live next to it under
+[`examples/cookbook/gate-upstream-service/`](https://github.com/mikeappsec/lightweightauth/tree/main/examples/cookbook/gate-upstream-service).
+Apply them with `kubectl apply -f` rather than retyping; copy-paste
+into a heredoc is fine if you'd rather see the YAML inline.
 
 ```bash
 kubectl create namespace lwauth-demo
 
-kubectl -n lwauth-demo apply -f - <<'YAML'
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend
-  labels: { app: backend }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: backend } }
-  template:
-    metadata: { labels: { app: backend } }
-    spec:
-      containers:
-        - name: httpbin
-          image: mccutchen/go-httpbin:v2.15.0
-          args: ["-port", "8000"]
-          ports: [{ containerPort: 8000, name: http }]
-          readinessProbe:
-            httpGet: { path: /status/200, port: 8000 }
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: backend
-spec:
-  selector: { app: backend }
-  ports: [{ name: http, port: 8000, targetPort: 8000 }]
-YAML
+# Upstream workload (httpbin) + Service. See backend.yaml for the
+# `command: ["go-httpbin"]` note — the upstream image declares no
+# ENTRYPOINT so args alone fail to exec.
+kubectl -n lwauth-demo apply \
+  -f https://raw.githubusercontent.com/mikeappsec/lightweightauth/main/examples/cookbook/gate-upstream-service/backend.yaml
 ```
 
 At this point `backend.lwauth-demo.svc:8000` is reachable from
 anywhere in the cluster. That is the bypass we close in step 4.
 
-## 2. Install lwauth via Helm with the NetworkPolicy locked down
+## 2. Install lwauth via Helm with the gateway in front of it
 
-The chart's `networkPolicy` block locks **ingress to lwauth itself** —
-it has nothing to do with the upstream. Default-on with no
-`allowedFrom` selectors means deny-all (the documented safe failure);
-we admit only the Envoy gateway we deploy in step 3.
+Two flags do all the work:
+
+- `gateway.enabled=true` — the chart renders an Envoy `ext_authz`
+  proxy (ConfigMap + Deployment + Service) preconfigured to call
+  lwauth's gRPC port and forward to your upstream. No hand-rolled
+  envoy.yaml; the things ext_authz operators usually get wrong
+  (`failure_mode_allow: false`, HTTP/2 to lwauth) are baked in.
+- `gateway.upstream.service=backend` — the Service the gateway
+  forwards to. Lives in the same namespace as the release.
 
 ```bash
 helm install lwauth oci://ghcr.io/mikeappsec/lightweightauth/charts/lightweightauth \
@@ -117,41 +162,24 @@ helm install lwauth oci://ghcr.io/mikeappsec/lightweightauth/charts/lightweighta
   --set controller.enabled=true \
   --set controller.watchNamespace=lwauth-demo \
   --set controller.authConfigName=demo \
-  --set 'networkPolicy.allowedFrom.podSelectors[0].app=envoy'
+  --set gateway.enabled=true \
+  --set gateway.upstream.service=backend
 ```
 
-!!! warning "`allowedFrom` is `AND` between namespace and pod selectors"
-    Within one `from` entry the namespace selector and pod selector
-    intersect. The chart emits one entry per selector you list, so
-    setting *only* a `podSelectors[0]` admits matching pods **in any
-    namespace**. For this recipe both the gateway and lwauth live in
-    `lwauth-demo`, so an `app=envoy` pod selector is sufficient. In a
-    real deployment where the gateway is in `istio-system` or
-    `gateway-system`, add a `namespaceSelectors` entry too.
+!!! note "Why no `networkPolicy.allowedFrom` setting"
+    The chart auto-admits its own gateway in lwauth's NetworkPolicy
+    (selector match on
+    `app.kubernetes.io/component=gateway, app.kubernetes.io/instance=<release>`).
+    You only need `networkPolicy.allowedFrom.podSelectors` /
+    `.namespaceSelectors` if you're calling lwauth from something the
+    chart didn't render — a sibling Istio gateway, your own Envoy in
+    `gateway-system`, etc.
 
 Now apply the `AuthConfig` the controller will compile:
 
 ```bash
-kubectl -n lwauth-demo apply -f - <<'YAML'
-apiVersion: lightweightauth.io/v1alpha1
-kind: AuthConfig
-metadata: { name: demo }
-spec:
-  identifierMode: firstMatch
-  identifiers:
-    - name: key
-      type: apikey
-      config:
-        headerName: x-api-key
-        static:
-          demo-key-alice: { subject: alice, roles: [admin] }
-  authorizers:
-    - name: gate
-      type: rbac
-      config:
-        rolesFrom: claim:roles
-        allow: [admin]
-YAML
+kubectl -n lwauth-demo apply \
+  -f https://raw.githubusercontent.com/mikeappsec/lightweightauth/main/examples/cookbook/gate-upstream-service/authconfig.yaml
 
 kubectl -n lwauth-demo wait authconfig/demo --for=condition=Ready --timeout=60s
 ```
@@ -159,140 +187,37 @@ kubectl -n lwauth-demo wait authconfig/demo --for=condition=Ready --timeout=60s
 If `Ready=False` here the controller's `status.conditions` carries
 the compile error verbatim — fix the YAML, no daemon restart needed.
 
-## 3. Deploy Envoy as the gateway in front of the upstream
+## 3. (No step 3 — the gateway came with step 2.)
 
-Envoy is the only thing the public will reach. Its `ext_authz` filter
-calls `lwauth.lwauth-demo.svc:9001` before forwarding to
-`backend.lwauth-demo.svc:8000`.
+Versions of this recipe before chart 0.2 had a third step that
+applied ~60 lines of inline Envoy YAML. That responsibility moved
+into the chart's `gateway.*` values block; the rendered Pod, Service,
+and ConfigMap are identical to what the old step shipped, with the
+ext_authz cluster's `http2_protocol_options: {}` and
+`failure_mode_allow: false` set centrally so they can't drift.
 
-```bash
-kubectl -n lwauth-demo apply -f - <<'YAML'
-apiVersion: v1
-kind: ConfigMap
-metadata: { name: envoy-config }
-data:
-  envoy.yaml: |
-    static_resources:
-      listeners:
-      - name: ingress
-        address: { socket_address: { address: 0.0.0.0, port_value: 80 } }
-        filter_chains:
-        - filters:
-          - name: envoy.filters.network.http_connection_manager
-            typed_config:
-              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-              stat_prefix: ingress
-              codec_type: AUTO
-              route_config:
-                name: local
-                virtual_hosts:
-                - name: backend
-                  domains: ["*"]
-                  routes:
-                  - match: { prefix: "/" }
-                    route: { cluster: backend }
-              http_filters:
-              - name: envoy.filters.http.ext_authz
-                typed_config:
-                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
-                  transport_api_version: V3
-                  failure_mode_allow: false
-                  clear_route_cache: true
-                  grpc_service:
-                    envoy_grpc: { cluster_name: lwauth }
-                    timeout: 0.25s
-              - name: envoy.filters.http.router
-                typed_config:
-                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-      clusters:
-      - name: backend
-        type: STRICT_DNS
-        connect_timeout: 1s
-        load_assignment:
-          cluster_name: backend
-          endpoints:
-          - lb_endpoints:
-            - endpoint: { address: { socket_address: { address: backend.lwauth-demo.svc.cluster.local, port_value: 8000 } } }
-      - name: lwauth
-        type: STRICT_DNS
-        connect_timeout: 1s
-        typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            explicit_http_config: { http2_protocol_options: {} }
-        load_assignment:
-          cluster_name: lwauth
-          endpoints:
-          - lb_endpoints:
-            - endpoint: { address: { socket_address: { address: lwauth.lwauth-demo.svc.cluster.local, port_value: 9001 } } }
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: envoy
-  labels: { app: envoy }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: envoy } }
-  template:
-    metadata: { labels: { app: envoy } }
-    spec:
-      containers:
-        - name: envoy
-          image: envoyproxy/envoy:v1.37.3
-          args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
-          ports: [{ containerPort: 80, name: http }]
-          volumeMounts:
-            - { name: cfg, mountPath: /etc/envoy }
-      volumes:
-        - { name: cfg, configMap: { name: envoy-config } }
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: envoy
-spec:
-  selector: { app: envoy }
-  ports: [{ name: http, port: 80, targetPort: 80 }]
-YAML
-```
+If you need to bring your own Envoy / Istio / Kong gateway, set
+`gateway.enabled=false` (the default) and point your data plane at
+`lwauth.<release-namespace>.svc:9001` (gRPC). You'll also need to
+add a `podSelector` under `networkPolicy.allowedFrom` so your
+gateway can dial lwauth.
 
-Two non-default fields are doing real work:
-
-- **`failure_mode_allow: false`** — if lwauth is unreachable, Envoy
-  rejects the request rather than failing open. The chart's
-  NetworkPolicy plus a single-replica lwauth deploy is a real outage
-  surface; failing closed makes it a 503 instead of an authorization
-  bypass.
-- **`http2_protocol_options: {}` on the lwauth cluster** — the
-  ext_authz contract is gRPC, which requires HTTP/2. Without this
-  Envoy speaks HTTP/1.1 to lwauth and every Check call fails with
-  `UNAVAILABLE`.
-
-## 4. Lock the upstream so only Envoy can reach it
+## 4. Lock the upstream so only the gateway can reach it
 
 This is the layer that makes the gateway non-bypassable. Without it,
 any other Pod in the cluster — a CronJob, a debug shell, the wrong
-microservice — can dial `backend.lwauth-demo.svc:8000` and skip
-Envoy entirely.
+microservice — can dial `backend.lwauth-demo.svc:8000` and skip the
+gateway entirely.
 
 ```bash
-kubectl -n lwauth-demo apply -f - <<'YAML'
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata: { name: backend-only-from-envoy }
-spec:
-  podSelector:
-    matchLabels: { app: backend }
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels: { app: envoy }
-      ports:
-        - { port: 8000, protocol: TCP }
-YAML
+kubectl -n lwauth-demo apply \
+  -f https://raw.githubusercontent.com/mikeappsec/lightweightauth/main/examples/cookbook/gate-upstream-service/netpol-backend.yaml
 ```
+
+The manifest selects the gateway by its chart-stamped label
+(`app.kubernetes.io/component: gateway`) so it works unchanged
+regardless of release name. If you set `gateway.enabled=false` and
+brought your own Envoy/Istio, edit the selector to match.
 
 !!! warning "Verify the CNI actually enforces this"
     A CNI that ignores NetworkPolicy (Docker Desktop default, some
@@ -309,7 +234,7 @@ each one is `set -e`-safe (exits non-zero if the recipe is broken).
 ### 5.1 Allow path through the gateway
 
 ```bash
-kubectl -n lwauth-demo port-forward svc/envoy 8080:80 >/dev/null &
+kubectl -n lwauth-demo port-forward svc/lwauth-gateway 8080:80 >/dev/null &
 PF=$!; trap "kill $PF" EXIT
 sleep 1
 
@@ -338,7 +263,8 @@ lwauth-demo logs deploy/backend --since=10s | wc -l` should print
 ### 5.3 Direct-to-upstream from another Pod is blocked
 
 This is the probe that proves NetworkPolicy is real. Spin a one-shot
-debug pod **without** the `app=envoy` label and try to reach
+debug pod that does **not** carry the gateway's
+`app.kubernetes.io/component=gateway` label and try to reach
 `backend:8000`:
 
 ```bash
@@ -389,6 +315,11 @@ Fix the CNI before promoting beyond a sandbox.
 ```bash
 helm -n lwauth-demo uninstall lwauth
 kubectl delete namespace lwauth-demo
+
+# If you stood up the optional kind+Cilium cluster from the
+# Prerequisites section, drop the whole cluster instead — it's
+# faster than uninstalling each piece:
+kind delete cluster --name lwauth
 ```
 
 `crds.keep: true` (the chart default) leaves the
@@ -402,22 +333,32 @@ the last release.
 - **Cluster CNI does not enforce NetworkPolicy.** Symptom: 5.3
   returns `200`. Fix: switch to a CNI that does (Calico, Cilium), or
   on managed clusters enable the equivalent policy add-on.
-- **lwauth's NetworkPolicy admitted nothing.** Symptom: 5.1 returns
-  `403` from Envoy with `failed to connect to upstream`; lwauth pod
-  logs nothing. Fix: re-check the `--set
-  'networkPolicy.allowedFrom.podSelectors[0].app=envoy'` flag — Helm
-  silently ignores typos in `--set` paths.
-- **`failure_mode_allow: true` left on Envoy.** Symptom: 5.2 returns
-  `200`, the upstream's log records the request. Fix: re-render
-  Envoy with the value as `false`. Authorization-bypass-on-failure
-  is the single most common ext_authz misconfig in the wild.
+- **Gateway can't reach lwauth.** Symptom: 5.1 returns `403` from
+  Envoy with `failed to connect to upstream`; lwauth pod logs
+  nothing. With `gateway.enabled=true` this should not happen — the
+  chart auto-admits its own gateway in lwauth's NetworkPolicy. If
+  you set `gateway.enabled=false` and brought your own data plane,
+  add a matching `podSelector` under
+  `networkPolicy.allowedFrom.podSelectors`. Helm silently ignores
+  typos in `--set` paths, so `kubectl get networkpolicy -o yaml` is
+  the only authoritative check.
+- **`failure_mode_allow: true` left on the gateway.** Symptom: 5.2
+  returns `200`, the upstream's log records the request. The chart
+  defaults `gateway.extAuthz.failureModeAllow=false`; the only way
+  to flip it is `--set gateway.extAuthz.failureModeAllow=true`,
+  which you should not do.
+  Authorization-bypass-on-failure is the single most common
+  ext_authz misconfig in the wild.
 - **HTTP/1.1 to lwauth.** Symptom: every request returns `503`
-  regardless of API key; Envoy logs `upstream connect error`. Fix:
-  the `http2_protocol_options: {}` block on the lwauth cluster.
+  regardless of API key; gateway logs `upstream connect error`.
+  Cannot happen with the chart-rendered gateway (the
+  `http2_protocol_options: {}` block is hard-coded into the
+  ConfigMap template). If you brought your own Envoy and see this,
+  add the block to your `lwauth` cluster.
 - **`backend` is in another namespace.** Symptom: 5.3 returns `200`
   even on a real CNI. Cause: the NetworkPolicy
   `podSelector: { app: backend }` is namespace-scoped — a same-name
-  Pod in another namespace is matched by Envoy's
+  Pod in another namespace is matched by the gateway's
   `from.podSelector` because no `namespaceSelector` constrains it.
   Fix: add `namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: lwauth-demo } }`
   to the `from` entry.

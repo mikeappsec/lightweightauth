@@ -1,0 +1,27 @@
+# authconfig.yaml — demo AuthConfig the controller compiles.
+#
+# A single API key identifies "alice" with role "admin"; the rbac
+# authorizer admits anything in the [admin] role list. Real
+# deployments swap apikey for jwt + an IdentityProvider and rbac for
+# opa or openfga; the wire shape is unchanged.
+apiVersion: lightweightauth.io/v1alpha1
+kind: AuthConfig
+metadata:
+  name: demo
+spec:
+  identifierMode: firstMatch
+  identifiers:
+    - name: key
+      type: apikey
+      config:
+        headerName: x-api-key
+        static:
+          demo-key-alice:
+            subject: alice
+            roles: [admin]
+  authorizers:
+    - name: gate
+      type: rbac
+      config:
+        rolesFrom: claim:roles
+        allow: [admin]

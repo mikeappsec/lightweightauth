@@ -1,0 +1,16 @@
+# Optional kind cluster for the gate-upstream-service cookbook recipe.
+#
+# Disables kindnet so Cilium can be the only CNI, and disables
+# kube-proxy so Cilium can fully replace it (kubeProxyReplacement=true).
+# A stock kind / Docker Desktop cluster silently no-ops NetworkPolicy
+# and the cookbook's bypass probes (5.3 / 5.4) will return 200 instead
+# of 000 — the gateway becomes convenience, not a control.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: lwauth
+networking:
+  disableDefaultCNI: true
+  kubeProxyMode: none
+nodes:
+  - role: control-plane
+  - role: worker

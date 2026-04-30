@@ -1,17 +1,63 @@
 {{- /*
-RBAC for the controller. Two shapes:
+RBAC for the controller.
+
+`IdentityProvider` is cluster-scoped (api/crd/v1alpha1/types.go), so a
+Role can never grant list/watch on it — the controller's informer
+cache fails to sync and readiness holds at 503. This template
+therefore always emits a small ClusterRole that covers ONLY the
+cluster-scoped resources, and additionally:
 
   * Namespace-scoped Role / RoleBinding when controllerRBAC.preferNamespaceScope
     is true AND controller.watchNamespace is set. Most installs only watch one
-    namespace and don't need cluster-wide list/watch.
-  * ClusterRole / ClusterRoleBinding otherwise (cross-namespace watch or an
-    operator who explicitly wants the cluster-scoped form).
+    namespace and don't need cluster-wide list/watch on AuthConfig/AuthPolicy.
+  * A larger ClusterRole / ClusterRoleBinding otherwise (cross-namespace
+    watch or an operator who explicitly wants the cluster-scoped form).
 
-Both shapes carry the same verbs; the only difference is scope.
+The ClusterRole for IdentityProvider is unconditional because every
+controller instance needs it; sharing one across multiple namespace
+installs is fine — RBAC is permissive and idempotent. To opt out
+entirely, set `controllerRBAC.identityProviderClusterRole.enabled=false`
+and grant the SA list/watch on `identityproviders.lightweightauth.io`
+yourself.
 */ -}}
 {{- if and .Values.rbac.create .Values.controller.enabled -}}
 {{- $ns := default .Release.Namespace .Values.controller.watchNamespace -}}
 {{- $useNamespaceScope := and .Values.controllerRBAC.preferNamespaceScope (ne $ns "") -}}
+{{- $idpCR := and (hasKey .Values.controllerRBAC "identityProviderClusterRole") .Values.controllerRBAC.identityProviderClusterRole.enabled -}}
+{{- if or (not (hasKey .Values.controllerRBAC "identityProviderClusterRole")) $idpCR -}}
+# ClusterRole for the cluster-scoped IdentityProvider CRD.
+# Always emitted because IdentityProvider is cluster-scoped and a
+# namespace Role cannot grant list/watch on cluster-scoped resources.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "lwauth.fullname" . }}-idp
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["lightweightauth.io"]
+    resources: ["identityproviders"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["lightweightauth.io"]
+    resources: ["identityproviders/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "lwauth.fullname" . }}-idp
+  labels:
+    {{- include "lwauth.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "lwauth.fullname" . }}-idp
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lwauth.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- end }}
 {{- if $useNamespaceScope }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -22,10 +68,10 @@ metadata:
     {{- include "lwauth.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["lightweightauth.io"]
-    resources: ["authconfigs", "authpolicies", "identityproviders"]
+    resources: ["authconfigs", "authpolicies"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["lightweightauth.io"]
-    resources: ["authconfigs/status", "authpolicies/status", "identityproviders/status"]
+    resources: ["authconfigs/status", "authpolicies/status"]
     verbs: ["get", "update", "patch"]
   # Leader election is M11; keep the lease verbs ready so we can flip
   # the switch without re-issuing RBAC.
@@ -60,10 +106,10 @@ metadata:
     {{- include "lwauth.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["lightweightauth.io"]
-    resources: ["authconfigs", "authpolicies", "identityproviders"]
+    resources: ["authconfigs", "authpolicies"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["lightweightauth.io"]
-    resources: ["authconfigs/status", "authpolicies/status", "identityproviders/status"]
+    resources: ["authconfigs/status", "authpolicies/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

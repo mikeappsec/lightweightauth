@@ -41,11 +41,32 @@ spec:
                   format: int64
                 message:
                   type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status, lastTransitionTime, reason, message]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
               x-kubernetes-preserve-unknown-fields: true
       additionalPrinterColumns:
         - name: Ready
-          type: boolean
-          jsonPath: .status.ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

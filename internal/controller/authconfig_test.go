@@ -105,6 +105,32 @@ func TestReconcile_HappyPath(t *testing.T) {
 	if !got.Status.Ready || got.Status.ObservedGeneration != 7 {
 		t.Errorf("status = %+v, want Ready=true ObservedGeneration=7", got.Status)
 	}
+	// And the canonical conditions[] entry must mirror it so generic
+	// tooling (kubectl wait --for=condition=Ready, kstatus, Argo) works.
+	readyCond := findCondition(got.Status.Conditions, v1alpha1.ConditionTypeReady)
+	if readyCond == nil {
+		t.Fatalf("expected a %q condition; status=%+v", v1alpha1.ConditionTypeReady, got.Status)
+	}
+	if readyCond.Status != metav1.ConditionTrue {
+		t.Errorf("Ready condition status = %q, want True", readyCond.Status)
+	}
+	if readyCond.Reason != v1alpha1.ReasonCompiled {
+		t.Errorf("Ready condition reason = %q, want %q", readyCond.Reason, v1alpha1.ReasonCompiled)
+	}
+	if readyCond.ObservedGeneration != 7 {
+		t.Errorf("Ready condition ObservedGeneration = %d, want 7", readyCond.ObservedGeneration)
+	}
+}
+
+// findCondition is a tiny helper so tests don't drag in apimachinery's
+// meta package just to read a condition by type.
+func findCondition(cs []metav1.Condition, t string) *metav1.Condition {
+	for i := range cs {
+		if cs[i].Type == t {
+			return &cs[i]
+		}
+	}
+	return nil
 }
 
 // TestReconcile_CompileError: a malformed spec must NOT install an
@@ -146,6 +172,13 @@ func TestReconcile_CompileError(t *testing.T) {
 	}
 	if got.Status.Message == "" {
 		t.Errorf("Message should carry the compile error")
+	}
+	readyCond := findCondition(got.Status.Conditions, v1alpha1.ConditionTypeReady)
+	if readyCond == nil || readyCond.Status != metav1.ConditionFalse {
+		t.Errorf("Ready condition should be False on compile error; got %+v", readyCond)
+	}
+	if readyCond != nil && readyCond.Reason != v1alpha1.ReasonCompileError {
+		t.Errorf("Ready condition reason = %q, want %q", readyCond.Reason, v1alpha1.ReasonCompileError)
 	}
 }
 
