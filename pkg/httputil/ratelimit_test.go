@@ -83,8 +83,22 @@ func TestRateLimitMiddleware_Returns429(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d", rec.Code)
 	}
-	if rec.Header().Get("Retry-After") != "1" {
+	if rec.Header().Get("Retry-After") == "" {
 		t.Fatal("missing Retry-After header")
+	}
+}
+
+func TestIPKeyFunc_StripsPort(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	if got := IPKeyFunc(req); got != "10.0.0.1" {
+		t.Fatalf("expected 10.0.0.1, got %q", got)
+	}
+
+	// IPv6
+	req.RemoteAddr = "[::1]:9999"
+	if got := IPKeyFunc(req); got != "::1" {
+		t.Fatalf("expected ::1, got %q", got)
 	}
 }
 

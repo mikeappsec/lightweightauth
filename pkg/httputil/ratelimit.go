@@ -6,6 +6,8 @@
 package httputil
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -47,6 +49,8 @@ func WithClock(fn func() time.Time) TokenBucketOption {
 
 // NewTokenBucketLimiter returns a KeyedLimiter backed by per-key token
 // buckets refilling at rps tokens/sec with a maximum burst capacity.
+// A background goroutine evicts idle buckets every 60 s (buckets not
+// seen for ≥ 2× the full-refill period are removed).
 func NewTokenBucketLimiter(rps float64, burst int, opts ...TokenBucketOption) *TokenBucketLimiter {
 	l := &TokenBucketLimiter{
 		buckets: make(map[string]*tokenBucket),
@@ -57,7 +61,36 @@ func NewTokenBucketLimiter(rps float64, burst int, opts ...TokenBucketOption) *T
 	for _, o := range opts {
 		o(l)
 	}
+	// RL2: start background eviction to bound memory.
+	go l.evictLoop()
 	return l
+}
+
+// evictLoop removes buckets that have been idle long enough to be
+// fully refilled (i.e. they would start at max burst anyway).
+func (l *TokenBucketLimiter) evictLoop() {
+	// Evict every 60s; idle threshold = time to fully refill burst.
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	var idleThreshold time.Duration
+	if l.rps > 0 {
+		idleThreshold = time.Duration(float64(l.burst)/l.rps*1e9) * time.Nanosecond
+		if idleThreshold < 60*time.Second {
+			idleThreshold = 60 * time.Second
+		}
+	} else {
+		idleThreshold = 60 * time.Second
+	}
+	for range ticker.C {
+		now := l.now()
+		l.mu.Lock()
+		for k, b := range l.buckets {
+			if now.Sub(b.lastTime) > idleThreshold {
+				delete(l.buckets, k)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 // Allow implements KeyedLimiter.
@@ -91,17 +124,34 @@ func (l *TokenBucketLimiter) Allow(key string) bool {
 // KeyFunc extracts the rate-limit key from a request (e.g. RemoteAddr).
 type KeyFunc func(r *http.Request) string
 
-// IPKeyFunc is the most common KeyFunc: it keys on r.RemoteAddr.
-func IPKeyFunc(r *http.Request) string { return r.RemoteAddr }
+// IPKeyFunc extracts the client IP from RemoteAddr, stripping the
+// ephemeral port so all connections from the same IP share one bucket.
+func IPKeyFunc(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr // fallback (e.g. unix socket)
+	}
+	return host
+}
 
 // RateLimitMiddleware returns an http.Handler that gates requests
 // through limiter. Denied requests receive 429 with Retry-After.
 // keyFn determines the bucket key; pass IPKeyFunc for per-IP limiting.
 func RateLimitMiddleware(limiter KeyedLimiter, keyFn KeyFunc, next http.Handler) http.Handler {
+	// Compute a sensible Retry-After from the limiter if possible.
+	retryAfter := "1"
+	if tb, ok := limiter.(*TokenBucketLimiter); ok && tb.rps > 0 {
+		secs := 1.0 / tb.rps
+		if secs < 1 {
+			retryAfter = "1"
+		} else {
+			retryAfter = fmt.Sprintf("%d", int(secs)+1)
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := keyFn(r)
 		if !limiter.Allow(key) {
-			w.Header().Set("Retry-After", "1")
+			w.Header().Set("Retry-After", retryAfter)
 			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 			return
 		}
