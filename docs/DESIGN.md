@@ -626,7 +626,7 @@ for performance — see §5.
 > expires (default ≤ token `exp`). The "short TTLs + refresh rotation"
 > story handles this for most deployments; operators who need stronger
 > guarantees can opt into the revocation surface in
-> **M14-REVOCATION** (§7, Tier C).
+> **M14-REVOCATION** (§7, Tier E).
 
 ---
 
@@ -1495,19 +1495,20 @@ by dependency, not by calendar.
 
 Items previously numbered 15 (M13 – Supply-chain hardening) and 16
 (M14 – Revocation) have been relocated into the tiered post-v1.0
-queue below — see **X3. M13-SUPPLY-CHAIN** and **C3. M14-REVOCATION**.
+queue below — see **F1. M13-SUPPLY-CHAIN** and **E2. M14-REVOCATION**.
 The relocation reflects that neither item is on a v1.0.x patch line
-nor a Tier-A hardening slice: M13 is operator-trust quality work that
-can ship on its own cadence, and M14 is net-new opt-in feature
-surface area.
+nor a Tier-A hardening slice: M13 remains demand-driven ecosystem work,
+and M14 now belongs with the enterprise HA/cache line because revocation
+depends on admin auth, audit retention, and cross-replica state.
 
-### Post-v1.0 queue (reprioritized 2026-04-28)
+### Post-v1.0 queue (reprioritized 2026-05-01)
 
 The post-v1.0 list is now ordered by **risk**, not by milestone number:
 security and bug-fix work runs first, then hardening that closes known
 DoS / trust gaps, then quality / coverage gaps, and only then new
 feature surface area. The original numeric IDs (16–27) are preserved
-in parentheses so existing references still resolve.
+where they still apply; new enterprise recommendations use `OPS-*`,
+`ENT-*`, and `F-*` IDs so they can be tracked independently.
 
 #### Tier S — security & correctness (next patch line, v1.0.x)
 
@@ -1778,108 +1779,175 @@ B3. **DOC-OPENAPI-1 (was 18) — Machine-readable API contract.**
     `TestHTTPHandler_DisableOpenAPI` in
     [internal/server/openapi_test.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/server/openapi_test.go).
 
-#### Tier C — new features (v1.1+)
+#### Tier C — operator adoption (v1.1)
 
-These add user-visible capability rather than closing a gap. They
-ship after tier S/A/B clears.
+These do not change auth semantics; they make the shipped v1.x surface
+easier to adopt, operate, and support. They should land before the
+enterprise runtime work so users can validate and migrate safely.
 
 C1. **DOC-COOKBOOK-1 (was C2 / 27) — Cookbook recipes + hosted docs.**
-    `docs/cookbook/` end-to-end recipes ("protect a gRPC service
-    with Istio + lwauth + RBAC", "add OpenFGA to an existing
-    Envoy deployment", "rotate HMAC secrets without downtime")
-    plus a static-site build (`mkdocs-material`) of the per-module
-    references already in `docs/modules/`. This is the only
-    Tier C item targeted at v1.1; the previous C1 (SpiceDB
-    adapter) and C3 (revocation surface) are deferred to Tier X
-    until the ecosystem and operator demand justify the work.
+  `docs/cookbook/` end-to-end recipes ("protect a gRPC service
+  with Istio + lwauth + RBAC", "add OpenFGA to an existing
+  Envoy deployment", "rotate HMAC secrets without downtime")
+  plus a static-site build (`mkdocs-material`) of the per-module
+  references already in `docs/modules/`. The cookbook should now
+  include enterprise runbooks for HMAC/JWKS rotation, policy shadow
+  mode, cache invalidation, and Valkey outage drills, because those
+  become the operator-facing path into tiers D/E.
 
-#### Tier X — experimental (no firm target)
+C2. **OPS-GITOPS-1 — Config promotion, rollback, and drift detection.**
+  Recommended new feature. Add `lwauthctl promote` and `lwauthctl
+  rollback` helpers that wrap the existing `validate / diff / explain`
+  commands and emit GitOps-friendly patches for `AuthConfig` and
+  `IdentityProvider`. The controller records `status.appliedDigest`
+  and `status.appliedVersion`; `lwauthctl drift` compares live status
+  to the desired YAML in Git. This closes the operational gap between
+  "the engine can hot-reload" and "an SRE can safely roll policy
+  forward and back at 02:00".
 
-Explicitly out of the v1.x line. Live in their own repos /
-branches and graduate only when the surrounding ecosystem catches
-up.
+C3. **OPS-ADMIN-1 — Admin-plane authentication and authorization.**
+  Recommended new feature. Before adding revoke, invalidate, shadow,
+  and audit-export endpoints, define one admin auth model: mTLS or
+  signed admin JWT on HTTP, gRPC credentials on Door B, and RBAC verbs
+  (`read_status`, `push_config`, `invalidate_cache`, `revoke_token`,
+  `read_audit`). This prevents every future operator endpoint from
+  inventing its own trust boundary.
 
-X1. **eBPF data plane (was 16)** in the separate
-    `lightweightauth-ebpf` repo (Mode C, §3). Linux-only,
-    `CAP_BPF`, kernel ≥ 5.10. Stays experimental until at least
-    three production users report stable
-    operation.
-X2. **WASM plugins (was 17)** via `wazero`. Defer until the
-    auth-library ecosystem in WASM matures (§2).
+#### Tier D — enterprise runtime control (v1.2)
 
-X3. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
-    Relocated from Tier B because the entire item depends on
-    external entitlements / ecosystems we do not control: a
-    `dhi.io` enterprise account for the hardened bases, a
-    deployed Sigstore Rekor / Fulcio (or pinned Cosign keys) for
-    operators to verify against, and a release-signing root with
-    organisational ownership. None of those exist for the v1.x
-    line of an OSS project under a single maintainer, and
-    pretending they're a few weeks of work would mis-set
-    expectations. Scope is unchanged from the original B4 entry:
-    - Docker Hardened Image bases (`dhi.io/golang`,
-      `dhi.io/alpine`, `dhi.io/envoy`) as an opt-in build profile,
-      with the standard `golang:alpine` images remaining the
-      default so contributors without dhi.io entitlement keep a
-      working pipeline.
-    - Cosign-signed releases verified by Kyverno / Sigstore
-      policy.
-    - SBOM publication (`syft`) on every release.
-    - Mirrored images for air-gapped deployments.
+These are the first enterprise features to pull from §11 into the
+official roadmap. They are ordered so observability and rollback land
+before enforcement changes.
 
-    Complements but does not overlap K-CRYPTO-2 (Tier A, shipped),
-    which is the FIPS 140-3 build mode. M13 is about the *image*
-    and *release* trust chain; K-CRYPTO-2 is about the *crypto
-    primitive* trust chain — K-CRYPTO-2 already gives operators
-    one independent supply-chain assurance (the Go toolchain's
-    in-tree validated module) without taking on M13's external
-    dependencies. Graduates to Tier B when an operator who needs
-    the full supply-chain story sponsors the entitlements.
+D1. **ENT-KEYROT-1 — Seamless verifier-side key rotation.**
+  Implement the §11.1 overlap model for JWKS force-refresh metrics,
+  HMAC `secrets: [{kid, secret, notBefore, notAfter}]`, `jwt-issue`
+  `signingKeys`, OAuth2 client-secret fallback, API-key retirement
+  metrics, and mTLS CA-bundle hot reload. Acceptance bar: no Pod
+  restart, old/new key overlap is observable through
+  `IdentityProvider.status.conditions`, and `lwauth_key_verify_total`
+  proves the old key has drained before retirement.
 
-X4. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
-    Land `pkg/authz/spicedb` registered as `spicedb`, composing
-    under `composite` exactly like `openfga` does. Decision-cache
-    and `pkg/upstream` Guard wiring is reused verbatim. Surface
-    parity with `openfga` is the explicit acceptance bar.
-    Deferred from Tier C because OpenFGA already covers the
-    Zanzibar-style ReBAC slot in v1.x and we have no operator
-    asking for SpiceDB specifically; graduates to Tier C the
-    moment one does.
+D2. **ENT-POLICY-1 — Policy versioning, shadow mode, and replay diff.**
+  Implement `AuthConfig.spec.version`, `status.appliedVersion`, audit
+  and metric tagging by `policy_version`, and `spec.mode: shadow` so a
+  new policy can run without affecting the production verdict. Add the
+  replay diff workflow sketched in §11.2 so operators can compare two
+  compiled engines against captured audit JSONL before promotion.
 
-X5. **M14-REVOCATION (was C3 / 16) — Optional revocation surface.**
-    Until M14, lwauth is *short-TTL by design*: revocation = let
-    things expire. The bearer story works fine with short access-
-    token TTLs (≤ 5 min) and refresh rotation (M6) for most
-    deployments. M14 is mandatory only when (a) operators cannot
-    shorten TTLs (UX constraints), (b) regulatory "kill switch"
-    requirements apply, or (c) the deployment ships long-lived
-    API keys. Three opt-in surfaces:
+D3. **ENT-POLICY-2 — Canary policy enforcement.**
+  Build on D2 by adding weighted/sticky canary evaluation with
+  `agreement` metrics. The default remains observe-only; setting
+  `canary.enforce: true` is the explicit cutover. This must compose
+  with `composite` authorizers and decision caching without caching a
+  canary verdict as the production verdict.
 
-    - **Token revocation list** (RFC 7009 client-facing helper).
-      New `pkg/identity/revocation` consults a shared store keyed
-      by `jti` (for JWTs) or `sha256(token)` (for opaque bearers)
-      before accepting a credential. Backed by the same
-      `cache.Backend` registry as M7 (Valkey by default) so
-      revocations propagate to every replica via
-      `SET <key> "1" PX <remaining-exp>`. The IdP writes; lwauth
-      reads. A short Bloom-filter pre-check keeps the fast path
-      at one in-process lookup when the list is empty.
-    - **Decision-cache invalidation API.** New `lwauthctl revoke`
-      command and authenticated `POST /v1/admin/revoke` endpoint
-      that delete cached decisions by `(tenant, sub)` or full
-      key prefix. Already partially possible since M7 (`DEL` on
-      Valkey); M14 wraps it in a stable CLI + audited HTTP
-      surface.
-    - **Session revocation.** `pkg/session.Store.Revoke(sid)` is
-      already implemented for M3's `MemoryStore`; M14 extends it
-      to a shared `valkey` session store and wires
-      `/oauth2/logout` + admin revoke through it so a logout on
-      one replica is honored by all of them.
+D4. **ENT-AUDIT-1 — Pluggable audit sinks and retention controls.**
+  Extend M9's audit `Sink` beyond stdout JSONL with Loki and Kafka
+  sinks, sampling rules (`always: [deny, shadow_disagreement]`), and
+  back-pressure behaviour that never blocks the auth hot path. This
+  is the compliance counterpart to D2/D3: every shadow or canary
+  disagreement must be retained somewhere durable.
 
-    Deferred from Tier C because the v1.0 short-TTL story remains
-    the supported default and operators who don't need it pay zero
-    cost. Graduates back to Tier C when an operator hits one of
-    the three triggers above.
+D5. **ENT-DR-1 — Backup, restore, and disaster-recovery runbooks.**
+  Recommended new feature. Define export/import for CRDs, policy
+  bundles, key metadata, Valkey-backed revocation/cache state where
+  appropriate, and audit-sink offsets. Ship a `make dr-test` or
+  `lwauthctl dr verify` workflow that restores a fixture cluster and
+  proves identical decisions for a golden request set. This turns HA
+  from "replicas are running" into "the service can recover".
+
+#### Tier E — enterprise cache, revocation, and HA (v1.2+)
+
+These features change cross-replica behaviour. They should follow tiers
+C/D because they rely on admin auth, policy versioning, audit retention,
+and operator runbooks.
+
+E1. **ENT-CACHE-1 — Two-tier read-through cache.**
+  Implement §11.3's L1 in-process LRU + L2 Valkey read-through/write-
+  through model for decision, introspection, and DPoP replay caches.
+  New replicas should warm from L2 rather than forcing p99 misses on
+  every pod start. Expose `lwauth_cache_layer_hits_total` by cache,
+  layer, and tenant.
+
+E2. **M14-REVOCATION (was C3 / 16) — Token, session, and decision revoke.**
+  Promote the old Tier X revocation item into the enterprise HA line.
+  Add a shared revocation store keyed by JWT `jti` or `sha256(token)`,
+  a stable authenticated `POST /v1/admin/revoke` endpoint, `lwauthctl
+  revoke`, decision-cache deletion by `(tenant, sub)` or key prefix,
+  and a shared Valkey session store so OAuth2 logout on one replica is
+  honored by all replicas. The default remains short-TTL; revocation
+  is opt-in for operators with kill-switch or long-lived-key needs.
+
+E3. **ENT-CACHE-2 — Tag-based invalidation and stale-while-revalidate.**
+  Cache writes carry tags for tenant, subject, policy version, and
+  AuthConfig. Admin invalidation publishes Valkey events so every
+  replica drops matching L1 entries. Add opt-in
+  `serveStaleOnUpstreamError` with `maxStaleness` so IdP/OpenFGA
+  outages degrade predictably instead of turning every TTL expiry into
+  a hard 503.
+
+E4. **ENT-CACHE-3 — Cross-replica singleflight.**
+  Add Valkey `SETNX`-style short locks around hot cache misses so N
+  replicas do not stampede the IdP, OpenFGA, or OPA sidecar on the
+  same key. Fallback to in-process singleflight when Valkey is down;
+  never block longer than the caller's request context.
+
+E5. **ENT-HA-1 — Controller leader election and active/active safety.**
+  Enable `controller-runtime` leader election by default when
+  `replicas > 1`, document lease tuning, and prove that non-leader
+  pods continue serving traffic from the latest configstream snapshot.
+  This is small, but it makes the controller story match the hot-path
+  stateless HA story.
+
+E6. **ENT-SLO-1 — Per-AuthConfig quotas and SLO templates.**
+  Build on the v1.1 distributed rate limiter with per-AuthConfig quota
+  defaults, tenant overrides, and example Sloth/Grafana recording
+  rules for p99 latency and deny/error rates. Core exports metrics and
+  enforces quotas; it does not become an SLO engine.
+
+#### Tier F — ecosystem and experimental (demand-driven)
+
+These are valuable, but they should graduate only when an operator or
+maintainer can commit to the surrounding ecosystem work. They are no
+longer a disconnected Tier X; each item has a promotion trigger.
+
+F1. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
+  Optional hardened image profile with Docker Hardened Image bases,
+  Cosign-signed releases, SBOM publication (`syft`) on every release,
+  and mirrored images for air-gapped deployments. FIPS mode (A5) is
+  already the crypto-primitive trust story; M13 is the release/image
+  trust story. Promotion trigger: an operator sponsors the required
+  image entitlements and release-signing root, or the project gains a
+  foundation-level release process.
+
+F2. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
+  Land `pkg/authz/spicedb` registered as `spicedb`, composing under
+  `composite` exactly like `openfga` does. Decision-cache and
+  `pkg/upstream` Guard wiring is reused verbatim. Promotion trigger:
+  at least one operator needs SpiceDB specifically rather than the
+  already-shipped OpenFGA adapter.
+
+F3. **WASM plugins (was 17) — sandboxed in-process extension runtime.**
+  Evaluate `wazero` for untrusted policy/credential snippets with CPU,
+  memory, and wall-clock budgets. Promotion trigger: auth-library
+  support in WASM is mature enough that users can implement real
+  identifiers/authorizers without reimplementing crypto badly.
+
+F4. **eBPF data plane (was 16) — experimental Mode C.**
+  Continue in the separate `lightweightauth-ebpf` repo. Linux-only,
+  privileged, kernel-sensitive, and not a v1.x stability promise.
+  Promotion trigger: at least three production reference deployments
+  report stable operation and a maintainer signs up for kernel-version
+  support.
+
+F5. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.**
+  Recommended new feature, but explicitly later than HA/revocation.
+  Define how multiple clusters share signed config snapshots, tenant
+  policy versions, and revocation events without trusting a single
+  Kubernetes API server. This is useful for global edge deployments,
+  but it depends on admin-plane auth (C3), policy versioning (D2),
+  audit retention (D4), and cache invalidation (E3).
 
 ### Prioritization rationale
 
@@ -1898,21 +1966,28 @@ a known security or correctness gap.** Concretely:
   going faster. The conformance matrix in particular will catch a
   whole class of "we added a new identifier and Door B does
   something subtly different" regressions before they ship.
-- **Tier C is documentation surface** (cookbook + hosted docs site).
-  It's last on purpose — valuable but not urgent. The previous
-  C-tier feature work (`spicedb`, revocation surface) is moved to
-  Tier X until an operator pulls it back: shipping new modules on
-  top of fresh hardening is the fastest way to introduce the next
-  S-tier finding.
-- **Tier X stays experimental** until the surrounding ecosystem
-  forces our hand. Pulling either of them forward without three
-  production reference deployments is how stability promises die.
+- **Tier C is adoption and control-plane safety.** Docs, GitOps
+  promotion, rollback, drift detection, and admin-plane auth land before
+  new enterprise endpoints so every later feature has a safe operating
+  model.
+- **Tier D is runtime enterprise control.** Key rotation, policy
+  versioning, shadow/canary, audit sinks, and disaster-recovery runbooks
+  are the first §11 features to graduate because they reduce operational
+  risk without requiring global cache semantics.
+- **Tier E is cross-replica state.** Revocation, tag invalidation,
+  two-tier caches, cross-replica singleflight, leader election, and SLO
+  templates are grouped together because they all affect HA behaviour
+  across replicas.
+- **Tier F is demand-driven ecosystem work.** Supply-chain hardening,
+  SpiceDB, WASM, eBPF, and multi-cluster federation stay out of the
+  committed v1.x path until an operator or maintainer owns the external
+  prerequisites.
 
 The sibling repos (`lightweightauth-proxy`, `lightweightauth-idp`,
 `lightweightauth-plugins`, `lightweightauth-ebpf`) inherit this
-ordering: a proxy-side fix for S1 is the next planned slice on the
-proxy line; the plugin SDK changes for A1 land in
-`lightweightauth-plugins` once the host side is merged.
+ordering: proxy and plugin work follows the same S/A/B hardening gates,
+enterprise operator features land only after the core control plane is
+safe, and experimental data-plane work stays demand-driven.
 
 ### Explicit non-goals
 
@@ -2109,11 +2184,11 @@ _(none today; add new ones here as they come up during review.)_
 
 ## 11. Enterprise features (key & policy rotation, advanced caching, HA)
 
-This section is **forward-looking**. It collects the features operators
-running lwauth at organisational scale will eventually ask for, and pins
-down a design *now* so that when they land they slot into the existing
-pipeline / cache / controller surfaces instead of reshaping them. None of
-this is implemented yet — milestones are noted per-feature.
+This section is **forward-looking design detail** for the unified
+post-v1 roadmap above. The implementation order now lives in tiers C/D/E
+instead of being repeated here: this section explains the architecture
+behind those roadmap items so they slot into the existing pipeline /
+cache / controller surfaces instead of reshaping them.
 
 The themes are: **(a)** never make an operator restart a Pod to roll a
 key or a policy; **(b)** make the cache a tunable knob, not a
@@ -2346,9 +2421,8 @@ metrics recorder). Three explicit non-goals to keep the surface honest:
   histograms and ship example recording rules.
 
 These features land incrementally — none of them requires a single big
-release. Suggested ordering, if a maintainer picks this up: **11.1
-JWKS+HMAC overlap → 11.2 versioning + shadow → 11.3 two-tier read-through
-→ 11.1 mTLS bundle reload → 11.3 tag invalidation → 11.4 leader election
-→ 11.2 canary → 11.4 audit sinks → 11.3 cross-replica singleflight → 11.4
-quotas**. Each slice is independently shippable and independently
-revertable.
+release. The canonical ordering is the unified roadmap in §7: Tier C
+establishes operator safety, Tier D adds runtime key/policy control and
+durable audit, and Tier E adds cross-replica cache, revocation, and HA
+semantics. Keep this section as design rationale; update §7 when the
+implementation order changes.
