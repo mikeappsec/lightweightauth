@@ -65,8 +65,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  promote --config FILE [--version V]      validate, tag version, and emit GitOps-ready YAML")
 	fmt.Fprintln(os.Stderr, "  rollback --config FILE --to-version V    rewrite spec.version to a previous value")
 	fmt.Fprintln(os.Stderr, "  drift --config FILE --namespace NS       compare local config to live AuthConfig status")
-	fmt.Fprintln(os.Stderr, "  backup --config FILE [--out FILE]        export config snapshot with SHA-256 integrity")
-	fmt.Fprintln(os.Stderr, "  restore --from FILE --out FILE           restore config from backup (verifies checksum)")
+	fmt.Fprintln(os.Stderr, "  backup --config FILE [--out FILE] [--signing-key KEY] [--redact-secrets]")
+	fmt.Fprintln(os.Stderr, "                                           export HMAC-signed config snapshot")
+	fmt.Fprintln(os.Stderr, "  restore --from FILE --out FILE [--signing-key KEY] [--force] [--allow-stale]")
+	fmt.Fprintln(os.Stderr, "                                           restore config from backup (verifies HMAC)")
 	os.Exit(2)
 }
 
