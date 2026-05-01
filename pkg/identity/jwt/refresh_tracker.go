@@ -1,11 +1,13 @@
-// jwks_refresh.go provides a JWKS refresh wrapper that instruments
+// refresh_tracker.go provides a JWKS refresh wrapper that instruments
 // kid-miss-triggered refreshes with keyrotation metrics.
-package keyrotation
+package jwt
 
 import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 )
 
 // JWKSRefreshTracker tracks JWKS refresh events and kid-miss-triggered
@@ -41,16 +43,16 @@ func (t *JWKSRefreshTracker) ShouldRefresh(_ context.Context) bool {
 		return false
 	}
 	t.lastRefresh = now
-	Metrics.RefreshTotal.WithLabelValues(t.moduleName, "kid_miss_trigger").Inc()
+	keyrotation.Metrics.RefreshTotal.WithLabelValues(t.moduleName, "kid_miss_trigger").Inc()
 	return true
 }
 
 // RecordRefreshSuccess records a successful JWKS refresh.
 func (t *JWKSRefreshTracker) RecordRefreshSuccess() {
-	Metrics.RefreshTotal.WithLabelValues(t.moduleName, "success").Inc()
+	keyrotation.Metrics.RefreshTotal.WithLabelValues(t.moduleName, "success").Inc()
 }
 
 // RecordRefreshError records a failed JWKS refresh.
 func (t *JWKSRefreshTracker) RecordRefreshError() {
-	Metrics.RefreshTotal.WithLabelValues(t.moduleName, "error").Inc()
+	keyrotation.Metrics.RefreshTotal.WithLabelValues(t.moduleName, "error").Inc()
 }

@@ -1,10 +1,12 @@
-package keyrotation
+package controller
 
 import (
 	"fmt"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 )
 
 // Condition types for IdentityProvider.status.conditions.
@@ -27,7 +29,7 @@ const (
 
 // RotationCondition builds a metav1.Condition describing the current
 // rotation state based on the KeySet contents.
-func RotationCondition[T any](ks *KeySet[T], gen int64) metav1.Condition {
+func RotationCondition[T any](ks *keyrotation.KeySet[T], gen int64) metav1.Condition {
 	now := time.Now()
 	retiring := ks.RetiringKIDs()
 	active := ks.ActiveKIDs()
@@ -55,11 +57,11 @@ func RotationCondition[T any](ks *KeySet[T], gen int64) metav1.Condition {
 }
 
 // HealthCondition builds a condition reporting whether all keys are healthy.
-func HealthCondition[T any](ks *KeySet[T], gen int64) metav1.Condition {
+func HealthCondition[T any](ks *keyrotation.KeySet[T], gen int64) metav1.Condition {
 	all := ks.All()
 	now := time.Now()
 	for _, m := range all {
-		if m.State(now) == KeyStateRetired {
+		if m.State(now) == keyrotation.KeyStateRetired {
 			return metav1.Condition{
 				Type:               ConditionKeysHealthy,
 				Status:             metav1.ConditionFalse,

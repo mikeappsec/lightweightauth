@@ -1,9 +1,7 @@
-// Package mtlsrotation provides hot-reload support for mTLS CA bundles.
-// It watches a CA bundle file (or directory of PEM files) and reloads
-// the x509.CertPool when the content changes, with no pod restart.
-//
-// See D1 (ENT-KEYROT-1).
-package keyrotation
+// ca_watcher.go provides hot-reload support for mTLS CA bundles.
+// It watches a CA bundle file and reloads the x509.CertPool when the
+// content changes, with no pod restart. See D1 (ENT-KEYROT-1).
+package mtls
 
 import (
 	"crypto/x509"
@@ -14,6 +12,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 )
 
 // CABundleWatcher watches a CA bundle file and hot-reloads the CertPool
@@ -112,9 +112,9 @@ func (w *CABundleWatcher) watchLoop() {
 				w.onReload(w.Pool(), err)
 			}
 			if err == nil {
-				Metrics.RefreshTotal.WithLabelValues("mtls", "success").Inc()
+				keyrotation.Metrics.RefreshTotal.WithLabelValues("mtls", "success").Inc()
 			} else {
-				Metrics.RefreshTotal.WithLabelValues("mtls", "error").Inc()
+				keyrotation.Metrics.RefreshTotal.WithLabelValues("mtls", "error").Inc()
 			}
 		case _, ok := <-w.watcher.Errors:
 			if !ok {
