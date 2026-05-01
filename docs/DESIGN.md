@@ -403,15 +403,15 @@ environment, and we provide all three with documented support tiers:
 "Tier 3" = published, but operators are expected to engage actively.
 
 The key architectural point: **all modes drive the same pipeline.**
-Mode A produces a `module.Request` via the ext_authz adapter; the
-built-in HTTP/gRPC server produces it from the native handlers; library
-embedders call `pipeline.Evaluate` directly. Adding or replacing a data
-plane never touches policy/identifier code.
+Mode A and C produce a `module.Request` via the ext_authz adapter; Mode B
+(direct HTTP/gRPC or library embedding) produces it from the built-in
+server handler. Adding or replacing a data plane never touches
+policy/identifier code.
 
 ```
-  ┌─────────── Mode A ──────────┐    ┌── Built-in server ─┐    ┌── Mode C (future) ──┐
-  │  Envoy ── ext_authz gRPC ── │    │  HTTP (Door C)     │    │  eBPF agent ──────  │
-  │                             │    │  gRPC (Door A/B)   │    │  (sockops redirect) │
+  ┌─────────── Mode A ──────────┐    ┌── Mode B ──────────┐    ┌── Mode C (future) ──┐
+  │  Envoy ── ext_authz gRPC ── │    │  Direct HTTP/gRPC  │    │  eBPF agent ──────  │
+  │                             │    │  or library embed   │    │  (sockops redirect) │
   └─────────────┬───────────────┘    └─────────┬──────────┘    └─────────┬───────────┘
                 │                              │                         │
                 └──────────► same module.Request ◄───────────────────────┘
@@ -504,7 +504,7 @@ Mode A in spirit. We'll accept community contributions but won't lead.
 ### Bottom line for this requirement
 
 - **Mode A (Envoy)** is the recommended default for service-mesh users.
-- The **built-in HTTP/gRPC server** (Doors A/B/C) covers standalone and
+- **Mode B (direct HTTP/gRPC or library embed)** covers standalone and
   embedded use cases without requiring an external proxy.
 - **Mode C (eBPF)** is on the roadmap as a post-v1 experiment, kept in a
   separate repo to avoid bloating the core.
@@ -1908,6 +1908,148 @@ F8. **LICENSE-HEADERS-1 — Apache 2.0 license headers on all Go source.**
   prevent regressions. Ensures legal compliance for all contributed code.
   Promotion trigger: immediate (housekeeping).
 
+#### Tier G — enterprise customer requests (v1.3+)
+
+These items came from enterprise-buyer feedback. They are grouped here
+because each is a feature an enterprise customer would specifically
+evaluate during procurement, not a foundational hardening or HA item.
+The order below reflects buyer-priority weighting (G3, G2, G5, G13, G6
+are the top five).
+
+G1. **POL-TEST-1 — Policy-as-Code testing framework.**
+  Add `lwauthctl test` that runs YAML test fixtures
+  (`request → expected decision`) like Rego unit tests. Generate test
+  scaffolds from `lwauthctl explain` outputs. Provide a Go testing
+  harness for CI integration. Allow fixtures to be checked into Git
+  alongside `AuthConfig` CRDs so PRs require passing tests.
+  Promotion trigger: D2 (policy versioning) shipped.
+
+G2. **POL-SIM-1 — Policy simulation and impact analysis.**
+  Replay last N hours of production audit events against a candidate
+  policy; report % decisions changed, top affected subjects/paths,
+  per-tenant breakdown. Goes beyond shadow mode by answering "if I
+  merge this, who breaks?" *before* committing the change. Reuses the
+  D2 replay infrastructure.
+  Promotion trigger: D2 + D4 (audit sinks for replay source).
+
+G3. **SEC-EXTREF-1 — External secret-backend resolvers.**
+  Pluggable `SecretResolver` interface in `pkg/secrets`. Reference
+  format: `secretRef: "vault://kv/lwauth/jwt-key#current"` resolved
+  at compile time, with TTL-bounded caching. Adapters: HashiCorp
+  Vault, AWS Secrets Manager, GCP Secret Manager, Azure Key Vault,
+  Kubernetes CSI Secrets Store driver. Required because plaintext
+  Secrets in K8s manifests are unacceptable in regulated industries.
+  Promotion trigger: D1 (key rotation) shipped — secret refs feed
+  rotatable identifiers.
+
+G4. **PORTAL-RO-1 — Self-service policy portal (read-only first).**
+  Web UI gated by SSO that lets app teams: search "why was my request
+  denied?" by trace ID, view their tenant's effective policy,
+  view recent decisions, and request changes via a generated PR.
+  Read-only first; write access (G6 RBAC required) is a follow-up.
+  Reduces ticket volume to the platform team substantially.
+  Promotion trigger: G6 (admin RBAC) for write mode.
+
+G5. **COMP-REPORT-1 — Compliance report generator.**
+  `lwauthctl compliance --framework {soc2|iso27001|pci-dss|hipaa|fedramp}`
+  emits PDF and JSON evidence: who can access what, who changed
+  policy when (immutable audit trail), key-rotation history, audit
+  retention proof, MFA enforcement coverage. Scheduled generation via
+  CronJob; exportable to GRC tools.
+  Promotion trigger: D2 + D4 (versioned policy + durable audit).
+
+G6. **ADMIN-RBAC-1 — RBAC for the admin plane itself.**
+  Per-tenant policy authors: who can edit which `AuthConfig` CRD?
+  Today anyone with K8s edit on the namespace can change auth.
+  Implements separation-of-duties via Kubernetes RBAC + admission
+  webhook validation. Required by SOX, ISO 27001 A.9.4, and most
+  enterprise change-management programs.
+  Promotion trigger: C3 (admin-plane auth) shipped — that gates *who*
+  can call the API; G6 gates *which* policies they can edit.
+
+G7. **FED-CRDT-1 — Multi-region active/active policy sync.**
+  Extends F5 (federation): CRDT-style policy version vectors so two
+  regions can edit independently and merge cleanly without a global
+  lock or single write region. Conflict resolution rules per
+  policy-section type (lattice for rate limits, last-writer-wins for
+  rule lists, etc.).
+  Promotion trigger: F5 prototype + at least one customer with a
+  global active/active deployment commitment.
+
+G8. **QUOTA-TIER-1 — Per-tenant SLA & quota enforcement.**
+  Beyond rate limiting: burst credits, monthly quotas, "tier=enterprise
+  gets 10K rps, tier=free gets 100 rps" with billing-grade accounting.
+  Quota state durable in Valkey; overage events publishable to billing
+  pipelines. Compatible with the existing rate limiter API.
+  Promotion trigger: E1 (two-tier cache) for quota state.
+
+G9. **ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**
+  Add `pkg/identity/saml` (SP-initiated and IdP-initiated flows,
+  signature validation, NotBefore/NotOnOrAfter) and `pkg/identity/scim`
+  (provisioning callbacks). Required by FSI and government customers
+  whose IdPs (PingFederate, ADFS, older Okta) emit SAML, not OIDC.
+  Promotion trigger: at least one customer commitment — adds
+  significant XML / xmldsig dependency surface.
+
+G10. **DATA-RES-1 — PII redaction and data residency.**
+  Audit events: configurable PII fields auto-hashed or dropped per
+  region (GDPR Art. 17 right-to-erasure). Audit sink routing by
+  tenant region (EU events → EU Loki only; US events → US Kafka).
+  Per-tenant data-residency policy attached to `AuthConfig`. Required
+  for GDPR compliance and Schrems II.
+  Promotion trigger: D4 (audit sinks) shipped; non-negotiable for any
+  EU customer.
+
+G11. **DEC-SIGN-1 — Bring-your-own KMS for decision signing.**
+  Sign decision responses (Door A/B/C) with a tenant-scoped key from
+  external KMS (AWS KMS, GCP KMS, Azure Key Vault, Vault Transit) so
+  downstream services can verify the decision came from a trusted
+  policy engine. Optional but enables zero-trust mesh patterns and
+  aligns with NIST SP 800-207 / SPIRE-style attestation.
+  Promotion trigger: G3 (external secrets) shipped — same plugin
+  surface.
+
+G12. **POL-LINT-1 — Policy linting and best-practice rules.**
+  `lwauthctl lint` warns on: overly permissive rules
+  (`defaultAllow: true`), missing rate limits, identifiers without
+  `requireMfa`, unbounded session TTLs, deprecated module types,
+  and config-shape antipatterns. Configurable rule severity. Hooks
+  into `lwauthctl validate` and CI.
+  Promotion trigger: immediate — pure additive tooling.
+
+G13. **EXPLAIN-API-1 — Decision explainability API.**
+  `POST /v1/explain` (admin-gated) returns a full trace for a request:
+  which identifier matched, which authorizer ran, which rule fired,
+  which mutators executed, with per-stage timing and the policy
+  version evaluated. Beyond the current `reason` string. Outputs are
+  structured JSON suitable for support tooling and incident response.
+  Promotion trigger: D2 (policy versioning) for trace stamping.
+
+G14. **CDC-INVAL-1 — Cross-cluster cache invalidation via CDC.**
+  Stream cache-invalidation events through Kafka or NATS instead of
+  point-to-point Valkey pubsub. Bounded-staleness guarantees per
+  tenant; survives regional Valkey outages because invalidation
+  events buffer at the broker. Decouples invalidation from a single
+  Valkey instance.
+  Promotion trigger: E3 (cache invalidation) plus at least one
+  multi-region customer.
+
+G15. **BREAKGLASS-1 — Time-bounded / break-glass access.**
+  Built-in support for: "grant `user X` role `admin` until `T+1h`,
+  audited as break-glass". Auto-revokes; emits a distinct compliance
+  event tagged `break_glass=true`. Required for SRE on-call patterns
+  and PCI-DSS Req 7.2.
+  Promotion trigger: E2 (revocation) shipped — uses the same store.
+
+G16. **POL-MARKET-1 — Policy marketplace / shared module registry.**
+  Versioned, Cosign-signed publishing of reusable `AuthConfig`
+  snippets and authorizer bundles ("PCI-DSS baseline", "OWASP Top 10
+  rate-limit bundle", "GDPR audit profile"). Pulled via OCI registry
+  (same plumbing as F6 Helm chart). Reduces time-to-first-policy
+  from days to hours.
+  Promotion trigger: F6 + F7 (release pipeline) shipped, plus at
+  least three reference policies authored by the project.
+
 ### Prioritization rationale
 
 The reorder follows a single rule: **never ship a new feature on top of
@@ -1941,6 +2083,12 @@ a known security or correctness gap.** Concretely:
   SpiceDB, WASM, eBPF, and multi-cluster federation stay out of the
   committed v1.x path until an operator or maintainer owns the external
   prerequisites.
+- **Tier G is enterprise-customer requests.** Each item is a feature an
+  enterprise buyer would specifically evaluate during procurement
+  (compliance reports, external secret backends, SAML/SCIM, decision
+  explainability, admin RBAC). They land after the underlying tier
+  capability is shipped — e.g., G5 compliance reports require D2 + D4,
+  G6 admin RBAC requires C3, G3 external secrets pairs with D1.
 
 The sibling repos (`lightweightauth-idp`, `lightweightauth-plugins`,
 `lightweightauth-ebpf`) inherit this ordering: plugin work follows the
