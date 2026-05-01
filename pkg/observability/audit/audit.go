@@ -68,6 +68,11 @@ type Event struct {
 	// ShadowDisagreement is true when the event represents a shadow-mode
 	// disagreement: the policy would deny but production allows (D2).
 	ShadowDisagreement bool `json:"shadow_disagreement,omitempty"`
+
+	// CanaryAgreement records the canary vs production verdict comparison
+	// (D3). Empty when no canary is configured. One of "match",
+	// "prod_allow_canary_deny", "prod_deny_canary_allow".
+	CanaryAgreement string `json:"canary_agreement,omitempty"`
 }
 
 // Sink consumes audit events. Implementations MUST be safe for

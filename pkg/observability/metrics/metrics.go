@@ -38,6 +38,7 @@ type Recorder struct {
 	decisionLatency      *prometheus.HistogramVec
 	identifierTotal      *prometheus.CounterVec
 	shadowDisagreements  *prometheus.CounterVec
+	canaryAgreements     *prometheus.CounterVec
 }
 
 // New constructs a Recorder against a fresh Registry. Pass the result to
@@ -65,8 +66,12 @@ func New() *Recorder {
 			Name: "lwauth_shadow_disagreement_total",
 			Help: "Requests where a shadow policy would deny but production allows (D2).",
 		}, []string{"policy_version", "tenant"}),
+		canaryAgreements: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_canary_agreement_total",
+			Help: "Canary vs production verdict agreement (D3).",
+		}, []string{"policy_version", "tenant", "agreement"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -147,6 +152,15 @@ func (r *Recorder) ObserveShadowDisagreement(policyVersion, tenant string) {
 		return
 	}
 	r.shadowDisagreements.WithLabelValues(policyVersion, tenant).Inc()
+}
+
+// ObserveCanaryAgreement records a canary vs production verdict comparison (D3).
+// agreement is one of "match", "prod_allow_canary_deny", "prod_deny_canary_allow".
+func (r *Recorder) ObserveCanaryAgreement(policyVersion, tenant, agreement string) {
+	if r == nil {
+		return
+	}
+	r.canaryAgreements.WithLabelValues(policyVersion, tenant, agreement).Inc()
 }
 
 // RegisterCacheStats wires a named cache's live atomic counters into the

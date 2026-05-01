@@ -90,6 +90,23 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 			return nil, fmt.Errorf("%w: rateLimit: %v", module.ErrConfig, err)
 		}
 	}
+	var canaryAz module.Authorizer
+	var canaryEnforce bool
+	var canaryWeight int
+	var canarySample string
+	if ac.Canary != nil {
+		az, err := module.BuildAuthorizer(ac.Canary.Authorizer.Type, ac.Canary.Authorizer.Name, ac.Canary.Authorizer.Config)
+		if err != nil {
+			return nil, fmt.Errorf("canary authorizer %q: %w", ac.Canary.Authorizer.Name, err)
+		}
+		canaryAz = az
+		canaryEnforce = ac.Canary.Enforce
+		canaryWeight = ac.Canary.Weight
+		if canaryWeight == 0 {
+			canaryWeight = 100
+		}
+		canarySample = ac.Canary.Sample
+	}
 	return pipeline.New(pipeline.Options{
 		Identifiers:    idents,
 		Authorizer:     top,
@@ -99,6 +116,10 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		RateLimiter:    lim,
 		Shadow:         ac.Mode.IsShadow(),
 		PolicyVersion:  ac.Version,
+		Canary:         canaryAz,
+		CanaryEnforce:  canaryEnforce,
+		CanaryWeight:   canaryWeight,
+		CanarySample:   canarySample,
 	})
 }
 

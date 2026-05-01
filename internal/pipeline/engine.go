@@ -50,6 +50,15 @@ type Engine struct {
 	// policyVersion is the operator-assigned spec.version tag, carried
 	// through to metrics and audit events as policy_version (D2).
 	policyVersion string
+
+	// canary is the optional canary authorizer (D3). When non-nil the
+	// engine evaluates it concurrently with production and reports the
+	// agreement. If canaryEnforce is true, the canary verdict replaces
+	// the production verdict.
+	canary        module.Authorizer
+	canaryEnforce bool
+	canaryWeight  int
+	canarySample  string
 }
 
 // IdentifierMode controls multi-identifier composition. See DESIGN.md §2.
@@ -84,6 +93,14 @@ type Options struct {
 	Shadow bool
 	// PolicyVersion is the operator-assigned spec.version tag.
 	PolicyVersion string
+	// Canary is the optional canary authorizer (D3). Nil disables.
+	Canary module.Authorizer
+	// CanaryEnforce makes the canary verdict authoritative (cutover).
+	CanaryEnforce bool
+	// CanaryWeight is the % of traffic to evaluate (0 = all). Default 100.
+	CanaryWeight int
+	// CanarySample is the routing strategy ("" = random, "header:X", "hash:sub").
+	CanarySample string
 }
 
 // New builds an Engine. Returns an error if required components are missing.
@@ -103,6 +120,10 @@ func New(o Options) (*Engine, error) {
 		rateLimiter:    o.RateLimiter,
 		shadow:         o.Shadow,
 		policyVersion:  o.PolicyVersion,
+		canary:         o.Canary,
+		canaryEnforce:  o.CanaryEnforce,
+		canaryWeight:   o.CanaryWeight,
+		canarySample:   o.CanarySample,
 	}, nil
 }
 
@@ -149,6 +170,21 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 
 	dec, id, cacheHit, evalErr := e.evaluate(ctx, r)
 
+	// D3: canary evaluation — run concurrently with prod (already done),
+	// compare verdicts, emit agreement metric + audit fields.
+	var canaryAgreement string
+	if e.canary != nil && id != nil && e.shouldCanary(r, id) {
+		canaryDec, canaryErr := e.canary.Authorize(ctx, r, id)
+		canaryAgreement = e.classifyAgreement(dec, evalErr, canaryDec, canaryErr)
+		metrics.Default().ObserveCanaryAgreement(e.policyVersion, r.TenantID, canaryAgreement)
+		// If enforce mode, swap canary verdict in as production.
+		if e.canaryEnforce && canaryErr == nil && canaryDec != nil {
+			dec = canaryDec
+			evalErr = nil
+			cacheHit = false
+		}
+	}
+
 	// D2: shadow mode — run pipeline but always allow.
 	shadowDisagreement := false
 	if e.shadow && (evalErr != nil || dec == nil || !dec.Allow) {
@@ -159,7 +195,7 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 		evalErr = nil
 	}
 
-	e.report(ctx, r, id, dec, cacheHit, evalErr, time.Since(start), span, shadowDisagreement)
+	e.report(ctx, r, id, dec, cacheHit, evalErr, time.Since(start), span, shadowDisagreement, canaryAgreement)
 
 	if shadowDisagreement {
 		span.SetAttributes(attribute.Bool("lwauth.shadow_disagreement", true))
@@ -236,7 +272,7 @@ func (e *Engine) mutateWithSpan(ctx context.Context, m module.ResponseMutator, r
 // report fans out the terminal decision to metrics + audit + span.
 // Tolerates nil Recorder / Discard sink so tests and embedders pay nothing.
 func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Identity,
-	dec *module.Decision, cacheHit bool, evalErr error, latency time.Duration, span trace.Span, shadowDisagreement bool) {
+	dec *module.Decision, cacheHit bool, evalErr error, latency time.Duration, span trace.Span, shadowDisagreement bool, canaryAgreement string) {
 
 	outcome := "allow"
 	switch {
@@ -286,6 +322,7 @@ func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Ident
 		TraceID:        tracing.TraceIDFromContext(ctx),
 		PolicyVersion:      e.policyVersion,
 		ShadowDisagreement: shadowDisagreement,
+		CanaryAgreement:    canaryAgreement,
 	})
 
 	span.SetAttributes(
@@ -370,6 +407,48 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 			metrics.Default().ObserveIdentifier(idr.Name(), "no_match")
 		}
 		return nil, fmt.Errorf("%w: no identifier matched", module.ErrInvalidCredential)
+	}
+}
+
+// shouldCanary returns true if this request should be evaluated by the
+// canary authorizer based on weight/sample config.
+func (e *Engine) shouldCanary(r *module.Request, id *module.Identity) bool {
+	switch {
+	case e.canarySample != "" && len(e.canarySample) > 7 && e.canarySample[:7] == "header:":
+		// Route requests carrying the named header to canary.
+		hdr := e.canarySample[7:]
+		_, ok := r.Headers[hdr]
+		return ok
+	case e.canarySample == "hash:sub" && id != nil:
+		// Sticky by subject hash — deterministic slice.
+		h := uint(0)
+		for _, c := range id.Subject {
+			h = h*31 + uint(c)
+		}
+		return int(h%100) < e.canaryWeight
+	default:
+		// Random by weight — but since we can't seed per-request randomness
+		// cheaply, treat weight=100 as "always evaluate" (the safe default
+		// for observe-only). Lower weights use a fast time-based modulo.
+		if e.canaryWeight <= 0 || e.canaryWeight >= 100 {
+			return true
+		}
+		return int(time.Now().UnixNano()%100) < e.canaryWeight
+	}
+}
+
+// classifyAgreement compares production and canary verdicts into one of:
+// "match", "prod_allow_canary_deny", "prod_deny_canary_allow".
+func (e *Engine) classifyAgreement(prodDec *module.Decision, prodErr error, canaryDec *module.Decision, canaryErr error) string {
+	prodAllow := prodErr == nil && prodDec != nil && prodDec.Allow
+	canaryAllow := canaryErr == nil && canaryDec != nil && canaryDec.Allow
+	switch {
+	case prodAllow == canaryAllow:
+		return "match"
+	case prodAllow && !canaryAllow:
+		return "prod_allow_canary_deny"
+	default:
+		return "prod_deny_canary_allow"
 	}
 }
 

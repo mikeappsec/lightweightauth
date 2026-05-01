@@ -44,6 +44,25 @@ type AuthConfig struct {
 	Cache       *CacheSpec     `json:"cache,omitempty" yaml:"cache,omitempty"`
 	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
 	Identifier  IdentifierMode `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
+	Canary      *CanarySpec    `json:"canary,omitempty" yaml:"canary,omitempty"`
+}
+
+// CanarySpec configures canary policy evaluation (D3 — ENT-POLICY-2).
+// The canary authorizer runs concurrently with production; its verdict is
+// observed (metrics + audit) but only enforced when Enforce is true.
+type CanarySpec struct {
+	// Weight is the percentage of traffic (0-100) that gets canary evaluation.
+	// 0 means evaluate on every request (observe-only is safe). Default 100.
+	Weight int `json:"weight,omitempty" yaml:"weight,omitempty"`
+	// Sample controls sticky routing. "" = random by weight.
+	// "header:<name>" = route requests with that header to canary.
+	// "hash:sub" = sticky by hash of identity subject.
+	Sample string `json:"sample,omitempty" yaml:"sample,omitempty"`
+	// Enforce when true uses the canary verdict as the real verdict.
+	// Default false (observe-only).
+	Enforce bool `json:"enforce,omitempty" yaml:"enforce,omitempty"`
+	// Authorizer is the canary authorizer module spec.
+	Authorizer ModuleSpec `json:"authorizer" yaml:"authorizer"`
 }
 
 // IdentifierMode is the YAML enum for pipeline.IdentifierMode.
