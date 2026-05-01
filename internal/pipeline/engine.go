@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	rand2 "math/rand/v2"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -46,6 +47,10 @@ type Engine struct {
 	// normally but Evaluate always returns allow; disagreements are
 	// emitted to metrics and audit.
 	shadow bool
+
+	// shadowExpiry is the time after which shadow mode is ignored and
+	// the engine enforces normally (PM1). Zero means no expiry.
+	shadowExpiry time.Time
 
 	// policyVersion is the operator-assigned spec.version tag, carried
 	// through to metrics and audit events as policy_version (D2).
@@ -91,6 +96,8 @@ type Options struct {
 	// the full pipeline but always returns allow; disagreements are
 	// emitted to metrics and audit.
 	Shadow bool
+	// ShadowExpiry auto-disables shadow mode after this time (PM1).
+	ShadowExpiry time.Time
 	// PolicyVersion is the operator-assigned spec.version tag.
 	PolicyVersion string
 	// Canary is the optional canary authorizer (D3). Nil disables.
@@ -119,6 +126,7 @@ func New(o Options) (*Engine, error) {
 		decisionCache:  o.DecisionCache,
 		rateLimiter:    o.RateLimiter,
 		shadow:         o.Shadow,
+		shadowExpiry:   o.ShadowExpiry,
 		policyVersion:  o.PolicyVersion,
 		canary:         o.Canary,
 		canaryEnforce:  o.CanaryEnforce,
@@ -187,11 +195,12 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 
 	// D2: shadow mode — run pipeline but always allow.
 	shadowDisagreement := false
-	if e.shadow && (evalErr != nil || dec == nil || !dec.Allow) {
+	if e.shadow && !e.shadowExpired() && (evalErr != nil || dec == nil || !dec.Allow) {
 		shadowDisagreement = true
 		metrics.Default().ObserveShadowDisagreement(e.policyVersion, r.TenantID)
 		// Override to allow so upstream traffic is not affected.
-		dec = &module.Decision{Allow: true, Status: 200, Reason: "shadow: would deny"}
+		// PM7: Do not expose operational mode in reason string on the wire.
+		dec = &module.Decision{Allow: true, Status: 200, Reason: ""}
 		evalErr = nil
 	}
 
@@ -410,6 +419,11 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 	}
 }
 
+// shadowExpired returns true if shadowExpiry is set and has passed (PM1).
+func (e *Engine) shadowExpired() bool {
+	return !e.shadowExpiry.IsZero() && time.Now().After(e.shadowExpiry)
+}
+
 // shouldCanary returns true if this request should be evaluated by the
 // canary authorizer based on weight/sample config.
 func (e *Engine) shouldCanary(r *module.Request, id *module.Identity) bool {
@@ -427,13 +441,11 @@ func (e *Engine) shouldCanary(r *module.Request, id *module.Identity) bool {
 		}
 		return int(h%100) < e.canaryWeight
 	default:
-		// Random by weight — but since we can't seed per-request randomness
-		// cheaply, treat weight=100 as "always evaluate" (the safe default
-		// for observe-only). Lower weights use a fast time-based modulo.
+		// Random by weight using a proper PRNG (PM5).
 		if e.canaryWeight <= 0 || e.canaryWeight >= 100 {
 			return true
 		}
-		return int(time.Now().UnixNano()%100) < e.canaryWeight
+		return rand2.IntN(100) < e.canaryWeight
 	}
 }
 

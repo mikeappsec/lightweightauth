@@ -25,6 +25,11 @@ type AuthConfig struct {
 	// so operators can compare policies before promotion. See D2.
 	Mode PolicyMode `json:"mode,omitempty" yaml:"mode,omitempty"`
 
+	// ShadowExpiry is an RFC3339 timestamp after which shadow mode is
+	// automatically disabled (reverts to enforce). Prevents permanent
+	// accidental bypasses. Required when Mode is "shadow" (PM1).
+	ShadowExpiry string `json:"shadowExpiry,omitempty" yaml:"shadowExpiry,omitempty"`
+
 	// Hosts limits this config to specific virtual hosts. Empty = match all.
 	Hosts []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 

@@ -95,6 +95,9 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	var canaryWeight int
 	var canarySample string
 	if ac.Canary != nil {
+		if ac.Canary.Weight == 0 {
+			return nil, fmt.Errorf("%w: canary.weight must be explicitly set (1-100)", module.ErrConfig)
+		}
 		az, err := module.BuildAuthorizer(ac.Canary.Authorizer.Type, ac.Canary.Authorizer.Name, ac.Canary.Authorizer.Config)
 		if err != nil {
 			return nil, fmt.Errorf("canary authorizer %q: %w", ac.Canary.Authorizer.Name, err)
@@ -102,11 +105,22 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		canaryAz = az
 		canaryEnforce = ac.Canary.Enforce
 		canaryWeight = ac.Canary.Weight
-		if canaryWeight == 0 {
-			canaryWeight = 100
-		}
 		canarySample = ac.Canary.Sample
 	}
+
+	// PM1: Parse shadowExpiry and enforce that shadow mode requires it.
+	var shadowExpiry time.Time
+	if ac.Mode.IsShadow() {
+		if ac.ShadowExpiry == "" {
+			return nil, fmt.Errorf("%w: mode=shadow requires shadowExpiry (RFC3339) to prevent permanent bypass", module.ErrConfig)
+		}
+		t, err := time.Parse(time.RFC3339, ac.ShadowExpiry)
+		if err != nil {
+			return nil, fmt.Errorf("%w: shadowExpiry: %v", module.ErrConfig, err)
+		}
+		shadowExpiry = t
+	}
+
 	return pipeline.New(pipeline.Options{
 		Identifiers:    idents,
 		Authorizer:     top,
@@ -115,6 +129,7 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		DecisionCache:  dc,
 		RateLimiter:    lim,
 		Shadow:         ac.Mode.IsShadow(),
+		ShadowExpiry:   shadowExpiry,
 		PolicyVersion:  ac.Version,
 		Canary:         canaryAz,
 		CanaryEnforce:  canaryEnforce,

@@ -53,6 +53,10 @@ func replay() {
 
 	out := os.Stdout
 	if *outPath != "" {
+		if err := validateOutPath(*outPath); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --out path: %v\n", err)
+			os.Exit(1)
+		}
 		f, err := os.Create(*outPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "cannot create output: %v\n", err)
@@ -62,15 +66,26 @@ func replay() {
 		out = f
 	}
 
+	// PM4: Warn that replay is credential-less.
+	fmt.Fprintln(os.Stderr, "⚠ Replaying without credentials — identity-dependent authorization differences may not be detected.")
+
 	var total, agree, disagree int
+	var baselineErrs, candidateErrs int
 	enc := json.NewEncoder(out)
 
 	for _, ev := range events {
 		r := requestFromAuditEvent(ev)
 		ctx := context.Background()
 
-		decA, _, _ := baselineEngine.Evaluate(ctx, r)
-		decB, _, _ := candidateEngine.Evaluate(ctx, r)
+		decA, _, errA := baselineEngine.Evaluate(ctx, r)
+		decB, _, errB := candidateEngine.Evaluate(ctx, r)
+
+		if errA != nil {
+			baselineErrs++
+		}
+		if errB != nil {
+			candidateErrs++
+		}
 
 		total++
 		aAllow := decA != nil && decA.Allow
@@ -97,8 +112,14 @@ func replay() {
 
 	fmt.Fprintf(os.Stderr, "\nReplay complete: %d events, %d agree, %d disagree (%.1f%% agreement)\n",
 		total, agree, disagree, pct(agree, total))
+	if baselineErrs > 0 || candidateErrs > 0 {
+		fmt.Fprintf(os.Stderr, "  Evaluation errors: baseline=%d, candidate=%d\n", baselineErrs, candidateErrs)
+	}
 	if disagree > 0 {
 		os.Exit(2) // non-zero exit so CI can gate on disagreements
+	}
+	if candidateErrs > 0 {
+		os.Exit(3) // candidate errors indicate a broken policy
 	}
 }
 
@@ -120,6 +141,7 @@ func loadAuditEvents(path string) ([]audit.Event, error) {
 	defer f.Close()
 
 	var events []audit.Event
+	var totalLines, skipped int
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1MB line buffer
 	for scanner.Scan() {
@@ -127,13 +149,26 @@ func loadAuditEvents(path string) ([]audit.Event, error) {
 		if len(line) == 0 {
 			continue
 		}
+		totalLines++
 		var ev audit.Event
 		if err := json.Unmarshal(line, &ev); err != nil {
-			continue // skip malformed lines
+			skipped++
+			continue
 		}
 		events = append(events, ev)
 	}
-	return events, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	// PM2: Report and fail on excessive malformed lines.
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr, "⚠ %d/%d audit lines skipped (malformed)\n", skipped, totalLines)
+		if totalLines > 0 && float64(skipped)/float64(totalLines) > 0.05 {
+			return nil, fmt.Errorf("too many malformed lines (%d/%d = %.0f%%), aborting — audit file may be corrupted",
+				skipped, totalLines, float64(skipped)/float64(totalLines)*100)
+		}
+	}
+	return events, nil
 }
 
 func requestFromAuditEvent(ev audit.Event) *module.Request {
