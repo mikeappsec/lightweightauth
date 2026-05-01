@@ -163,6 +163,9 @@ nav:
       - Admin-plane auth: operations/admin-auth.md
       - GitOps workflow: operations/gitops.md
       - FIPS 140-3 build: operations/fips.md
+      - Key rotation: operations/key-rotation.md
+      - Policy rotation: operations/policy-rotation.md
+      - Disaster recovery: operations/disaster-recovery.md
       - Request invariants: testing/request-invariants.md
   - Security:
       - v1.0 security review: security/v1.0-review.md
