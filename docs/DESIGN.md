@@ -1786,32 +1786,37 @@ easier to adopt, operate, and support. They should land before the
 enterprise runtime work so users can validate and migrate safely.
 
 C1. **DOC-COOKBOOK-1 (was C2 / 27) — Cookbook recipes + hosted docs.**
-  `docs/cookbook/` end-to-end recipes ("protect a gRPC service
-  with Istio + lwauth + RBAC", "add OpenFGA to an existing
-  Envoy deployment", "rotate HMAC secrets without downtime")
-  plus a static-site build (`mkdocs-material`) of the per-module
-  references already in `docs/modules/`. The cookbook should now
-  include enterprise runbooks for HMAC/JWKS rotation, policy shadow
-  mode, cache invalidation, and Valkey outage drills, because those
-  become the operator-facing path into tiers D/E.
+  ✅ shipped on `v1.1-tier-c`. `docs/cookbook/` now contains nine
+  end-to-end recipes: five core workflows (gate-upstream-service,
+  oauth2-pkce, openfga-on-envoy, istio-grpc-rbac, rotate-hmac) plus
+  four enterprise runbooks (rotate-jwks, policy-shadow-mode,
+  cache-invalidation, valkey-outage-drill). Static-site build
+  (`mkdocs-material`) configured in `mkdocs.yml` with full nav.
 
 C2. **OPS-GITOPS-1 — Config promotion, rollback, and drift detection.**
-  Recommended new feature. Add `lwauthctl promote` and `lwauthctl
-  rollback` helpers that wrap the existing `validate / diff / explain`
-  commands and emit GitOps-friendly patches for `AuthConfig` and
-  `IdentityProvider`. The controller records `status.appliedDigest`
-  and `status.appliedVersion`; `lwauthctl drift` compares live status
-  to the desired YAML in Git. This closes the operational gap between
-  "the engine can hot-reload" and "an SRE can safely roll policy
-  forward and back at 02:00".
+  ✅ shipped on `v1.1-tier-c`. `lwauthctl` gains three subcommands:
+  `promote` (validate, stamp `spec.version`, compute SHA-256 digest,
+  emit canonical JSON), `rollback` (rewrite version, re-validate),
+  and `drift` (compare local version+digest against live
+  `status.appliedVersion` / `status.appliedDigest` via kubectl; exit
+  1 on mismatch for CI gating). `config.AuthConfig` gains
+  `spec.version`; `AuthConfigStatus` gains `appliedVersion` and
+  `appliedDigest` (set by the controller on every successful
+  compile+swap). Operator docs:
+  [operations/gitops.md](operations/gitops.md).
 
 C3. **OPS-ADMIN-1 — Admin-plane authentication and authorization.**
-  Recommended new feature. Before adding revoke, invalidate, shadow,
-  and audit-export endpoints, define one admin auth model: mTLS or
-  signed admin JWT on HTTP, gRPC credentials on Door B, and RBAC verbs
-  (`read_status`, `push_config`, `invalidate_cache`, `revoke_token`,
-  `read_audit`). This prevents every future operator endpoint from
-  inventing its own trust boundary.
+  ✅ shipped on `v1.1-tier-c`. New `internal/admin` package
+  implements admin-plane auth middleware with two mechanisms (admin
+  JWT via dedicated JWKS + mTLS subject mapping), role-based verb
+  authorization (`read_status`, `push_config`, `invalidate_cache`,
+  `revoke_token`, `read_audit`), and four admin endpoint stubs
+  (`/v1/admin/status`, `/v1/admin/cache/invalidate`,
+  `/v1/admin/revoke`, `/v1/admin/audit`). Wired into `lwauthd.Run`
+  via `Options.Admin`; disabled by default. Operator docs:
+  [operations/admin-auth.md](operations/admin-auth.md). Tests:
+  7 unit tests covering disabled mode, no-credential rejection,
+  mTLS success/forbidden/unmapped, and wildcard/specific verb checks.
 
 #### Tier D — enterprise runtime control (v1.2)
 
