@@ -81,16 +81,16 @@ func TestKeySet_PutGetPrune(t *testing.T) {
 		t.Fatal("should get active key")
 	}
 
-	// Get retired key should fail.
+	// Get retired key should fail (and auto-prune it per KR3).
 	_, ok = ks.Get("hmac-old")
 	if ok {
 		t.Fatal("should not get retired key")
 	}
 
-	// Prune should remove the retired key.
+	// After auto-prune, Prune() should find nothing extra.
 	pruned := ks.Prune()
-	if len(pruned) != 1 || pruned[0] != "hmac-old" {
-		t.Fatalf("expected [hmac-old], got %v", pruned)
+	if len(pruned) != 0 {
+		t.Fatalf("expected no remaining retired keys, got %v", pruned)
 	}
 	if ks.Len() != 1 {
 		t.Fatalf("expected 1 key remaining, got %d", ks.Len())

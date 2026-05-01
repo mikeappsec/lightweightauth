@@ -3,8 +3,15 @@ package keyrotation
 import (
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"time"
 )
+
+// MinSecretLen is the minimum decoded secret length (128 bits).
+const MinSecretLen = 16
+
+// MaxGracePeriod is the maximum allowed grace period (168h / 7 days).
+const MaxGracePeriod = 168 * time.Hour
 
 // SecretEntry is the parsed form of one entry in a rotatable `secrets`
 // config array. This is credential-type-agnostic — the raw secret bytes
@@ -56,6 +63,9 @@ func ParseSecretsConfig(raw map[string]any) ([]SecretEntry, error) {
 		e := SecretEntry{}
 		e.Meta.KID = kid
 		e.Secret = DecodeSecret(secretStr)
+		if len(e.Secret) < MinSecretLen {
+			return nil, fmt.Errorf("secrets %q: decoded secret too short (%d bytes, minimum %d)", kid, len(e.Secret), MinSecretLen)
+		}
 		e.Subject, _ = m["subject"].(string)
 		if e.Subject == "" {
 			e.Subject = kid
@@ -86,6 +96,9 @@ func ParseSecretsConfig(raw map[string]any) ([]SecretEntry, error) {
 			if err != nil {
 				return nil, fmt.Errorf("secrets %q gracePeriod: %w", kid, err)
 			}
+			if d > MaxGracePeriod {
+				return nil, fmt.Errorf("secrets %q gracePeriod %v exceeds maximum %v", kid, d, MaxGracePeriod)
+			}
 			e.Meta.GracePeriod = d
 		}
 		// Pass through any extra fields the module might need.
@@ -102,11 +115,14 @@ func ParseSecretsConfig(raw map[string]any) ([]SecretEntry, error) {
 	return entries, nil
 }
 
-// DecodeSecret attempts base64 standard decode; falls back to raw UTF-8.
+// DecodeSecret attempts base64 standard decode; falls back to raw UTF-8
+// with a warning (KR2).
 func DecodeSecret(s string) []byte {
 	decoded, err := base64.StdEncoding.DecodeString(s)
 	if err == nil {
 		return decoded
 	}
+	slog.Warn("secret is not valid base64, using raw UTF-8 — consider base64-encoding secrets",
+		"error", err)
 	return []byte(s)
 }
