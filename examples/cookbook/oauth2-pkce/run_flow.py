@@ -161,12 +161,13 @@ def main() -> int:
         print(f"-- PKCE: verifier={verifier[:12]}.. challenge={challenge[:12]}..")
 
         # 4) authorize: POST creds, capture 302 -> code
+        state = secrets.token_urlsafe(16)
         form = urllib.parse.urlencode({
             "response_type": "code",
             "client_id": CLIENT_ID,
             "redirect_uri": REDIRECT_URI,
             "scope": "openid email",
-            "state": "xyz123",
+            "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "username": "alice",
@@ -186,7 +187,12 @@ def main() -> int:
         if not code:
             print(f"!! no code in Location: {loc!r}")
             return 1
-        print(f"-- authorize: 302 -> code={code[:12]}.. state={qs.get('state', [''])[0]}")
+        # Verify state round-trips (CSRF protection).
+        returned_state = (qs.get("state") or [""])[0]
+        if returned_state != state:
+            print(f"!! state mismatch: sent {state!r}, got {returned_state!r}")
+            return 1
+        print(f"-- authorize: 302 -> code={code[:12]}.. state={returned_state[:8]}..")
 
         # 5) token exchange
         tok_form = urllib.parse.urlencode({

@@ -40,6 +40,16 @@ data:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: ingress
               codec_type: AUTO
+              # Slowloris / idle-connection defence: Envoy closes any
+              # stream that is idle for longer than this. Without it a
+              # malicious client can hold a connection open indefinitely
+              # against the gateway. 5 minutes matches typical HTTP/2
+              # keep-alive behaviour.
+              stream_idle_timeout: 300s
+              # Upper bound on the time Envoy waits for the full request
+              # headers + body (before routing). 60s is generous for any
+              # legitimate authorize/token/API call.
+              request_timeout: 60s
               route_config:
                 name: local
                 virtual_hosts:
