@@ -161,6 +161,7 @@ nav:
       - Deployment: DEPLOYMENT.md
       - Envoy integration: deployment/envoy.md
       - Admin-plane auth: operations/admin-auth.md
+      - GitOps workflow: operations/gitops.md
       - FIPS 140-3 build: operations/fips.md
       - Request invariants: testing/request-invariants.md
   - Security:

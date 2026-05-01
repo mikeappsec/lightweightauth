@@ -11,6 +11,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -138,6 +140,12 @@ func setReady(ac *v1alpha1.AuthConfig, status metav1.ConditionStatus, reason, me
 	ac.Status.Ready = status == metav1.ConditionTrue
 	ac.Status.ObservedGeneration = ac.Generation
 	ac.Status.Message = message
+
+	// OPS-GITOPS-1: record the applied version and spec digest on success.
+	if status == metav1.ConditionTrue {
+		ac.Status.AppliedVersion = ac.Spec.Version
+		ac.Status.AppliedDigest = specDigest(&ac.Spec)
+	}
 }
 
 // SetupWithManager registers the reconciler. The watch predicate filters
@@ -164,4 +172,16 @@ func (r *AuthConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // runtime.Scheme. lwauthd calls this once before starting the manager.
 func AddToScheme(s *runtime.Scheme) error {
 	return v1alpha1.AddToScheme(s)
+}
+
+// specDigest returns the hex-encoded SHA-256 of the canonical JSON
+// representation of the AuthConfig spec. Used by OPS-GITOPS-1 to detect
+// config drift without relying on an opaque version string.
+func specDigest(spec *config.AuthConfig) string {
+	b, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("sha256:%x", sum)
 }
