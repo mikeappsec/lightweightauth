@@ -43,7 +43,7 @@ func NewKeySet[T any](clock func() time.Time) *KeySet[T] {
 	}
 }
 
-// SetMaxEntries configures the maximum number of keys allowed (KR5).
+// SetMaxEntries configures the maximum number of keys allowed.
 // Zero means unlimited.
 func (ks *KeySet[T]) SetMaxEntries(n int) {
 	ks.mu.Lock()
@@ -53,7 +53,7 @@ func (ks *KeySet[T]) SetMaxEntries(n int) {
 
 // Put adds or replaces a key in the set. If the key already exists its
 // metadata and value are updated atomically. Returns false if the set is
-// full after auto-pruning retired keys (KR5).
+// full after auto-pruning retired keys.
 func (ks *KeySet[T]) Put(meta KeyMeta, value T) bool {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
@@ -62,7 +62,7 @@ func (ks *KeySet[T]) Put(meta KeyMeta, value T) bool {
 		ks.entries[meta.KID] = &entry[T]{meta: meta, value: value}
 		return true
 	}
-	// If at capacity, auto-prune retired keys first (KR3).
+	// If at capacity, auto-prune retired keys first.
 	if ks.maxEntries > 0 && len(ks.entries) >= ks.maxEntries {
 		now := ks.now()
 		for kid, e := range ks.entries {
@@ -80,7 +80,7 @@ func (ks *KeySet[T]) Put(meta KeyMeta, value T) bool {
 
 // Get returns the value and true if kid exists and is currently valid
 // (active or retiring). Returns zero-value and false otherwise.
-// Retired keys are auto-pruned inline (KR3).
+// Retired keys are auto-pruned inline.
 func (ks *KeySet[T]) Get(kid string) (T, bool) {
 	ks.mu.RLock()
 	e, ok := ks.entries[kid]
@@ -95,7 +95,7 @@ func (ks *KeySet[T]) Get(kid string) (T, bool) {
 		return e.value, true
 	}
 	ks.mu.RUnlock()
-	// If retired, prune it under write lock (KR3).
+	// If retired, prune it under write lock.
 	if e.meta.State(now) == KeyStateRetired {
 		ks.mu.Lock()
 		if re, stillThere := ks.entries[kid]; stillThere && re.meta.State(ks.now()) == KeyStateRetired {

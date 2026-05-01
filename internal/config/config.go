@@ -27,7 +27,7 @@ type AuthConfig struct {
 
 	// ShadowExpiry is an RFC3339 timestamp after which shadow mode is
 	// automatically disabled (reverts to enforce). Prevents permanent
-	// accidental bypasses. Required when Mode is "shadow" (PM1).
+	// accidental bypasses. Required when Mode is "shadow".
 	ShadowExpiry string `json:"shadowExpiry,omitempty" yaml:"shadowExpiry,omitempty"`
 
 	// Hosts limits this config to specific virtual hosts. Empty = match all.
@@ -63,10 +63,10 @@ type CanarySpec struct {
 	// "hash:sub" = sticky by hash of identity subject.
 	Sample string `json:"sample,omitempty" yaml:"sample,omitempty"`
 	// Enforce when true uses the canary verdict as the real verdict.
-	// Requires EnforceAfter to be set (CAN1).
+	// Requires EnforceAfter to be set.
 	Enforce bool `json:"enforce,omitempty" yaml:"enforce,omitempty"`
 	// EnforceAfter is an RFC3339 timestamp. Enforce is only honoured after
-	// this time, giving a minimum observation window (CAN1).
+	// this time, giving a minimum observation window.
 	EnforceAfter string `json:"enforceAfter,omitempty" yaml:"enforceAfter,omitempty"`
 	// Authorizer is the canary authorizer module spec.
 	Authorizer ModuleSpec `json:"authorizer" yaml:"authorizer"`

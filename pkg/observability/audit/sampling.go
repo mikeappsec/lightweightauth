@@ -28,7 +28,7 @@ const (
 // SamplingSink wraps an inner Sink with configurable sampling rules.
 // Security-critical events (deny, error, shadow/canary disagreements)
 // are ALWAYS emitted via hard-coded pre-rules that cannot be overridden
-// (AUD5). User-defined rules run after pre-rules.
+// User-defined rules run after pre-rules.
 type SamplingSink struct {
 	inner         Sink
 	preRules      []SamplingRule // immutable, security-critical
@@ -56,7 +56,7 @@ func WithRandFunc(f func() float64) SamplingSinkOption {
 
 // NewSamplingSink creates a sampling filter in front of inner.
 // Security-critical pre-rules (deny, error, shadow/canary disagreement)
-// are always evaluated first and cannot be overridden by user rules (AUD5).
+// are always evaluated first and cannot be overridden by user rules.
 func NewSamplingSink(inner Sink, rules []SamplingRule, opts ...SamplingSinkOption) *SamplingSink {
 	s := &SamplingSink{
 		inner: inner,
@@ -77,7 +77,7 @@ func NewSamplingSink(inner Sink, rules []SamplingRule, opts ...SamplingSinkOptio
 }
 
 // Record implements Sink with sampling logic.
-// Pre-rules (security-critical) are evaluated first (AUD5).
+// Pre-rules (security-critical) are evaluated first.
 func (s *SamplingSink) Record(ctx context.Context, e *Event) {
 	// Immutable pre-rules: always emit security-critical events.
 	for _, r := range s.preRules {
