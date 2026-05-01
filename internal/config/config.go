@@ -18,6 +18,18 @@ type AuthConfig struct {
 	// status.appliedDigest tracks config identity.
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 
+	// Mode controls enforcement behaviour. "enforce" (default) applies
+	// the pipeline verdict normally. "shadow" runs the full pipeline
+	// but always returns allow — disagreements between shadow and the
+	// previous production verdict are emitted as metrics + audit events
+	// so operators can compare policies before promotion. See D2.
+	Mode PolicyMode `json:"mode,omitempty" yaml:"mode,omitempty"`
+
+	// ShadowExpiry is an RFC3339 timestamp after which shadow mode is
+	// automatically disabled (reverts to enforce). Prevents permanent
+	// accidental bypasses. Required when Mode is "shadow" (PM1).
+	ShadowExpiry string `json:"shadowExpiry,omitempty" yaml:"shadowExpiry,omitempty"`
+
 	// Hosts limits this config to specific virtual hosts. Empty = match all.
 	Hosts []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 
@@ -37,6 +49,27 @@ type AuthConfig struct {
 	Cache       *CacheSpec     `json:"cache,omitempty" yaml:"cache,omitempty"`
 	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
 	Identifier  IdentifierMode `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
+	Canary      *CanarySpec    `json:"canary,omitempty" yaml:"canary,omitempty"`
+}
+
+// CanarySpec configures canary policy evaluation (D3 — ENT-POLICY-2).
+// The canary authorizer runs concurrently with production; its verdict is
+// observed (metrics + audit) but only enforced when Enforce is true.
+type CanarySpec struct {
+	// Weight is the percentage of traffic (1-100) that gets canary evaluation.
+	Weight int `json:"weight,omitempty" yaml:"weight,omitempty"`
+	// Sample controls sticky routing. "" = random by weight.
+	// "header:<name>" = route requests with that header to canary (observe-only).
+	// "hash:sub" = sticky by hash of identity subject.
+	Sample string `json:"sample,omitempty" yaml:"sample,omitempty"`
+	// Enforce when true uses the canary verdict as the real verdict.
+	// Requires EnforceAfter to be set (CAN1).
+	Enforce bool `json:"enforce,omitempty" yaml:"enforce,omitempty"`
+	// EnforceAfter is an RFC3339 timestamp. Enforce is only honoured after
+	// this time, giving a minimum observation window (CAN1).
+	EnforceAfter string `json:"enforceAfter,omitempty" yaml:"enforceAfter,omitempty"`
+	// Authorizer is the canary authorizer module spec.
+	Authorizer ModuleSpec `json:"authorizer" yaml:"authorizer"`
 }
 
 // IdentifierMode is the YAML enum for pipeline.IdentifierMode.
@@ -46,6 +79,23 @@ const (
 	IdentifierFirstMatch IdentifierMode = "firstMatch"
 	IdentifierAllMust    IdentifierMode = "allMust"
 )
+
+// PolicyMode controls how the pipeline's verdict is applied.
+type PolicyMode string
+
+const (
+	// PolicyModeEnforce is the default: the pipeline verdict is authoritative.
+	PolicyModeEnforce PolicyMode = "enforce"
+	// PolicyModeShadow runs the pipeline but always allows; disagreements
+	// are emitted as metrics and audit events. Used for safe rollout of
+	// new policies (D2 — ENT-POLICY-1).
+	PolicyModeShadow PolicyMode = "shadow"
+)
+
+// IsShadow returns true when the config is in shadow/observe-only mode.
+func (m PolicyMode) IsShadow() bool {
+	return m == PolicyModeShadow
+}
 
 // ModuleSpec is the generic shape for any pipeline module: a name, a type
 // (registry key), and a free-form Config map the factory understands.

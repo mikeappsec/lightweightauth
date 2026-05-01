@@ -90,6 +90,65 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 			return nil, fmt.Errorf("%w: rateLimit: %v", module.ErrConfig, err)
 		}
 	}
+	var canaryAz module.Authorizer
+	var canaryEnforce bool
+	var canaryWeight int
+	var canarySample string
+	if ac.Canary != nil {
+		// CAN2: Validate weight in [1, 100].
+		if ac.Canary.Weight < 1 || ac.Canary.Weight > 100 {
+			return nil, fmt.Errorf("%w: canary.weight must be 1-100, got %d", module.ErrConfig, ac.Canary.Weight)
+		}
+		// CAN4: Validate sample against recognized values.
+		switch {
+		case ac.Canary.Sample == "":
+		case ac.Canary.Sample == "hash:sub":
+		case len(ac.Canary.Sample) > 7 && ac.Canary.Sample[:7] == "header:":
+		default:
+			return nil, fmt.Errorf("%w: canary.sample must be \"\", \"hash:sub\", or \"header:<name>\"; got %q", module.ErrConfig, ac.Canary.Sample)
+		}
+		// CAN3: Reject header-based routing with enforce (client-controllable).
+		if ac.Canary.Enforce && len(ac.Canary.Sample) > 7 && ac.Canary.Sample[:7] == "header:" {
+			return nil, fmt.Errorf("%w: canary.enforce with sample=\"header:*\" is unsafe — clients can self-select into enforced canary", module.ErrConfig)
+		}
+		// CAN1: Require enforceAfter when enforce is true.
+		if ac.Canary.Enforce {
+			if ac.Canary.EnforceAfter == "" {
+				return nil, fmt.Errorf("%w: canary.enforce requires canary.enforceAfter (RFC3339) to ensure minimum observation period", module.ErrConfig)
+			}
+			eat, err := time.Parse(time.RFC3339, ac.Canary.EnforceAfter)
+			if err != nil {
+				return nil, fmt.Errorf("%w: canary.enforceAfter: %v", module.ErrConfig, err)
+			}
+			if time.Now().Before(eat) {
+				// Not yet past the enforce-after time — downgrade to observe-only.
+				canaryEnforce = false
+			} else {
+				canaryEnforce = true
+			}
+		}
+		az, err := module.BuildAuthorizer(ac.Canary.Authorizer.Type, ac.Canary.Authorizer.Name, ac.Canary.Authorizer.Config)
+		if err != nil {
+			return nil, fmt.Errorf("canary authorizer %q: %w", ac.Canary.Authorizer.Name, err)
+		}
+		canaryAz = az
+		canaryWeight = ac.Canary.Weight
+		canarySample = ac.Canary.Sample
+	}
+
+	// PM1: Parse shadowExpiry and enforce that shadow mode requires it.
+	var shadowExpiry time.Time
+	if ac.Mode.IsShadow() {
+		if ac.ShadowExpiry == "" {
+			return nil, fmt.Errorf("%w: mode=shadow requires shadowExpiry (RFC3339) to prevent permanent bypass", module.ErrConfig)
+		}
+		t, err := time.Parse(time.RFC3339, ac.ShadowExpiry)
+		if err != nil {
+			return nil, fmt.Errorf("%w: shadowExpiry: %v", module.ErrConfig, err)
+		}
+		shadowExpiry = t
+	}
+
 	return pipeline.New(pipeline.Options{
 		Identifiers:    idents,
 		Authorizer:     top,
@@ -97,6 +156,13 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		IdentifierMode: mode,
 		DecisionCache:  dc,
 		RateLimiter:    lim,
+		Shadow:         ac.Mode.IsShadow(),
+		ShadowExpiry:   shadowExpiry,
+		PolicyVersion:  ac.Version,
+		Canary:         canaryAz,
+		CanaryEnforce:  canaryEnforce,
+		CanaryWeight:   canaryWeight,
+		CanarySample:   canarySample,
 	})
 }
 

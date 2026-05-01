@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	rand2 "math/rand/v2"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -41,6 +43,28 @@ type Engine struct {
 	// rateLimiter is optional; nil means "no rate limiting". Applied
 	// at the entry of Evaluate (M11 multi-tenancy hardening).
 	rateLimiter *ratelimit.Limiter
+
+	// shadow is true when spec.mode=shadow (D2). The pipeline runs
+	// normally but Evaluate always returns allow; disagreements are
+	// emitted to metrics and audit.
+	shadow bool
+
+	// shadowExpiry is the time after which shadow mode is ignored and
+	// the engine enforces normally (PM1). Zero means no expiry.
+	shadowExpiry time.Time
+
+	// policyVersion is the operator-assigned spec.version tag, carried
+	// through to metrics and audit events as policy_version (D2).
+	policyVersion string
+
+	// canary is the optional canary authorizer (D3). When non-nil the
+	// engine evaluates it concurrently with production and reports the
+	// agreement. If canaryEnforce is true, the canary verdict replaces
+	// the production verdict.
+	canary        module.Authorizer
+	canaryEnforce bool
+	canaryWeight  int
+	canarySample  string
 }
 
 // IdentifierMode controls multi-identifier composition. See DESIGN.md §2.
@@ -69,6 +93,22 @@ type Options struct {
 	// rejection it returns a 429 deny without consulting modules or
 	// the decision cache.
 	RateLimiter *ratelimit.Limiter
+	// Shadow enables shadow/observe-only mode (D2). The engine runs
+	// the full pipeline but always returns allow; disagreements are
+	// emitted to metrics and audit.
+	Shadow bool
+	// ShadowExpiry auto-disables shadow mode after this time (PM1).
+	ShadowExpiry time.Time
+	// PolicyVersion is the operator-assigned spec.version tag.
+	PolicyVersion string
+	// Canary is the optional canary authorizer (D3). Nil disables.
+	Canary module.Authorizer
+	// CanaryEnforce makes the canary verdict authoritative (cutover).
+	CanaryEnforce bool
+	// CanaryWeight is the % of traffic to evaluate (0 = all). Default 100.
+	CanaryWeight int
+	// CanarySample is the routing strategy ("" = random, "header:X", "hash:sub").
+	CanarySample string
 }
 
 // New builds an Engine. Returns an error if required components are missing.
@@ -86,6 +126,13 @@ func New(o Options) (*Engine, error) {
 		identifierMode: o.IdentifierMode,
 		decisionCache:  o.DecisionCache,
 		rateLimiter:    o.RateLimiter,
+		shadow:         o.Shadow,
+		shadowExpiry:   o.ShadowExpiry,
+		policyVersion:  o.PolicyVersion,
+		canary:         o.Canary,
+		canaryEnforce:  o.CanaryEnforce,
+		canaryWeight:   o.CanaryWeight,
+		canarySample:   o.CanarySample,
 	}, nil
 }
 
@@ -126,9 +173,44 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 		attribute.String("lwauth.path", r.Path),
 		attribute.String("lwauth.tenant", r.TenantID),
 	)
+	if e.policyVersion != "" {
+		span.SetAttributes(attribute.String("lwauth.policy_version", e.policyVersion))
+	}
 
 	dec, id, cacheHit, evalErr := e.evaluate(ctx, r)
-	e.report(ctx, r, id, dec, cacheHit, evalErr, time.Since(start), span)
+
+	// D3: canary evaluation — run concurrently with prod (already done),
+	// compare verdicts, emit agreement metric + audit fields.
+	var canaryAgreement string
+	if e.canary != nil && e.shouldCanary(r, id) {
+		canaryDec, canaryErr := e.canary.Authorize(ctx, r, id)
+		canaryAgreement = e.classifyAgreement(dec, evalErr, canaryDec, canaryErr)
+		metrics.Default().ObserveCanaryAgreement(e.policyVersion, r.TenantID, canaryAgreement)
+		// If enforce mode, swap canary verdict in as production.
+		if e.canaryEnforce && canaryErr == nil && canaryDec != nil {
+			dec = canaryDec
+			evalErr = nil
+			cacheHit = false
+		}
+	}
+
+	// D2: shadow mode — run pipeline but always allow.
+	shadowDisagreement := false
+	if e.shadow && !e.shadowExpired() && (evalErr != nil || dec == nil || !dec.Allow) {
+		shadowDisagreement = true
+		metrics.Default().ObserveShadowDisagreement(e.policyVersion, r.TenantID)
+		// Override to allow so upstream traffic is not affected.
+		// PM7: Do not expose operational mode in reason string on the wire.
+		dec = &module.Decision{Allow: true, Status: 200, Reason: ""}
+		evalErr = nil
+	}
+
+	e.report(ctx, r, id, dec, cacheHit, evalErr, time.Since(start), span, shadowDisagreement, canaryAgreement)
+
+	if shadowDisagreement {
+		span.SetAttributes(attribute.Bool("lwauth.shadow_disagreement", true))
+	}
+
 	return dec, id, evalErr
 }
 
@@ -200,7 +282,7 @@ func (e *Engine) mutateWithSpan(ctx context.Context, m module.ResponseMutator, r
 // report fans out the terminal decision to metrics + audit + span.
 // Tolerates nil Recorder / Discard sink so tests and embedders pay nothing.
 func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Identity,
-	dec *module.Decision, cacheHit bool, evalErr error, latency time.Duration, span trace.Span) {
+	dec *module.Decision, cacheHit bool, evalErr error, latency time.Duration, span trace.Span, shadowDisagreement bool, canaryAgreement string) {
 
 	outcome := "allow"
 	switch {
@@ -248,6 +330,9 @@ func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Ident
 		LatencyMs:      float64(latency.Microseconds()) / 1000.0,
 		CacheHit:       cacheHit,
 		TraceID:        tracing.TraceIDFromContext(ctx),
+		PolicyVersion:      e.policyVersion,
+		ShadowDisagreement: shadowDisagreement,
+		CanaryAgreement:    canaryAgreement,
 	})
 
 	span.SetAttributes(
@@ -332,6 +417,49 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 			metrics.Default().ObserveIdentifier(idr.Name(), "no_match")
 		}
 		return nil, fmt.Errorf("%w: no identifier matched", module.ErrInvalidCredential)
+	}
+}
+
+// shadowExpired returns true if shadowExpiry is set and has passed (PM1).
+func (e *Engine) shadowExpired() bool {
+	return !e.shadowExpiry.IsZero() && time.Now().After(e.shadowExpiry)
+}
+
+// shouldCanary returns true if this request should be evaluated by the
+// canary authorizer based on weight/sample config.
+func (e *Engine) shouldCanary(r *module.Request, id *module.Identity) bool {
+	switch {
+	case e.canarySample != "" && len(e.canarySample) > 7 && e.canarySample[:7] == "header:":
+		// Route requests carrying the named header to canary.
+		hdr := e.canarySample[7:]
+		_, ok := r.Headers[hdr]
+		return ok
+	case e.canarySample == "hash:sub" && id != nil && id.Subject != "":
+		// Sticky by subject hash — FNV-1a for uniform distribution (CAN6).
+		h := fnv.New32a()
+		h.Write([]byte(id.Subject))
+		return int(h.Sum32()%100) < e.canaryWeight
+	default:
+		// Random by weight using a proper PRNG (PM5).
+		if e.canaryWeight <= 0 || e.canaryWeight >= 100 {
+			return true
+		}
+		return rand2.IntN(100) < e.canaryWeight
+	}
+}
+
+// classifyAgreement compares production and canary verdicts into one of:
+// "match", "prod_allow_canary_deny", "prod_deny_canary_allow".
+func (e *Engine) classifyAgreement(prodDec *module.Decision, prodErr error, canaryDec *module.Decision, canaryErr error) string {
+	prodAllow := prodErr == nil && prodDec != nil && prodDec.Allow
+	canaryAllow := canaryErr == nil && canaryDec != nil && canaryDec.Allow
+	switch {
+	case prodAllow == canaryAllow:
+		return "match"
+	case prodAllow && !canaryAllow:
+		return "prod_allow_canary_deny"
+	default:
+		return "prod_deny_canary_allow"
 	}
 }
 

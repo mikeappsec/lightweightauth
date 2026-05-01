@@ -141,3 +141,28 @@ type HTTPMounter interface {
 // Factory is what plugin packages register so config can instantiate them
 // by name. Built-ins call Register() in their init().
 type Factory func(cfg map[string]any) (any, error)
+
+// Rotatable is an OPTIONAL interface an Identifier may implement to
+// advertise that it manages rotatable key material. The pipeline and
+// controller layers query this interface to collect metrics, set
+// IdentityProvider status conditions, and drive operator-visible
+// rotation lifecycle events.
+//
+// Any module that can hold >1 key with overlap (HMAC secrets, mTLS CA
+// bundles, API keys, OAuth2 client secrets, ...) should implement this.
+// JWT modules that delegate to an external JWKS endpoint typically do
+// NOT implement Rotatable (the IdP owns rotation), but may still emit
+// refresh metrics via [pkg/keyrotation.JWKSRefreshTracker].
+type Rotatable interface {
+	// KeyStates returns the current lifecycle metadata for every key
+	// the module is tracking, regardless of state.
+	KeyStates() []KeyStateMeta
+}
+
+// KeyStateMeta is a minimal view of a key's lifecycle exposed via the
+// Rotatable interface. It is intentionally a value type so callers
+// cannot mutate internal state.
+type KeyStateMeta struct {
+	KID   string // key identifier
+	State string // "pending", "active", "retiring", "retired"
+}
