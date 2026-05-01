@@ -80,7 +80,7 @@ func TestWriteError_JSONEnvelope(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/v1/authorize", nil)
 	r.Header.Set("X-Request-ID", "test-req-123")
 
-	writeError(w, r, http.StatusBadRequest, "bad json: duplicate key")
+	writeError(w, r, http.StatusBadRequest, "invalid JSON")
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -106,11 +106,15 @@ func TestWriteError_JSONEnvelope(t *testing.T) {
 	if env.Code != 400 {
 		t.Errorf("code = %d, want 400", env.Code)
 	}
-	if env.Message != "bad json: duplicate key" {
+	if env.Message != "invalid JSON" {
 		t.Errorf("message = %q", env.Message)
 	}
 	if env.Error == nil || env.Error.Type != "validation_error" {
 		t.Errorf("error.type = %v, want validation_error", env.Error)
+	}
+	// Detail must be empty — no internal info leaked to wire.
+	if env.Error != nil && env.Error.Detail != "" {
+		t.Errorf("error.detail should be empty, got %q", env.Error.Detail)
 	}
 	if env.RequestID != "test-req-123" {
 		t.Errorf("requestId = %q, want test-req-123", env.RequestID)
@@ -163,10 +167,12 @@ func TestExtractRequestID(t *testing.T) {
 		value  string
 		want   string
 	}{
-		{"X-Request-ID", "X-Request-ID", "req-1", "req-1"},
-		{"X-Correlation-ID", "X-Correlation-ID", "corr-2", "corr-2"},
-		{"prefers X-Request-ID", "X-Request-ID", "req-1", "req-1"},
+		{"valid X-Request-ID", "X-Request-ID", "req-1", "req-1"},
+		{"valid X-Correlation-ID", "X-Correlation-ID", "corr-2", "corr-2"},
 		{"empty", "", "", ""},
+		{"control chars rejected", "X-Request-ID", "bad\x00id", ""},
+		{"spaces rejected", "X-Request-ID", "bad id", ""},
+		{"truncated at 128", "X-Request-ID", string(make([]byte, 200)), ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -99,9 +99,10 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// timeNowUTC returns the current time as an RFC3339 string.
+// timeNowUTC returns the current time truncated to minute granularity
+// to avoid exposing precise server clock as a timing oracle.
 func timeNowUTC() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return time.Now().UTC().Truncate(time.Minute).Format(time.RFC3339)
 }
 
 // writeSuccess writes a success response with structured data.
@@ -111,7 +112,7 @@ func writeSuccess(w http.ResponseWriter, r *http.Request, code int, message stri
 		Code:      code,
 		Message:   message,
 		Data:      data,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: timeNowUTC(),
 		RequestID: extractRequestID(r),
 	})
 }
@@ -125,28 +126,47 @@ func writeError(w http.ResponseWriter, r *http.Request, code int, message string
 		Code:    code,
 		Message: message,
 		Error: &APIError{
-			Type:   errorTypeFromStatus(code),
-			Detail: message,
+			Type: errorTypeFromStatus(code),
 		},
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: timeNowUTC(),
 		RequestID: extractRequestID(r),
 	})
 }
 
+// maxRequestIDLen caps reflected request IDs to prevent response
+// amplification from oversized client-controlled headers.
+const maxRequestIDLen = 128
+
 // extractRequestID pulls the request correlation ID from standard
-// headers (X-Request-ID, X-Correlation-ID) or returns empty if not
-// provided by the caller.
+// headers (X-Request-ID, X-Correlation-ID). The value is sanitized:
+// only printable ASCII is accepted, capped at 128 characters.
 func extractRequestID(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
 	if id := r.Header.Get("X-Request-ID"); id != "" {
-		return id
+		return sanitizeRequestID(id)
 	}
 	if id := r.Header.Get("X-Correlation-ID"); id != "" {
-		return id
+		return sanitizeRequestID(id)
 	}
 	return ""
+}
+
+// sanitizeRequestID validates and truncates request IDs. Only printable
+// ASCII ([0x21-0x7E]) is allowed; any invalid character causes the
+// entire ID to be rejected (returns empty).
+func sanitizeRequestID(id string) string {
+	if len(id) > maxRequestIDLen {
+		id = id[:maxRequestIDLen]
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if c < 0x21 || c > 0x7e {
+			return ""
+		}
+	}
+	return id
 }
 
 // --- Public reason redaction ------------------------------------------------

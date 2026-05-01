@@ -252,7 +252,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusRequestEntityTooLarge, "request too large")
 			return
 		}
-		writeError(w, r, http.StatusBadRequest, "read body: "+err.Error())
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	// F6: refuse duplicate JSON keys. encoding/json silently keeps
@@ -260,7 +260,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// "first wins" instead, an attacker can craft a request the
 	// front layer reads as benign and lwauth reads as authenticated.
 	if err := assertNoDuplicateJSONKeys(body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "bad json: "+err.Error())
+		writeError(w, r, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	// F10: enforce exact-case canonical top-level keys.
@@ -271,12 +271,12 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// value. DisallowUnknownFields does NOT help here: "PATH" is
 	// considered known (case-insensitive match against "path").
 	if err := assertCanonicalTopLevelKeys(body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "bad json: "+err.Error())
+		writeError(w, r, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	var in authorizeRequest
 	if err := json.Unmarshal(body, &in); err != nil {
-		writeError(w, r, http.StatusBadRequest, "bad json: "+err.Error())
+		writeError(w, r, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	// F15: validate structural shape of operator-controllable string
@@ -284,7 +284,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// in Host or oversize / non-printable TenantID is refused with
 	// 400 instead of being silently propagated to module code.
 	if err := validateAuthorizeShape(&in); err != nil {
-		writeError(w, r, http.StatusBadRequest, "bad json: "+err.Error())
+		writeError(w, r, http.StatusBadRequest, "invalid request structure")
 		return
 	}
 	// F9 / F13: reject case-collisions AND multi-value arrays in the
@@ -298,7 +298,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// in either order.
 	headers, herr := lowercaseHeaderKeys(in.Headers)
 	if herr != nil {
-		writeError(w, r, http.StatusBadRequest, "bad json: "+herr.Error())
+		writeError(w, r, http.StatusBadRequest, "invalid request structure")
 		return
 	}
 	eng := h.Engines.Load()
@@ -322,7 +322,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// the pipeline and rides on whatever the engine produces — it
 	// does not need an uncancellable context to land in the slog
 	// handler.
-	dec, id, _ := eng.Evaluate(r.Context(), req)
+	dec, _, _ := eng.Evaluate(r.Context(), req)
 	// Engine emits a verbose internal reason (e.g. "hmac: signature
 	// mismatch") that the audit log captures. Public callers see only
 	// a generic status-aligned string so policy and module internals
@@ -341,10 +341,6 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		Reason:          publicMsg,
 		UpstreamHeaders: dec.UpstreamHeaders,
 		ResponseHeaders: dec.ResponseHeaders,
-	}
-	if id != nil {
-		out.IdentitySubject = id.Subject
-		out.IdentitySource = id.Source
 	}
 	if dec.Allow {
 		writeSuccess(w, r, http.StatusOK, "authorized", out)

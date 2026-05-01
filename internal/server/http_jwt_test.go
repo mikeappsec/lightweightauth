@@ -137,8 +137,8 @@ func TestHTTP_JWT_AllowsAdmin(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%v", status, body)
 	}
 	data, _ := body["data"].(map[string]any)
-	if data == nil || data["allow"] != true || data["subject"] != "alice" {
-		t.Errorf("body = %v, want allow=true subject=alice", body)
+	if data == nil || data["allow"] != true {
+		t.Errorf("body = %v, want allow=true", body)
 	}
 }
 
