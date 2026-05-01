@@ -1903,6 +1903,27 @@ F5. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.**
   but it depends on admin-plane auth (C3), policy versioning (D2),
   audit retention (D4), and cache invalidation (E3).
 
+F6. **HELM-OCI-1 — Publish Helm chart to GitHub OCI registry.**
+  Package `deploy/helm/lightweightauth` as an OCI artifact and push to
+  `ghcr.io/mikeappsec/charts/lightweightauth` on every tagged release.
+  Operators install directly from GitHub without cloning the repo:
+  `helm install lwauth oci://ghcr.io/mikeappsec/charts/lightweightauth`.
+  Promotion trigger: chart is stable and versioned (post Tier D).
+
+F7. **RELEASE-1 — Automated build, package, and release pipeline.**
+  Add a GitHub Actions release workflow that on tag push: builds Go
+  binaries (linux/amd64, linux/arm64, darwin/arm64), produces Docker
+  images with version labels, generates SBOM, signs with Cosign,
+  publishes the Helm OCI chart (F6), and creates a GitHub Release with
+  checksums. Version is injected via `-ldflags` from the git tag.
+  Promotion trigger: repo is public and ready for external consumption.
+
+F8. **LICENSE-HEADERS-1 — Apache 2.0 license headers on all Go source.**
+  Add the standard Apache 2.0 SPDX header to every `.go` file in the
+  repository. Integrate a CI check (e.g., `addlicense -check`) to
+  prevent regressions. Ensures legal compliance for all contributed code.
+  Promotion trigger: immediate (housekeeping).
+
 ### Prioritization rationale
 
 The reorder follows a single rule: **never ship a new feature on top of
