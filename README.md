@@ -43,7 +43,7 @@ and [Authorino](https://github.com/Kuadrant/authorino):
 
 - Run **locally** as an HTTP/gRPC sidecar.
 - Run in **Kubernetes** as an external authorization service for an
-  Envoy data plane (or `lightweightauth-proxy`, our sibling repo).
+  Envoy data plane (or call LightWeightAuth directly via HTTP/gRPC).
 - **Pluggable modules** — swap the IdP, the policy engine, the token validator,
   or the secret store with built-in defaults or your own implementation.
 
@@ -63,7 +63,7 @@ and [Authorino](https://github.com/Kuadrant/authorino):
 - Replace a full enterprise IdP (Keycloak, Auth0, Okta) — see `lightweightauth-idp`.
 - Implement every OAuth2 / OIDC corner case on day one.
 - Be a service mesh. We integrate with one (Envoy ext_authz) instead.
-- Be a production-grade L7 reverse proxy — that lives in `lightweightauth-proxy`.
+- Be a production-grade L7 reverse proxy.
 
 ## Project family (sibling repos)
 
@@ -74,7 +74,6 @@ See [§9 of DESIGN.md](docs/DESIGN.md#9-repository-topology) for the full topolo
 | Repo | Tier | Purpose |
 |------|------|---------|
 | **`lightweightauth`** *(this repo)* | 1 | Pipeline, built-in modules (JWT, mTLS, HMAC, API key, RBAC, OPA, OpenFGA), HTTP + native gRPC + Envoy `ext_authz` servers, CRDs + controller, Helm chart, plugin contract. |
-| **`lightweightauth-proxy`** | 1 | Mode-B reverse proxy. Imports this repo as a library, owns TLS hot-reload / HTTP/2 / optional HTTP/3. |
 | **`lightweightauth-idp`** | 2 | Built-in IdP: OIDC issuer, token endpoint, optional admin UI, user store. |
 | **`lightweightauth-ebpf`** | 3 *(post-v1)* | Mode-C eBPF redirector for transparent enforcement. Linux only. |
 | **`lightweightauth-plugins`** | 2 | SDKs (Go / Python / Rust) and reference out-of-process plugins. |
@@ -119,8 +118,7 @@ lightweightauth/
 └── examples/
 ```
 
-The reverse-proxy code (Mode B) and the IdP live in their respective sibling
-repos and are *not* in this tree.
+The IdP lives in its own sibling repo and is *not* in this tree.
 
 ## License
 

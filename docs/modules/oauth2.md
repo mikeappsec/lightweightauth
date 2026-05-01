@@ -64,7 +64,7 @@ Mounts under the lwauth HTTP server:
 The `/oauth2/*` routes need to be reachable from the browser. Either:
 
 - **In Mode A (sidecar):** point Envoy's auth_action at `/oauth2/*` to bypass `ext_authz`.
-- **In Mode B (proxy, sibling repo):** the proxy mounts these directly.
+- **In Mode B (direct HTTP):** the built-in HTTP server exposes these routes directly.
 
 ```yaml
 # values.yaml — Mode A snippet

@@ -96,7 +96,7 @@ After restore, trigger the controller reconcile:
 touch /etc/lwauth/authconfig.yaml
 
 # If using Kubernetes:
-kubectl rollout restart deployment/lwauth-proxy -n lwauth
+kubectl rollout restart deployment/lwauth -n lwauth
 ```
 
 ## 3. Disaster Scenarios

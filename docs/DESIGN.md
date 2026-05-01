@@ -397,24 +397,25 @@ environment, and we provide all three with documented support tiers:
 | Mode | Status at v1.0 | What we ship | Best for |
 |------|----------------|--------------|----------|
 | **A. Envoy via ext_authz** | ✅ **Tier 1 (GA)** | Helm chart + sample Envoy config + ext_authz gRPC service | Existing service-mesh / Istio / Gateway API users |
-| **B. `lightweightauth-proxy`** | ✅ **Tier 1 (GA)** | A sibling repo: a Go reverse proxy that imports `lightweightauth` as a library | Standalone edge gateways, local dev, air-gapped, "I just want one container" |
+| **B. Direct HTTP/gRPC (Door C / Door A)** | ✅ **Tier 1 (GA)** | Call LightWeightAuth's built-in HTTP or gRPC server directly, or embed it as a library | Standalone deployments, local dev, air-gapped, "I just want one container" |
 | **C. eBPF redirection** | 🔬 **Tier 3 (experimental, post-v1)** | A separate `lwauth-ebpf` agent (own repo) that uses sockops/sk_msg to redirect connections to lwauth | High-density east-west enforcement, ambient-mesh-style deployments |
 
 "Tier 1" = full docs, Helm support, CI matrix, security review.
 "Tier 3" = published, but operators are expected to engage actively.
 
-The key architectural point: **all three modes drive the same pipeline.**
+The key architectural point: **all modes drive the same pipeline.**
 Mode A and C produce a `module.Request` via the ext_authz adapter; Mode B
-produces it directly from the proxy handler. Adding or replacing a data
-plane never touches policy/identifier code.
+(direct HTTP/gRPC or library embedding) produces it from the built-in
+server handler. Adding or replacing a data plane never touches
+policy/identifier code.
 
 ```
-  ┌─────────── Mode A ──────────┐    ┌── Mode B ──┐    ┌── Mode C (future) ──┐
-  │  Envoy ── ext_authz gRPC ── │    │  lwauth    │    │  eBPF agent ──────  │
-  │                             │    │  proxy     │    │  (sockops redirect) │
-  └─────────────┬───────────────┘    └─────┬──────┘    └─────────┬───────────┘
-                │                          │                     │
-                └──────────► same module.Request ◄───────────────┘
+  ┌─────────── Mode A ──────────┐    ┌── Mode B ──────────┐    ┌── Mode C (future) ──┐
+  │  Envoy ── ext_authz gRPC ── │    │  Direct HTTP/gRPC  │    │  eBPF agent ──────  │
+  │                             │    │  or library embed   │    │  (sockops redirect) │
+  └─────────────┬───────────────┘    └─────────┬──────────┘    └─────────┬───────────┘
+                │                              │                         │
+                └──────────► same module.Request ◄───────────────────────┘
                                        │
                                        ▼
                                   pipeline (one impl)
@@ -440,48 +441,17 @@ headers we injected); on deny, Envoy responds directly.
 - Envoy is heavy (~100 MB image, ~30–50 MB RSS minimum).
 - Configuring Envoy is its own learning curve.
 
-### Mode B — `lightweightauth-proxy` (Tier 1, separate repo)
+### Mode B — Direct HTTP/gRPC or library embedding
 
-**Where it lives.** Mode B is delivered as a sibling repository
-**`lightweightauth-proxy`** that imports `lightweightauth` as a library
-and wraps `pipeline.Evaluate` with a Go reverse proxy. See the repository
-topology in §9.
-
-**How it works.** `lwauth-proxy --upstream=…` boots a Go reverse proxy
-(`httputil.ReverseProxy` + `http2` + optional `quic-go`) that calls the
-pipeline in-process and then forwards to the upstream. One binary, one
-config, no Envoy.
-
-**Implementation cost for us:** moderate. Core proxy is ~500 LOC, but
-production hardening (TLS hot-reload, HTTP/2 limits, connection draining,
-request-smuggling defenses, header normalization) is real engineering.
-Isolating it in its own repo keeps that hardening surface — and its
-dependency tree (`x/net/http2`, optionally `quic-go`) — out of the core.
-
-**Benefits**
-- One container, one config file, one log stream for users who want it.
-- ~15 MB image, ~10 MB RSS — fits a Raspberry Pi, a lambda-style sidecar,
-  or an air-gapped appliance.
-- Direct access to the request: features that ext_authz makes painful
-  (e.g. mutating the request body, chunked re-signing) are trivial.
-- Library mode for embedders is just "import `lightweightauth` directly";
-  they don't need the proxy at all.
-- Core stays dependency-light. Users running Mode A never pull HTTP/2/3
-  proxy code into their image.
-
-**Costs / honest limits**
-- We are not going to outperform Envoy at p99 throughput. We won't try.
-- HTTP/3 support will lag Envoy. Protocol corner cases (large trailers,
-  HTTP/1.1 upgrade dances) will be discovered the hard way.
-- Security: every CVE Envoy has had for HTTP parsing is a CVE we could
-  also have. We mitigate by leaning on stdlib `net/http` (well-audited)
-  and by *not* writing our own parser.
-
-**Scope guardrails for Mode B**
-  - Supports HTTP/1.1 + HTTP/2 at v1.0; HTTP/3 best-effort.
-  - No load balancing across upstreams beyond simple round-robin.
-  - No retries / outlier detection on day one.
-  - We document explicitly: "if you need full L7 features, use Mode A."
+> **Note:** The former `lightweightauth-proxy` sibling repo has been
+> deprecated and removed. Its functionality is superseded by the server's
+> built-in HTTP listener (Door C) and gRPC listener (Door A/B), plus
+> direct library embedding via `import "github.com/mikeappsec/lightweightauth"`.
+>
+> Callers who previously used `lwauth-proxy` should migrate to one of:
+> - Door C (HTTP) — the built-in HTTP decision endpoint.
+> - Door A/B (gRPC) — native or Envoy ext_authz gRPC.
+> - Library embed — call `pipeline.Evaluate` directly in your own binary.
 
 ### Mode C — eBPF (Tier 3, experimental, future)
 
@@ -530,11 +500,8 @@ Mode A in spirit. We'll accept community contributions but won't lead.
    - `lwauth` Deployment + Service (gRPC + HTTP).
    - ServiceAccount + RBAC for the controller.
    - HPA, PDB, NetworkPolicy, optional ServiceMonitor.
-   - Optional sub-chart dependency on `lightweightauth-proxy` or an Envoy
-     Deployment, depending on the chosen data-plane mode.
-2. **Helm chart** at `deploy/helm/lightweightauth-proxy/` (in the proxy
-   repo) for users who want Mode B without the core CRDs/controller — e.g.
-   a single-binary edge gateway.
+   - Optional sub-chart dependency on an Envoy Deployment, depending on
+     the chosen data-plane mode.
 3. **CRDs** under [api/crd](https://github.com/mikeappsec/lightweightauth/tree/main/api/crd/):
    - `AuthConfig` — main resource: identifiers, authorizers, response mutators
      (mirrors the YAML in §2). Namespaced.
@@ -550,8 +517,8 @@ Mode A in spirit. We'll accept community contributions but won't lead.
 ### Bottom line for this requirement
 
 - **Mode A (Envoy)** is the recommended default for service-mesh users.
-- **Mode B (own proxy)** is a fully supported, first-class alternative —
-  not a toy mode — for everyone who values one-binary simplicity.
+- **Mode B (direct HTTP/gRPC or library embed)** covers standalone and
+  embedded use cases without requiring an external proxy.
 - **Mode C (eBPF)** is on the roadmap as a post-v1 experiment, kept in a
   separate repo to avoid bloating the core.
 
@@ -1131,10 +1098,8 @@ by dependency, not by calendar.
     counter reflects every probe across `firstMatch`/`allMust`.
 
 12. **M10 – Sibling repos + plugin runtime ✅** _(branch
-    `m10-plugin-host-runtime`, sibling repos `lightweightauth-proxy`,
+    `m10-plugin-host-runtime`, sibling repos
     `lightweightauth-idp`, `lightweightauth-plugins`)_.
-    - Bootstrap `lightweightauth-proxy` (Mode B reverse proxy importing
-      the core as a library) with its own Dockerfile + Helm chart.
     - Bootstrap `lightweightauth-idp` (OIDC issuer, token endpoint,
       minimal admin UI).
     - Bootstrap `lightweightauth-plugins` (SDKs in Go / Python / Rust +
@@ -1297,7 +1262,7 @@ by dependency, not by calendar.
     | **Observability** | Prometheus metrics (`lwauth_decisions_total`, `_decision_latency_seconds`, `_identifier_total`, `_cache_*`), OpenTelemetry tracing (no-op until an exporter is wired), structured audit log via `slog`. |
     | **CLI** | `lwauth` daemon, `lwauthctl validate / diff / explain / audit`. |
     | **SDKs** | Go (`pkg/client/go`), plus Python and Rust in `lightweightauth-plugins`. |
-    | **Sibling repos** | `lightweightauth-proxy` (Mode B), `lightweightauth-idp`, `lightweightauth-plugins`. |
+    | **Sibling repos** | `lightweightauth-idp`, `lightweightauth-plugins`. |
     | **Outbound helper** | `pkg/clientauth` client-credentials Source for service-to-service callers. |
 
     *Testing already in place.* The `go test ./... -count=1` matrix
@@ -1515,26 +1480,10 @@ where they still apply; new enterprise recommendations use `OPS-*`,
 These are open security findings or known bugs against shipped code.
 They MUST land before any tier-A feature work begins.
 
-S1. **SEC-PROXY-1 — Mode B proxy request fidelity & deny redaction.**
-    ✅ shipped (sibling repo `lightweightauth-proxy`,
-    `cmd/lwauth-proxy/main.go`). The adapter now builds the
-    `module.Request` from `r.URL.RequestURI()` so `RawQuery`
-    survives into HMAC's `splitPathQuery`; reads inbound bodies
-    once into a `--max-auth-body`-bounded buffer (default 1 MiB)
-    and replays them to the upstream via `io.MultiReader`; refuses
-    to bind a truncated prefix when the body exceeds the cap
-    (over-cap requests still forward, but with
-    `module.Request.Body == nil` so HMAC's deny-on-mismatch fires
-    instead of being bypassed by a shifted prefix); and routes
-    every error / deny body through a `publicReason` mirror of
-    `internal/server/public_reason.go` while the verbose engine
-    reason flows to the proxy log via `slog`. Regression coverage:
-    `TestRequestFromHTTP_PreservesQueryString`,
-    `TestRequestFromHTTP_BodyBoundUnderCap`,
-    `TestRequestFromHTTP_BodyOverCapStreamsButUnbound`,
-    `TestRequestFromHTTP_ZeroCapDisablesAuthBody`,
-    `TestPublicReason`,
-    `TestProxy_ForwardsBodyAndQueryUpstream`.
+S1. **SEC-PROXY-1 — (no longer applicable).** The `lightweightauth-proxy`
+    sibling repo has been deprecated and removed. This finding is
+    superseded; callers should use Door A/B (gRPC), Door C (HTTP), or
+    embed the library directly.
 
 S2. **SEC-MTLS-1 — XFCC trust requires an anchor.** ✅ shipped.
     Factory-time guard in

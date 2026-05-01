@@ -188,9 +188,8 @@ no-op-tracer span calls. Free until an exporter is wired.
 
 - Out-of-process plugin host: `pkg/plugin/grpc` registers the single
   type `grpc-plugin` under all three module kinds.
-- Sibling repos: `lightweightauth-proxy`, `lightweightauth-idp`,
-  `lightweightauth-plugins` (Go / Python / Rust SDKs + reference
-  plugins).
+- Sibling repos: `lightweightauth-idp`, `lightweightauth-plugins`
+  (Go / Python / Rust SDKs + reference plugins).
 
 ```yaml
 identifiers:
