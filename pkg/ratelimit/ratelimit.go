@@ -15,6 +15,9 @@
 //
 // A nil Limiter is a no-op (every call returns ok=true), which is the
 // behaviour for AuthConfigs that don't opt in.
+//
+// Limiter satisfies pkg/httputil.KeyedLimiter so it can be used as a
+// drop-in for HTTP middleware rate limiting when keyed by tenant ID.
 package ratelimit
 
 import (
