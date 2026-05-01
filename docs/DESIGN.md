@@ -397,22 +397,21 @@ environment, and we provide all three with documented support tiers:
 | Mode | Status at v1.0 | What we ship | Best for |
 |------|----------------|--------------|----------|
 | **A. Envoy via ext_authz** | ✅ **Tier 1 (GA)** | Helm chart + sample Envoy config + ext_authz gRPC service | Existing service-mesh / Istio / Gateway API users |
-| **B. Direct HTTP/gRPC (Door C / Door A)** | ✅ **Tier 1 (GA)** | Call LightWeightAuth's built-in HTTP or gRPC server directly, or embed it as a library | Standalone deployments, local dev, air-gapped, "I just want one container" |
-| **C. eBPF redirection** | 🔬 **Tier 3 (experimental, post-v1)** | A separate `lwauth-ebpf` agent (own repo) that uses sockops/sk_msg to redirect connections to lwauth | High-density east-west enforcement, ambient-mesh-style deployments |
+| **B. eBPF redirection** | 🔬 **Tier 3 (experimental, post-v1)** | A separate `lwauth-ebpf` agent (own repo) that uses sockops/sk_msg to redirect connections to lwauth | High-density east-west enforcement, ambient-mesh-style deployments |
 
 "Tier 1" = full docs, Helm support, CI matrix, security review.
 "Tier 3" = published, but operators are expected to engage actively.
 
 The key architectural point: **all modes drive the same pipeline.**
-Mode A and C produce a `module.Request` via the ext_authz adapter; Mode B
-(direct HTTP/gRPC or library embedding) produces it from the built-in
-server handler. Adding or replacing a data plane never touches
-policy/identifier code.
+Mode A produces a `module.Request` via the ext_authz adapter; the
+built-in HTTP/gRPC server produces it from the native handlers; library
+embedders call `pipeline.Evaluate` directly. Adding or replacing a data
+plane never touches policy/identifier code.
 
 ```
-  ┌─────────── Mode A ──────────┐    ┌── Mode B ──────────┐    ┌── Mode C (future) ──┐
-  │  Envoy ── ext_authz gRPC ── │    │  Direct HTTP/gRPC  │    │  eBPF agent ──────  │
-  │                             │    │  or library embed   │    │  (sockops redirect) │
+  ┌─────────── Mode A ──────────┐    ┌── Built-in server ─┐    ┌── Mode C (future) ──┐
+  │  Envoy ── ext_authz gRPC ── │    │  HTTP (Door C)     │    │  eBPF agent ──────  │
+  │                             │    │  gRPC (Door A/B)   │    │  (sockops redirect) │
   └─────────────┬───────────────┘    └─────────┬──────────┘    └─────────┬───────────┘
                 │                              │                         │
                 └──────────► same module.Request ◄───────────────────────┘
@@ -440,18 +439,6 @@ headers we injected); on deny, Envoy responds directly.
 - Two processes to run / observe / upgrade per Pod.
 - Envoy is heavy (~100 MB image, ~30–50 MB RSS minimum).
 - Configuring Envoy is its own learning curve.
-
-### Mode B — Direct HTTP/gRPC or library embedding
-
-> **Note:** The former `lightweightauth-proxy` sibling repo has been
-> deprecated and removed. Its functionality is superseded by the server's
-> built-in HTTP listener (Door C) and gRPC listener (Door A/B), plus
-> direct library embedding via `import "github.com/mikeappsec/lightweightauth"`.
->
-> Callers who previously used `lwauth-proxy` should migrate to one of:
-> - Door C (HTTP) — the built-in HTTP decision endpoint.
-> - Door A/B (gRPC) — native or Envoy ext_authz gRPC.
-> - Library embed — call `pipeline.Evaluate` directly in your own binary.
 
 ### Mode C — eBPF (Tier 3, experimental, future)
 
@@ -517,7 +504,7 @@ Mode A in spirit. We'll accept community contributions but won't lead.
 ### Bottom line for this requirement
 
 - **Mode A (Envoy)** is the recommended default for service-mesh users.
-- **Mode B (direct HTTP/gRPC or library embed)** covers standalone and
+- The **built-in HTTP/gRPC server** (Doors A/B/C) covers standalone and
   embedded use cases without requiring an external proxy.
 - **Mode C (eBPF)** is on the roadmap as a post-v1 experiment, kept in a
   separate repo to avoid bloating the core.
@@ -1480,10 +1467,7 @@ where they still apply; new enterprise recommendations use `OPS-*`,
 These are open security findings or known bugs against shipped code.
 They MUST land before any tier-A feature work begins.
 
-S1. **SEC-PROXY-1 — (no longer applicable).** The `lightweightauth-proxy`
-    sibling repo has been deprecated and removed. This finding is
-    superseded; callers should use Door A/B (gRPC), Door C (HTTP), or
-    embed the library directly.
+S1. _(Removed — no longer applicable.)_
 
 S2. **SEC-MTLS-1 — XFCC trust requires an anchor.** ✅ shipped.
     Factory-time guard in
@@ -1958,11 +1942,11 @@ a known security or correctness gap.** Concretely:
   committed v1.x path until an operator or maintainer owns the external
   prerequisites.
 
-The sibling repos (`lightweightauth-proxy`, `lightweightauth-idp`,
-`lightweightauth-plugins`, `lightweightauth-ebpf`) inherit this
-ordering: proxy and plugin work follows the same S/A/B hardening gates,
-enterprise operator features land only after the core control plane is
-safe, and experimental data-plane work stays demand-driven.
+The sibling repos (`lightweightauth-idp`, `lightweightauth-plugins`,
+`lightweightauth-ebpf`) inherit this ordering: plugin work follows the
+same S/A/B hardening gates, enterprise operator features land only after
+the core control plane is safe, and experimental data-plane work stays
+demand-driven.
 
 ### Explicit non-goals
 
@@ -1972,8 +1956,6 @@ safe, and experimental data-plane work stays demand-driven.
 - **Reimplementing Zanzibar** — we adapt OpenFGA / SpiceDB; we will
   not build our own ReBAC engine (§5).
 - **Becoming a service mesh** — we integrate with one (Envoy) instead.
-- **Outperforming Envoy at p99 throughput in Mode B** — Mode B exists
-  for one-binary simplicity, not for throughput records (§3).
 
 ---
 
@@ -2031,13 +2013,13 @@ proxy/IdP/eBPF code paths.
             │ imported  │ imported │ imported   │ imported by
             │ by        │ by       │ by         │
             ▼           ▼          ▼            ▼
-  ┌──────────────┐ ┌────────────┐ ┌──────────────┐ ┌──────────────────┐
-  │ -idp (M3+) │ │  -proxy  │ │ -ebpf      │ │ -plugins         │
-  │ issuer +   │ │ Mode B   │ │ Mode C     │ │ SDK + reference  │
-  │ token ep + │ │ reverse  │ │ sockops    │ │ plugins (Python, │
-  │ admin UI   │ │ proxy    │ │ redirector │ │ Rust, Go)        │
-  └──────────────┘ └────────────┘ └──────────────┘ └──────────────────┘
-     Tier 1         Tier 1       Tier 3         Tier 2
+  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐
+  │ -idp (M3+) │ │ -ebpf      │ │ -plugins         │
+  │ issuer +   │ │ Mode C     │ │ SDK + reference  │
+  │ token ep + │ │ sockops    │ │ plugins (Python, │
+  │ admin UI   │ │ redirector │ │ Rust, Go)        │
+  └──────────────┘ └──────────────┘ └──────────────────┘
+     Tier 1         Tier 3         Tier 2
 ```
 
 ### `lightweightauth` (this repo) — the core
@@ -2053,19 +2035,6 @@ proxy/IdP/eBPF code paths.
 - **Module path:** `github.com/mikeappsec/lightweightauth`.
 - **Image:** `ghcr.io/mikeappsec/lightweightauth`.
 - **Helm chart:** `lightweightauth`.
-
-### `lightweightauth-proxy` — Mode B (separate repo, Tier 1)
-
-- **What's in it:** the reverse-proxy binary that imports
-  `lightweightauth` as a library, plus its own Helm chart and Dockerfile.
-  Owns TLS hot-reload, HTTP/2 limits, optional HTTP/3 (`quic-go`),
-  connection draining, header normalization.
-- **Why split:** keeps proxy hardening / dep tree out of every core user.
-  Releases on its own cadence; HTTP/3 churn doesn't force a core release.
-- **Module path:** `github.com/mikeappsec/lightweightauth-proxy`.
-- **Image:** `ghcr.io/mikeappsec/lightweightauth-proxy`.
-- **Helm chart:** `lightweightauth-proxy` (can be a sub-chart of
-  `lightweightauth`).
 
 ### `lightweightauth-idp` — built-in IdP (separate repo, Tier 2)
 
