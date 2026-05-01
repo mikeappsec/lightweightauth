@@ -117,6 +117,10 @@ nav:
       - OAuth2 Authorization Code + PKCE: cookbook/oauth2-pkce.md
       - OpenFGA on existing Envoy: cookbook/openfga-on-envoy.md
       - Rotate HMAC secrets without downtime: cookbook/rotate-hmac.md
+      - Rotate JWKS / IdP signing keys: cookbook/rotate-jwks.md
+      - Policy shadow mode and canary evaluation: cookbook/policy-shadow-mode.md
+      - Cache invalidation: cookbook/cache-invalidation.md
+      - Valkey outage drill: cookbook/valkey-outage-drill.md
   - Modules:
       - modules/README.md
       - Identifiers:
