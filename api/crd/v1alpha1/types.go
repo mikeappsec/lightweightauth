@@ -86,6 +86,17 @@ type AuthConfigStatus struct {
 	Ready              bool   `json:"ready,omitempty"`
 	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	Message            string `json:"message,omitempty"`
+
+	// AppliedVersion is the spec.version that was last successfully
+	// compiled and swapped in. Empty if spec.version is unset.
+	// OPS-GITOPS-1: enables lwauthctl drift to compare live vs desired.
+	AppliedVersion string `json:"appliedVersion,omitempty"`
+
+	// AppliedDigest is the SHA-256 digest of the canonical JSON
+	// encoding of the spec at the time of the last successful compile.
+	// OPS-GITOPS-1: enables lwauthctl drift to detect config drift
+	// even when spec.version is not used.
+	AppliedDigest string `json:"appliedDigest,omitempty"`
 }
 
 // ConditionTypeReady is the canonical Ready condition type. Reasons

@@ -36,6 +36,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
+	"github.com/mikeappsec/lightweightauth/internal/admin"
 	"github.com/mikeappsec/lightweightauth/internal/config"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/internal/server"
@@ -88,6 +89,12 @@ type Options struct {
 	// /metrics, so operators who keep observability internal will
 	// usually disable both. DOC-OPENAPI-1.
 	DisableHTTPOpenAPI bool
+
+	// Admin configures the admin-plane authentication and
+	// authorization model (OPS-ADMIN-1). When Admin.Enabled is true,
+	// endpoints under /v1/admin/ are registered on the HTTP listener,
+	// protected by mTLS and/or admin JWT with RBAC verbs.
+	Admin admin.Config
 
 	// MaxRequestBytes caps inbound /v1/authorize bodies. 0 -> 1 MiB.
 	MaxRequestBytes int64
@@ -234,9 +241,28 @@ func Run(opts Options) error {
 		DisableMetrics:   opts.DisableHTTPMetrics,
 		DisableOpenAPI:   opts.DisableHTTPOpenAPI,
 	})
+
+	// Admin endpoints (OPS-ADMIN-1). When enabled, /v1/admin/* routes
+	// are mounted on the same HTTP listener, guarded by the admin
+	// middleware (mTLS or admin JWT + RBAC verbs).
+	var finalHandler http.Handler = httpHandler
+	if opts.Admin.Enabled {
+		opts.Admin.Logger = log
+		adminMW, err := admin.NewMiddleware(opts.Admin)
+		if err != nil {
+			return fmt.Errorf("admin middleware: %w", err)
+		}
+		adminMux := admin.NewAdminMux(adminMW)
+		// Compose: requests starting with /v1/admin/ go to the admin
+		// mux; everything else goes to the normal handler.
+		combined := http.NewServeMux()
+		combined.Handle("/v1/admin/", adminMux)
+		combined.Handle("/", httpHandler)
+		finalHandler = combined
+	}
 	httpSrv := &http.Server{
 		Addr:              opts.HTTPAddr,
-		Handler:           httpHandler,
+		Handler:           finalHandler,
 		ReadHeaderTimeout: nonZeroDur(opts.HTTPReadHeaderTimeout, 10*time.Second),
 		ReadTimeout:       nonZeroDur(opts.HTTPReadTimeout, 30*time.Second),
 		WriteTimeout:      nonZeroDur(opts.HTTPWriteTimeout, 30*time.Second),

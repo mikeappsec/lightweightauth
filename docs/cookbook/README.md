@@ -12,6 +12,10 @@ PowerShell so a clean checkout works without `pip install`.
 | [openfga-on-envoy](openfga-on-envoy.md) | ReBAC with OpenFGA: tuples, model bootstrap, AuthConfig with `composite{anyOf:[rbac, openfga]}`. |
 | [istio-grpc-rbac](istio-grpc-rbac.md) | lwauth as the ext_authz provider in an Istio mesh, gating gRPC services with role-based policy. |
 | [rotate-hmac](rotate-hmac.md) | Rolling an HMAC shared secret with zero downtime via the multi-secret overlap window. |
+| [rotate-jwks](rotate-jwks.md) | Rotating JWKS / IdP signing keys with zero-downtime dual-publish → drain → retire. |
+| [policy-shadow-mode](policy-shadow-mode.md) | Testing a policy change with shadow mode, canary evaluation, and decision diffing. |
+| [cache-invalidation](cache-invalidation.md) | Manually invalidating cached decisions and introspection results. |
+| [valkey-outage-drill](valkey-outage-drill.md) | Controlled Valkey outage drill — what breaks, what degrades, how to recover. |
 
 Every recipe ends with a teardown stanza so you can iterate without
 piling up Helm releases. Open an issue if a recipe drifts from the

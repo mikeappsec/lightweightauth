@@ -37,19 +37,28 @@ func main() {
 		explain(os.Args[2:])
 	case "audit":
 		auditTail(os.Args[2:])
+	case "promote":
+		promote(os.Args[2:])
+	case "rollback":
+		rollback(os.Args[2:])
+	case "drift":
+		drift(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lwauthctl <modules|validate|diff|explain|audit> [args]")
+	fmt.Fprintln(os.Stderr, "usage: lwauthctl <command> [args]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  modules                                  list registered identifier/authorizer/mutator types")
 	fmt.Fprintln(os.Stderr, "  validate --config FILE                   compile an AuthConfig YAML offline")
 	fmt.Fprintln(os.Stderr, "  diff --from A.yaml --to B.yaml           show what would change between two AuthConfigs")
 	fmt.Fprintln(os.Stderr, "  explain --config FILE --request req.json dry-run a request through the pipeline")
 	fmt.Fprintln(os.Stderr, "  audit [--file F] [--tenant T] ...        tail / filter audit JSONL")
+	fmt.Fprintln(os.Stderr, "  promote --config FILE [--version V]      validate, tag version, and emit GitOps-ready YAML")
+	fmt.Fprintln(os.Stderr, "  rollback --config FILE --to-version V    rewrite spec.version to a previous value")
+	fmt.Fprintln(os.Stderr, "  drift --config FILE --namespace NS       compare local config to live AuthConfig status")
 	os.Exit(2)
 }
 

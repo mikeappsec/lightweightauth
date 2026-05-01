@@ -12,6 +12,12 @@ import "github.com/mikeappsec/lightweightauth/pkg/ratelimit"
 // AuthConfig CRD instance maps to exactly one AuthConfig value, which the
 // Compiler turns into a pipeline.Engine.
 type AuthConfig struct {
+	// Version is an opaque string set by operators to tag a policy
+	// revision. The controller echoes it on status.appliedVersion after
+	// a successful compile+swap. Optional; when empty, only
+	// status.appliedDigest tracks config identity.
+	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+
 	// Hosts limits this config to specific virtual hosts. Empty = match all.
 	Hosts []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 
