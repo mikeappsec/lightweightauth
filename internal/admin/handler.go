@@ -3,7 +3,66 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 )
+
+// adminRateLimiter is a simple per-IP token bucket for admin endpoints (TC4).
+type adminRateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	rps     float64
+	burst   int
+}
+
+type bucket struct {
+	tokens   float64
+	lastTime time.Time
+}
+
+func newAdminRateLimiter(rps float64, burst int) *adminRateLimiter {
+	return &adminRateLimiter{
+		buckets: make(map[string]*bucket),
+		rps:     rps,
+		burst:   burst,
+	}
+}
+
+func (rl *adminRateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	b, ok := rl.buckets[ip]
+	if !ok {
+		b = &bucket{tokens: float64(rl.burst), lastTime: now}
+		rl.buckets[ip] = b
+	}
+
+	elapsed := now.Sub(b.lastTime).Seconds()
+	b.tokens += elapsed * rl.rps
+	if b.tokens > float64(rl.burst) {
+		b.tokens = float64(rl.burst)
+	}
+	b.lastTime = now
+
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+// validScopes is the allowlist for cache invalidation scope (TC7).
+var validScopes = map[string]bool{
+	"all":     true,
+	"tenant":  true,
+	"subject": true,
+}
+
+// adminLimiter is the package-level rate limiter for admin endpoints.
+// 10 requests/second per IP with a burst of 20.
+var adminLimiter = newAdminRateLimiter(10, 20)
 
 // NewAdminMux returns an http.Handler that serves all /v1/admin/ endpoints,
 // protected by the given middleware. If the middleware is nil or disabled,
@@ -18,21 +77,34 @@ func NewAdminMux(mw *Middleware) http.Handler {
 		return mux
 	}
 
+	// TC4: rate-limit wrapper applied to all admin routes.
+	rateLimit := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := r.RemoteAddr
+			if !adminLimiter.allow(ip) {
+				w.Header().Set("Retry-After", "1")
+				writeAdminError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+
 	// GET /v1/admin/status — engine and config status.
-	mux.Handle("/v1/admin/status", mw.Require(VerbReadStatus,
-		http.HandlerFunc(handleStatus)))
+	mux.Handle("/v1/admin/status", rateLimit(mw.Require(VerbReadStatus,
+		http.HandlerFunc(handleStatus))))
 
 	// POST /v1/admin/cache/invalidate — manual cache invalidation.
-	mux.Handle("/v1/admin/cache/invalidate", mw.Require(VerbInvalidateCache,
-		http.HandlerFunc(handleCacheInvalidate)))
+	mux.Handle("/v1/admin/cache/invalidate", rateLimit(mw.Require(VerbInvalidateCache,
+		http.HandlerFunc(handleCacheInvalidate))))
 
 	// POST /v1/admin/revoke — token/session revocation (stub for E2).
-	mux.Handle("/v1/admin/revoke", mw.Require(VerbRevokeToken,
-		http.HandlerFunc(handleRevoke)))
+	mux.Handle("/v1/admin/revoke", rateLimit(mw.Require(VerbRevokeToken,
+		http.HandlerFunc(handleRevoke))))
 
 	// GET /v1/admin/audit — audit log query (stub for D4).
-	mux.Handle("/v1/admin/audit", mw.Require(VerbReadAudit,
-		http.HandlerFunc(handleAuditQuery)))
+	mux.Handle("/v1/admin/audit", rateLimit(mw.Require(VerbReadAudit,
+		http.HandlerFunc(handleAuditQuery))))
 
 	return mux
 }
@@ -71,6 +143,11 @@ func handleCacheInvalidate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Scope == "" {
 		req.Scope = "all"
+	}
+	// TC7: validate scope against allowlist.
+	if !validScopes[req.Scope] {
+		writeAdminError(w, http.StatusBadRequest, "invalid scope: must be one of all, tenant, subject")
+		return
 	}
 
 	// TODO(ENT-CACHE-2): wire into cache.Backend tag-based invalidation.

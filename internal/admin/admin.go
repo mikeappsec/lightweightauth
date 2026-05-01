@@ -100,6 +100,10 @@ type Config struct {
 	// When false, the admin mux returns 404 for all /v1/admin/ paths.
 	Enabled bool `json:"enabled" yaml:"enabled"`
 
+	// RequireMTLS, when true, requires a valid mTLS client cert even
+	// if JWT auth also succeeds. This enforces AND composition (TC2).
+	RequireMTLS bool `json:"requireMtls,omitempty" yaml:"requireMtls,omitempty"`
+
 	// JWT configures admin JWT authentication.
 	JWT *JWTConfig `json:"jwt,omitempty" yaml:"jwt,omitempty"`
 
@@ -121,11 +125,15 @@ type JWTConfig struct {
 	IssuerURL string `json:"issuerUrl" yaml:"issuerUrl"`
 	// Audience is the expected `aud` claim.
 	Audience string `json:"audience" yaml:"audience"`
-	// JWKSURL is the URL to fetch signing keys from.
+	// JWKSURL is the URL to fetch signing keys from. Must be HTTPS.
 	JWKSURL string `json:"jwksUrl" yaml:"jwksUrl"`
 	// RolesClaim is the JWT claim containing the admin's role(s).
 	// Defaults to "roles". The claim value may be a string or []string.
 	RolesClaim string `json:"rolesClaim,omitempty" yaml:"rolesClaim,omitempty"`
+	// MaxTokenLifetime caps the accepted exp-iat window. Tokens with
+	// a longer lifetime are rejected even if the signature is valid.
+	// Default: 15 minutes. This mitigates replay (TC3).
+	MaxTokenLifetime time.Duration `json:"maxTokenLifetime,omitempty" yaml:"maxTokenLifetime,omitempty"`
 }
 
 // MTLSConfig configures mTLS-based admin authentication.
@@ -157,9 +165,24 @@ func NewMiddleware(cfg Config) (*Middleware, error) {
 		log = slog.Default()
 	}
 	m := &Middleware{cfg: cfg, log: log}
+
+	// TC6: Warn if any role contains the wildcard verb.
+	for roleName, verbs := range cfg.Roles {
+		for _, v := range verbs {
+			if v == "*" {
+				log.Warn("admin: role contains wildcard verb '*' — grants all permissions",
+					"role", roleName)
+			}
+		}
+	}
+
 	if cfg.JWT != nil {
 		if cfg.JWT.JWKSURL == "" {
 			return nil, errors.New("admin: jwt.jwksUrl is required")
+		}
+		// TC5: Reject non-HTTPS JWKS URLs.
+		if !strings.HasPrefix(cfg.JWT.JWKSURL, "https://") {
+			return nil, fmt.Errorf("admin: jwt.jwksUrl must use HTTPS (got %q)", cfg.JWT.JWKSURL)
 		}
 		if cfg.JWT.IssuerURL == "" {
 			return nil, errors.New("admin: jwt.issuerUrl is required")
@@ -169,6 +192,9 @@ func NewMiddleware(cfg Config) (*Middleware, error) {
 		}
 		if cfg.JWT.RolesClaim == "" {
 			cfg.JWT.RolesClaim = "roles"
+		}
+		if cfg.JWT.MaxTokenLifetime == 0 {
+			cfg.JWT.MaxTokenLifetime = 15 * time.Minute
 		}
 		// Fetch JWKS eagerly to fail fast on misconfiguration.
 		set, err := jwk.Fetch(context.Background(), cfg.JWT.JWKSURL)
@@ -224,7 +250,8 @@ func (m *Middleware) Require(verb Verb, next http.Handler) http.Handler {
 				"has", id.Verbs,
 				"path", r.URL.Path,
 			)
-			writeAdminError(w, http.StatusForbidden, fmt.Sprintf("verb %q not granted", verb))
+			// TC9: generic message to the wire; specific verb logged server-side only.
+			writeAdminError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		// Attach identity to context for downstream handlers.
@@ -239,19 +266,37 @@ func (m *Middleware) Require(verb Verb, next http.Handler) http.Handler {
 	})
 }
 
-// authenticate tries JWT first, then mTLS. Returns the first success.
+// authenticate tries JWT first, then mTLS. When RequireMTLS is set,
+// both must succeed (AND composition, TC2).
 func (m *Middleware) authenticate(r *http.Request) (*Identity, error) {
-	// Try JWT from Authorization header.
+	var jwtID, mtlsID *Identity
+	var jwtErr, mtlsErr error
+
 	if m.cfg.JWT != nil {
-		if id, err := m.authenticateJWT(r); err == nil {
-			return id, nil
-		}
+		jwtID, jwtErr = m.authenticateJWT(r)
 	}
-	// Try mTLS from TLS peer certificate.
 	if m.cfg.MTLS != nil {
-		if id, err := m.authenticateMTLS(r); err == nil {
-			return id, nil
+		mtlsID, mtlsErr = m.authenticateMTLS(r)
+	}
+
+	// AND mode: both must succeed.
+	if m.cfg.RequireMTLS {
+		if jwtErr != nil {
+			return nil, fmt.Errorf("jwt: %w", jwtErr)
 		}
+		if mtlsErr != nil {
+			return nil, fmt.Errorf("mtls: %w", mtlsErr)
+		}
+		// Merge: use JWT identity but require mTLS was valid.
+		return jwtID, nil
+	}
+
+	// OR mode (default): first success wins.
+	if jwtID != nil {
+		return jwtID, nil
+	}
+	if mtlsID != nil {
+		return mtlsID, nil
 	}
 	return nil, errors.New("no valid credential")
 }
@@ -280,6 +325,14 @@ func (m *Middleware) authenticateJWT(r *http.Request) (*Identity, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("jwt verify: %w", err)
+	}
+
+	// TC3: Reject tokens with lifetime exceeding MaxTokenLifetime.
+	if iat := tok.IssuedAt(); !iat.IsZero() {
+		lifetime := tok.Expiration().Sub(iat)
+		if lifetime > m.cfg.JWT.MaxTokenLifetime {
+			return nil, fmt.Errorf("jwt: token lifetime %s exceeds max %s", lifetime, m.cfg.JWT.MaxTokenLifetime)
+		}
 	}
 
 	sub := tok.Subject()

@@ -7,11 +7,76 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/mikeappsec/lightweightauth/internal/config"
 )
+
+// k8sNameRe validates Kubernetes resource names (RFC 1123 DNS subdomain).
+var k8sNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?$`)
+
+// validateK8sName checks that s is a valid Kubernetes resource name.
+func validateK8sName(s string) error {
+	if len(s) == 0 || len(s) > 253 {
+		return fmt.Errorf("invalid resource name: length %d (must be 1-253)", len(s))
+	}
+	if !k8sNameRe.MatchString(s) {
+		return fmt.Errorf("invalid resource name %q: must match [a-z0-9][a-z0-9.-]*[a-z0-9]", s)
+	}
+	return nil
+}
+
+// validateOutPath refuses output paths containing traversal sequences.
+func validateOutPath(p string) error {
+	cleaned := filepath.Clean(p)
+	if strings.Contains(cleaned, "..") {
+		return fmt.Errorf("refusing output path %q: contains path traversal", p)
+	}
+	return nil
+}
+
+// canonicalJSON marshals v with sorted map keys for deterministic output.
+// This ensures the same logical config always produces the same digest
+// regardless of Go map iteration order.
+func canonicalJSON(v any) ([]byte, error) {
+	// json.Marshal already sorts map keys in Go 1.12+, but config
+	// contains map[string]any from YAML decode where nested maps may
+	// be map[any]any. We normalize via a round-trip through sorted
+	// encoding.
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	// Re-decode into interface{} and re-encode to normalize.
+	var raw any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return b, nil // fallback to original
+	}
+	normalized := sortKeys(raw)
+	return json.Marshal(normalized)
+}
+
+// sortKeys recursively sorts map keys for deterministic serialization.
+func sortKeys(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		sorted := make(map[string]any, len(val))
+		for k, v2 := range val {
+			sorted[k] = sortKeys(v2)
+		}
+		return sorted
+	case []any:
+		for i, item := range val {
+			val[i] = sortKeys(item)
+		}
+		return val
+	default:
+		return v
+	}
+}
 
 // promote validates the config, optionally stamps spec.version, computes
 // the spec digest, and emits the GitOps-ready YAML to stdout (or to a
@@ -51,8 +116,8 @@ func promote(args []string) {
 		ac.Version = time.Now().UTC().Format("2006-01-02T150405Z")
 	}
 
-	// Compute digest.
-	specJSON, _ := json.Marshal(ac)
+	// Compute digest with canonical (sorted-key) JSON.
+	specJSON, _ := canonicalJSON(ac)
 	digest := sha256.Sum256(specJSON)
 
 	fmt.Fprintf(os.Stderr, "✓ validated: identifiers=%d authorizers=%d\n",
@@ -63,6 +128,10 @@ func promote(args []string) {
 	// Emit the promoted YAML.
 	out := os.Stdout
 	if *outPath != "" {
+		if err := validateOutPath(*outPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		f, err := os.Create(*outPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "create:", err)
@@ -167,7 +236,8 @@ func drift(args []string) {
 	}
 
 	// Compute local digest.
-	specJSON, _ := json.Marshal(ac)
+	// TC10: canonical JSON for deterministic digest.
+	specJSON, _ := canonicalJSON(ac)
 	localDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(specJSON))
 
 	// Fetch live status from cluster via kubectl.
@@ -182,7 +252,12 @@ func drift(args []string) {
 		}
 		base = strings.TrimSuffix(base, ".yaml")
 		base = strings.TrimSuffix(base, ".yml")
-		*name = base
+		*name = strings.ToLower(base)
+	}
+	// TC1: validate derived name is a legal K8s resource name.
+	if err := validateK8sName(*name); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 
 	// kubectl get authconfig <name> -n <ns> -o jsonpath
@@ -221,9 +296,13 @@ func drift(args []string) {
 }
 
 // kubectlJSONPath runs kubectl get authconfig and extracts a jsonpath field.
+// The "--" separator prevents the resource name from being interpreted as
+// a kubectl flag (TC1 fix).
 func kubectlJSONPath(namespace, name, jsonpath string) (string, error) {
-	cmd := exec.Command("kubectl", "-n", namespace, "get", "authconfig.lightweightauth.io", name,
-		"-o", fmt.Sprintf("jsonpath=%s", jsonpath))
+	cmd := exec.Command("kubectl", "-n", namespace, "get",
+		"authconfig.lightweightauth.io",
+		"-o", fmt.Sprintf("jsonpath=%s", jsonpath),
+		"--", name)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
