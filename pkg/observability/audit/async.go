@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"log/slog"
 	"sync/atomic"
 )
 
@@ -10,10 +11,11 @@ import (
 // buffer is full, the event is dropped and a drop counter is incremented.
 // Call Close() to flush remaining events on shutdown.
 type AsyncSink struct {
-	inner   Sink
-	ch      chan *Event
-	done    chan struct{}
-	dropped atomic.Int64
+	inner      Sink
+	ch         chan *Event
+	done       chan struct{}
+	dropped    atomic.Int64
+	loggedDrop atomic.Bool
 }
 
 // AsyncSinkOption configures an AsyncSink.
@@ -39,7 +41,11 @@ func (a *AsyncSink) Record(_ context.Context, e *Event) {
 	select {
 	case a.ch <- e:
 	default:
-		a.dropped.Add(1)
+		n := a.dropped.Add(1)
+		// AUD3: Log warning on first drop so operators notice.
+		if a.loggedDrop.CompareAndSwap(false, true) {
+			slog.Warn("audit: async buffer full, dropping events", "dropped", n, "bufSize", cap(a.ch))
+		}
 	}
 }
 

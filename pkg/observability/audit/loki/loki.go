@@ -2,8 +2,8 @@
 // Loki instance via the HTTP push API (/loki/api/v1/push).
 //
 // Events are batched by time or count (whichever comes first) and sent
-// as JSON streams. The sink is non-blocking: it enqueues into an
-// internal AsyncSink and flushes batches on a background goroutine.
+// as JSON streams. The sink is non-blocking and uses a bounded worker
+// pool for concurrent push requests.
 package loki
 
 import (
@@ -11,7 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -19,11 +22,18 @@ import (
 	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 )
 
+// labelKeyRe matches valid Prometheus/Loki label keys (AUD4).
+var labelKeyRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
 // Config for the Loki audit sink.
 type Config struct {
-	// URL is the Loki push endpoint (e.g. "http://loki:3100/loki/api/v1/push").
+	// URL is the Loki push endpoint. Must use HTTPS unless InsecurePlaintext
+	// is explicitly set (AUD1).
 	URL string
+	// InsecurePlaintext allows HTTP URLs (dev/test only). Default false.
+	InsecurePlaintext bool
 	// Labels are static Loki stream labels applied to all events.
+	// Keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$ (AUD4).
 	Labels map[string]string
 	// BatchSize is the max events per push request (default 100).
 	BatchSize int
@@ -33,6 +43,8 @@ type Config struct {
 	TenantID string
 	// Client is the HTTP client to use (default http.DefaultClient).
 	Client *http.Client
+	// MaxConcurrentPushes limits background push goroutines (AUD6). Default 8.
+	MaxConcurrentPushes int
 }
 
 // Sink pushes audit events to Loki.
@@ -44,11 +56,36 @@ type Sink struct {
 	mu    sync.Mutex
 	batch []*audit.Event
 	timer *time.Timer
-	done  chan struct{}
+	sem   chan struct{} // AUD6: bounded worker pool
 }
 
-// New creates a Loki audit sink. Call Close() on shutdown.
-func New(cfg Config) *Sink {
+// New creates a Loki audit sink. Returns an error if the config is invalid.
+// Call Close() on shutdown.
+func New(cfg Config) (*Sink, error) {
+	// AUD1: Validate URL scheme.
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("loki: invalid URL: %w", err)
+	}
+	if u.Scheme != "https" && !cfg.InsecurePlaintext {
+		return nil, fmt.Errorf("loki: URL must use HTTPS (got %q); set InsecurePlaintext=true for dev", u.Scheme)
+	}
+	// AUD2: Block SSRF to metadata/private IPs.
+	if err := validateLokiHost(u.Hostname()); err != nil {
+		return nil, err
+	}
+	// AUD4: Validate label keys and values.
+	for k, v := range cfg.Labels {
+		if !labelKeyRe.MatchString(k) {
+			return nil, fmt.Errorf("loki: invalid label key %q (must match %s)", k, labelKeyRe.String())
+		}
+		for _, c := range v {
+			if c < 0x20 || c == 0x7f {
+				return nil, fmt.Errorf("loki: label value for %q contains control characters", k)
+			}
+		}
+	}
+
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 100
 	}
@@ -58,15 +95,18 @@ func New(cfg Config) *Sink {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 5 * time.Second}
 	}
+	if cfg.MaxConcurrentPushes <= 0 {
+		cfg.MaxConcurrentPushes = 8
+	}
 	s := &Sink{
 		cfg:    cfg,
 		client: cfg.Client,
 		labels: buildLabels(cfg.Labels),
 		batch:  make([]*audit.Event, 0, cfg.BatchSize),
-		done:   make(chan struct{}),
+		sem:    make(chan struct{}, cfg.MaxConcurrentPushes),
 	}
 	s.timer = time.AfterFunc(cfg.BatchWait, s.flushTimer)
-	return s
+	return s, nil
 }
 
 // Record implements audit.Sink.
@@ -78,7 +118,7 @@ func (s *Sink) Record(_ context.Context, e *audit.Event) {
 		s.batch = make([]*audit.Event, 0, s.cfg.BatchSize)
 		s.timer.Reset(s.cfg.BatchWait)
 		s.mu.Unlock()
-		go s.push(batch) //nolint:errcheck
+		s.asyncPush(batch)
 		return
 	}
 	s.mu.Unlock()
@@ -96,19 +136,31 @@ func (s *Sink) Close() {
 	}
 }
 
+// asyncPush sends a batch using the bounded worker pool (AUD6).
+func (s *Sink) asyncPush(batch []*audit.Event) {
+	select {
+	case s.sem <- struct{}{}:
+		go func() {
+			defer func() { <-s.sem }()
+			s.push(batch) //nolint:errcheck
+		}()
+	default:
+		// All workers busy — drop batch (back-pressure).
+	}
+}
+
 func (s *Sink) flushTimer() {
 	s.mu.Lock()
 	batch := s.batch
 	s.batch = make([]*audit.Event, 0, s.cfg.BatchSize)
 	s.mu.Unlock()
 	if len(batch) > 0 {
-		go s.push(batch) //nolint:errcheck
+		s.asyncPush(batch)
 	}
 	s.timer.Reset(s.cfg.BatchWait)
 }
 
-// push sends a batch to Loki. Best-effort: errors are silently dropped
-// (the audit hot path must never block).
+// push sends a batch to Loki. Best-effort: errors are silently dropped.
 func (s *Sink) push(batch []*audit.Event) error {
 	values := make([][2]string, len(batch))
 	for i, e := range batch {
@@ -143,9 +195,27 @@ func (s *Sink) push(batch []*audit.Event) error {
 	if err != nil {
 		return err
 	}
+	// AUD9: Drain body for HTTP/1.1 connection reuse.
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck
 	resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("loki push: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// --- SSRF protection (AUD2) ------------------------------------------------
+
+func validateLokiHost(host string) error {
+	blocked := []string{
+		"169.254.169.254",
+		"metadata.google.internal",
+		"metadata.internal",
+	}
+	for _, b := range blocked {
+		if host == b {
+			return fmt.Errorf("loki: URL host %q is blocked (SSRF protection)", host)
+		}
 	}
 	return nil
 }
@@ -157,7 +227,7 @@ type lokiPush struct {
 }
 
 type lokiStream struct {
-	Stream string     `json:"stream"`
+	Stream string      `json:"stream"`
 	Values [][2]string `json:"values"`
 }
 
@@ -172,6 +242,7 @@ func buildLabels(m map[string]string) string {
 		if !first {
 			buf.WriteByte(',')
 		}
+		// Keys are pre-validated by New(); values are %q-escaped.
 		fmt.Fprintf(&buf, "%s=%q", k, v)
 		first = false
 	}

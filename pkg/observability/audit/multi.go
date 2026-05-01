@@ -1,6 +1,10 @@
 package audit
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"log/slog"
+)
 
 // MultiSink fans out every event to all wrapped sinks. If any sink
 // panics the others still receive the event (best-effort delivery).
@@ -16,9 +20,14 @@ func NewMultiSink(sinks ...Sink) *MultiSink {
 // Record implements Sink by calling Record on every wrapped sink.
 func (m *MultiSink) Record(ctx context.Context, e *Event) {
 	for _, s := range m.sinks {
+		sink := s
 		func() {
-			defer func() { recover() }() //nolint:errcheck // best-effort
-			s.Record(ctx, e)
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("audit: sink panicked", "sink", fmt.Sprintf("%T", sink), "panic", r)
+				}
+			}()
+			sink.Record(ctx, e)
 		}()
 	}
 }
