@@ -27,6 +27,11 @@ spec:
     metadata:
       labels: { app: lwauth-idp }
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: idp
           image: lwauth-idp:dev
@@ -48,6 +53,7 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
             capabilities: { drop: ["ALL"] }
 
 ---

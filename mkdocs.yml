@@ -71,12 +71,19 @@ plugins:
   - search
 
 # Files outside the published surface ----------------------------------------
-# Internal pentest artifacts never ship: a contributor who drops a
-# `PENTEST_REPORT_*.md` under docs/ during a review must not have it
-# auto-published just because they forgot to gitignore it. The pattern
-# is matched against the docs_dir-relative path.
+# Internal pentest artifacts and dry-run scratch notes never ship: a
+# contributor who drops a `PENTEST_REPORT_*.md` under docs/ during a
+# review must not have it auto-published just because they forgot to
+# gitignore it. The pattern is matched against the docs_dir-relative
+# path. `internal/**` is for engagement-time scratch (dry-run issue
+# lists, draft GitHub issues) that intentionally cross-reference
+# source-tree files via repo-relative paths and so cannot satisfy the
+# mkdocs strict link check; published cross-references use absolute
+# https://github.com/... URLs as documented in the validation block
+# below.
 exclude_docs: |
   **/PENTEST_REPORT_*.md
+  internal/**
 
 # Validation policy ----------------------------------------------------------
 # Strict by default: any unresolved nav entry, broken in-docs link, or
@@ -107,6 +114,7 @@ nav:
       - cookbook/README.md
       - Gate an upstream service through lwauth: cookbook/gate-upstream-service.md
       - Istio + lwauth + RBAC for gRPC: cookbook/istio-grpc-rbac.md
+      - OAuth2 Authorization Code + PKCE: cookbook/oauth2-pkce.md
       - OpenFGA on existing Envoy: cookbook/openfga-on-envoy.md
       - Rotate HMAC secrets without downtime: cookbook/rotate-hmac.md
   - Modules:

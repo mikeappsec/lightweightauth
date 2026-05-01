@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 )
 
 // buildServerTLS returns a *tls.Config for the HTTP listener, or nil
@@ -55,6 +56,12 @@ func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error)
 // transport-level MaxRecvMsgSize that matches the application-level
 // body cap (F11), so the cap holds whether or not the per-RPC
 // adapters get to it first.
+//
+// F14: also sets keepalive enforcement, connection-age / idle
+// limits, and a MaxConcurrentStreams ceiling so a malicious client
+// can't park thousands of idle TCP/HTTP-2 connections to exhaust
+// file descriptors and goroutines (each accepted gRPC connection
+// spawns a server reader goroutine via transport.http2Server).
 func buildGRPCServerOptions(opts Options) ([]grpc.ServerOption, error) {
 	tlsCfg, err := buildServerTLS(opts.GRPCTLSCertFile, opts.GRPCTLSKeyFile, opts.GRPCTLSClientCAFile)
 	if err != nil {
@@ -74,6 +81,43 @@ func buildGRPCServerOptions(opts Options) ([]grpc.ServerOption, error) {
 	if limit > 0 {
 		out = append(out, grpc.MaxRecvMsgSize(int(limit)))
 	}
+
+	// F14: keepalive enforcement. Refuse clients that ping more
+	// often than MinTime; refuse keepalive on connections with no
+	// active streams (PermitWithoutStream=false). Without these,
+	// a client that opens a connection and never sends an RPC can
+	// hold a server goroutine indefinitely.
+	out = append(out, grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+		MinTime:             nonZeroDur(opts.GRPCKeepaliveMinTime, 30*time.Second),
+		PermitWithoutStream: false,
+	}))
+
+	// F14: server-side keepalive parameters bound the lifetime of
+	// every accepted connection.
+	//   - MaxConnectionIdle: idle connections are closed after this
+	//     window; an attacker holding silent TCP sessions cannot
+	//     accumulate beyond this point.
+	//   - MaxConnectionAge / Grace: rotate connections so a single
+	//     long-lived attacker can't keep one alive forever, and so
+	//     load-balancer hash changes propagate.
+	//   - Time / Timeout: server-initiated PINGs probe liveness so
+	//     half-open TCP (NAT timeouts, peer crash) is reaped.
+	out = append(out, grpc.KeepaliveParams(keepalive.ServerParameters{
+		MaxConnectionIdle:     nonZeroDur(opts.GRPCMaxConnectionIdle, 5*time.Minute),
+		MaxConnectionAge:      nonZeroDur(opts.GRPCMaxConnectionAge, 30*time.Minute),
+		MaxConnectionAgeGrace: nonZeroDur(opts.GRPCMaxConnectionAgeGrace, 30*time.Second),
+		Time:                  nonZeroDur(opts.GRPCKeepaliveTime, 1*time.Minute),
+		Timeout:               nonZeroDur(opts.GRPCKeepaliveTimeout, 20*time.Second),
+	}))
+
+	// F14: cap concurrent HTTP/2 streams per connection. The Go
+	// gRPC default is effectively unbounded (math.MaxUint32); a
+	// single connection can therefore spawn arbitrary handler
+	// goroutines. 1024 is large enough for any legitimate Envoy
+	// ext_authz fan-out and small enough that a per-connection
+	// stream-flood is bounded.
+	out = append(out, grpc.MaxConcurrentStreams(uint32(nonZeroInt(opts.GRPCMaxConcurrentStreams, 1024))))
+
 	return out, nil
 }
 

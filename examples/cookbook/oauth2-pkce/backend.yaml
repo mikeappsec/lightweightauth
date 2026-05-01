@@ -1,6 +1,12 @@
 # Protected upstream — go-httpbin, the tiny test server that echoes
 # whatever it received. The lwauth gateway sits in front; only requests
 # carrying a valid JWT minted by lwauth-idp reach this Pod.
+#
+# The NetworkPolicy at the bottom ensures that at the network layer,
+# only the gateway Pod can reach backend:8080. Without it the HTTP-layer
+# ext_authz guard is the sole defence and any Pod in the namespace (or
+# cluster, depending on default policies) can bypass the gateway and hit
+# httpbin directly.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,6 +20,11 @@ spec:
     metadata:
       labels: { app: backend }
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: httpbin
           image: ghcr.io/mccutchen/go-httpbin:v2.15.0
@@ -23,6 +34,10 @@ spec:
           readinessProbe:
             httpGet: { path: /status/200, port: 8080 }
             periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
 
 ---
 apiVersion: v1
@@ -33,3 +48,26 @@ metadata:
 spec:
   selector: { app: backend }
   ports: [{ name: http, port: 8080, targetPort: 8080 }]
+
+---
+# Network-layer isolation: only the gateway Pod (app.kubernetes.io/
+# component: gateway) may reach backend:8080. All other ingress is
+# denied. This defends against a compromised Pod in the namespace
+# (or a misconfigured Service route) bypassing the ext_authz check
+# by talking to httpbin directly.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-gateway-only
+  namespace: demo
+spec:
+  podSelector:
+    matchLabels: { app: backend }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: gateway
+      ports:
+        - { protocol: TCP, port: 8080 }

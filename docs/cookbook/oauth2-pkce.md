@@ -190,8 +190,9 @@ kind delete cluster --name lwauth   # if you're done with the cluster
 | **Audience pinning** | Tokens for any audience other than `lwauth-demo` are rejected. |
 | **Single-use codes** | `/oauth2/token` deletes the code on exchange regardless of outcome; `TestTokenRejectsReusedCode` proves replays return 400. |
 | **Signature verification** | Tampering the last 4 chars of the JWT fails `ecdsa.Verify` against the JWKS-published P-256 key. |
-| **State / CSRF** | `state=xyz123` is echoed back on the redirect — the script asserts it. A real client would compare against its own session state. |
+| **State / CSRF** | `state` is generated with `secrets.token_urlsafe(16)` per run and verified on the 302 callback — a real client would do the same against a session-stored nonce. |
 | **JWKS hot-load** | The gateway's lwauth process fetches the IdP's JWKS via the cluster-internal Service URL on first verify, caches it with a 10-min refresh. Restart the IdP and the new `kid` flows in within the refresh window. |
+| **Network isolation** | A `NetworkPolicy` restricts backend:8080 ingress to only the gateway Pod (`app.kubernetes.io/component: gateway`). Even if a compromised Pod in the namespace discovers the Service, it cannot bypass ext_authz by talking to httpbin directly (requires a CNI that enforces NetworkPolicy, e.g. Cilium). |
 
 ## Known limitations of v0.5
 
