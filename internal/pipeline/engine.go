@@ -50,7 +50,7 @@ type Engine struct {
 	shadow bool
 
 	// shadowExpiry is the time after which shadow mode is ignored and
-	// the engine enforces normally (PM1). Zero means no expiry.
+	// the engine enforces normally. Zero means no expiry.
 	shadowExpiry time.Time
 
 	// policyVersion is the operator-assigned spec.version tag, carried
@@ -97,7 +97,7 @@ type Options struct {
 	// the full pipeline but always returns allow; disagreements are
 	// emitted to metrics and audit.
 	Shadow bool
-	// ShadowExpiry auto-disables shadow mode after this time (PM1).
+	// ShadowExpiry auto-disables shadow mode after this time.
 	ShadowExpiry time.Time
 	// PolicyVersion is the operator-assigned spec.version tag.
 	PolicyVersion string
@@ -200,7 +200,7 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 		shadowDisagreement = true
 		metrics.Default().ObserveShadowDisagreement(e.policyVersion, r.TenantID)
 		// Override to allow so upstream traffic is not affected.
-		// PM7: Do not expose operational mode in reason string on the wire.
+		// Security: Do not expose operational mode in reason string on the wire.
 		dec = &module.Decision{Allow: true, Status: 200, Reason: ""}
 		evalErr = nil
 	}
@@ -420,7 +420,7 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 	}
 }
 
-// shadowExpired returns true if shadowExpiry is set and has passed (PM1).
+// shadowExpired returns true if shadowExpiry is set and has passed.
 func (e *Engine) shadowExpired() bool {
 	return !e.shadowExpiry.IsZero() && time.Now().After(e.shadowExpiry)
 }
@@ -435,12 +435,12 @@ func (e *Engine) shouldCanary(r *module.Request, id *module.Identity) bool {
 		_, ok := r.Headers[hdr]
 		return ok
 	case e.canarySample == "hash:sub" && id != nil && id.Subject != "":
-		// Sticky by subject hash — FNV-1a for uniform distribution (CAN6).
+		// Sticky by subject hash — FNV-1a for uniform distribution.
 		h := fnv.New32a()
 		h.Write([]byte(id.Subject))
 		return int(h.Sum32()%100) < e.canaryWeight
 	default:
-		// Random by weight using a proper PRNG (PM5).
+		// Random by weight using a proper PRNG.
 		if e.canaryWeight <= 0 || e.canaryWeight >= 100 {
 			return true
 		}

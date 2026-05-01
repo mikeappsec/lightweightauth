@@ -60,7 +60,7 @@ func (s *Sink) Record(ctx context.Context, e *audit.Event) {
 	_ = s.cfg.Producer.Produce(ctx, key, value)
 }
 
-// defaultKey returns a hashed partition key (AUD7: no PII in keys).
+// defaultKey returns a hashed partition key to avoid PII exposure.
 func defaultKey(e *audit.Event) []byte {
 	h := sha256.Sum256([]byte(e.Tenant + "/" + e.Subject))
 	return []byte(hex.EncodeToString(h[:8]))

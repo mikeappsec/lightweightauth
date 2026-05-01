@@ -15,10 +15,10 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/config"
 )
 
-// maxRestoreSize is the maximum bytes accepted from stdin (DR6: 10 MB).
+// maxRestoreSize is the maximum bytes accepted from stdin (10 MB).
 const maxRestoreSize = 10 << 20
 
-// defaultMaxAge is the default staleness threshold for restore warnings (DR4).
+// defaultMaxAge is the default staleness threshold for restore warnings.
 const defaultMaxAge = 24 * time.Hour
 
 // Backup envelope wraps config state with integrity metadata.
@@ -27,12 +27,12 @@ type Backup struct {
 	FormatVersion int `json:"formatVersion"`
 	// CreatedAt is the backup creation timestamp.
 	CreatedAt time.Time `json:"createdAt"`
-	// Checksum is HMAC-SHA256(signingKey, canonicalJSON(config)) hex (DR1).
+	// Checksum is HMAC-SHA256(signingKey, canonicalJSON(config)) hex.
 	// If no signing key is provided, falls back to plain SHA-256 (legacy).
 	Checksum string `json:"checksum"`
-	// Signed indicates the checksum is HMAC-authenticated (DR1).
+	// Signed indicates the checksum is HMAC-authenticated.
 	Signed bool `json:"signed"`
-	// RedactedSecrets indicates secret values were stripped (DR2).
+	// RedactedSecrets indicates secret values were stripped.
 	RedactedSecrets bool `json:"redactedSecrets,omitempty"`
 	// Config is the raw AuthConfig as loaded from YAML.
 	Config *config.AuthConfig `json:"config"`
@@ -42,8 +42,8 @@ func backup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to AuthConfig YAML to back up")
 	outPath := fs.String("out", "", "output file (default: stdout)")
-	keyPath := fs.String("signing-key", "", "path to HMAC signing key file (DR1, recommended)")
-	redact := fs.Bool("redact-secrets", false, "strip secret values from backup (DR2)")
+	keyPath := fs.String("signing-key", "", "path to HMAC signing key file (recommended)")
+	redact := fs.Bool("redact-secrets", false, "strip secret values from backup")
 	_ = fs.Parse(args)
 
 	if *cfgPath == "" {
@@ -63,7 +63,7 @@ func backup(args []string) {
 		os.Exit(1)
 	}
 
-	// DR2: Optionally redact secrets before serialization.
+	// Optionally redact secrets before serialization.
 	if *redact {
 		redactSecrets(ac)
 	}
@@ -78,7 +78,7 @@ func backup(args []string) {
 	var checksum string
 	var signed bool
 	if *keyPath != "" {
-		// DR1: HMAC-SHA256 with operator-provided signing key.
+		// HMAC-SHA256 with operator-provided signing key.
 		key, err := os.ReadFile(*keyPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "backup: read signing key: %v\n", err)
@@ -89,7 +89,7 @@ func backup(args []string) {
 		checksum = hex.EncodeToString(mac.Sum(nil))
 		signed = true
 	} else {
-		fmt.Fprintln(os.Stderr, "backup: WARNING --signing-key not provided; backup is NOT authenticated (see DR1)")
+		fmt.Fprintln(os.Stderr, "backup: WARNING --signing-key not provided; backup is NOT authenticated")
 		hash := sha256.Sum256(cfgJSON)
 		checksum = hex.EncodeToString(hash[:])
 	}
@@ -117,7 +117,7 @@ func backup(args []string) {
 			fmt.Fprintf(os.Stderr, "backup: %v\n", err)
 			os.Exit(1)
 		}
-		// DR5: Use 0o700 for directories.
+		// Security: Use 0o700 for directories (restrict listing).
 		if err := os.MkdirAll(filepath.Dir(*outPath), 0o700); err != nil {
 			fmt.Fprintf(os.Stderr, "backup: mkdir: %v\n", err)
 			os.Exit(1)
@@ -136,9 +136,9 @@ func restore(args []string) {
 	outPath := fs.String("out", "", "output YAML/JSON config path (required)")
 	verify := fs.Bool("verify-only", false, "only verify integrity, don't write")
 	keyPath := fs.String("signing-key", "", "path to HMAC signing key (required for signed backups)")
-	force := fs.Bool("force", false, "write config even if it doesn't compile (DR3)")
-	allowStale := fs.Bool("allow-stale", false, "allow restoring backups older than 24h (DR4)")
-	maxAge := fs.Duration("max-age", defaultMaxAge, "maximum acceptable backup age (DR4)")
+	force := fs.Bool("force", false, "write config even if it doesn't compile")
+	allowStale := fs.Bool("allow-stale", false, "allow restoring backups older than 24h")
+	maxAge := fs.Duration("max-age", defaultMaxAge, "maximum acceptable backup age")
 	_ = fs.Parse(args)
 
 	if *outPath == "" && !*verify {
@@ -149,7 +149,7 @@ func restore(args []string) {
 	var data []byte
 	var err error
 	if *inPath == "" {
-		// DR6: Cap stdin read at maxRestoreSize.
+		// Cap stdin read at maxRestoreSize to prevent OOM.
 		data, err = io.ReadAll(io.LimitReader(os.Stdin, maxRestoreSize+1))
 		if err == nil && len(data) > maxRestoreSize {
 			fmt.Fprintf(os.Stderr, "restore: input exceeds %d bytes limit\n", maxRestoreSize)
@@ -190,7 +190,7 @@ func restore(args []string) {
 		os.Exit(1)
 	}
 
-	// DR1: Verify HMAC if backup is signed.
+	// Verify HMAC if backup is signed.
 	if bk.Signed {
 		if *keyPath == "" {
 			fmt.Fprintln(os.Stderr, "restore: backup is HMAC-signed but --signing-key not provided")
@@ -221,7 +221,7 @@ func restore(args []string) {
 
 	fmt.Fprintf(os.Stderr, "restore: integrity OK (signed:%v, created %s)\n", bk.Signed, bk.CreatedAt.Format(time.RFC3339))
 
-	// DR4: Warn on stale backups.
+	// Warn on stale backups.
 	age := time.Since(bk.CreatedAt)
 	if age > *maxAge {
 		fmt.Fprintf(os.Stderr, "restore: WARNING backup is %s old (created %s)\n", age.Round(time.Minute), bk.CreatedAt.Format(time.RFC3339))
@@ -240,7 +240,7 @@ func restore(args []string) {
 		return
 	}
 
-	// DR3: Abort on compile failure unless --force is set.
+	// Abort on compile failure unless --force is set.
 	if _, err := config.Compile(bk.Config); err != nil {
 		fmt.Fprintf(os.Stderr, "restore: config does not compile: %v\n", err)
 		if !*force {
@@ -256,7 +256,7 @@ func restore(args []string) {
 	}
 
 	out, _ := json.MarshalIndent(bk.Config, "", "  ")
-	// DR5: Use 0o700 for directories.
+	// Security: Use 0o700 for directories (restrict listing).
 	if err := os.MkdirAll(filepath.Dir(*outPath), 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "restore: mkdir: %v\n", err)
 		os.Exit(1)
@@ -268,7 +268,7 @@ func restore(args []string) {
 	fmt.Fprintf(os.Stderr, "restore: wrote %s\n", *outPath)
 }
 
-// redactSecrets strips sensitive values from the config (DR2).
+// redactSecrets strips sensitive values from the config.
 // Only metadata (key IDs, expiry) is preserved.
 func redactSecrets(ac *config.AuthConfig) {
 	for i := range ac.Identifiers {

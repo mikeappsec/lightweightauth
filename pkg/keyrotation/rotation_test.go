@@ -81,7 +81,7 @@ func TestKeySet_PutGetPrune(t *testing.T) {
 		t.Fatal("should get active key")
 	}
 
-	// Get retired key should fail (and auto-prune it per KR3).
+	// Get retired key should fail (and auto-prune it).
 	_, ok = ks.Get("hmac-old")
 	if ok {
 		t.Fatal("should not get retired key")

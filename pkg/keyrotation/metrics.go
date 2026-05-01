@@ -42,7 +42,7 @@ var Metrics = struct {
 
 func init() {
 	// Use Register (not MustRegister) to avoid panics on duplicate
-	// import in tests or plugin binaries (KR7).
+	// import in tests or plugin binaries.
 	prometheus.Register(Metrics.VerifyTotal)  //nolint:errcheck
 	prometheus.Register(Metrics.RefreshTotal) //nolint:errcheck
 	prometheus.Register(Metrics.KeyState)     //nolint:errcheck

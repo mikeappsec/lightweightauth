@@ -66,7 +66,7 @@ func replay() {
 		out = f
 	}
 
-	// PM4: Warn that replay is credential-less.
+	// Security: Warn that replay is credential-less.
 	fmt.Fprintln(os.Stderr, "⚠ Replaying without credentials — identity-dependent authorization differences may not be detected.")
 
 	var total, agree, disagree int
@@ -160,7 +160,7 @@ func loadAuditEvents(path string) ([]audit.Event, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	// PM2: Report and fail on excessive malformed lines.
+	// Report and fail on excessive malformed lines.
 	if skipped > 0 {
 		fmt.Fprintf(os.Stderr, "⚠ %d/%d audit lines skipped (malformed)\n", skipped, totalLines)
 		if totalLines > 0 && float64(skipped)/float64(totalLines) > 0.05 {

@@ -22,18 +22,18 @@ import (
 	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 )
 
-// labelKeyRe matches valid Prometheus/Loki label keys (AUD4).
+// labelKeyRe matches valid Prometheus/Loki label keys.
 var labelKeyRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // Config for the Loki audit sink.
 type Config struct {
 	// URL is the Loki push endpoint. Must use HTTPS unless InsecurePlaintext
-	// is explicitly set (AUD1).
+	// is explicitly set.
 	URL string
 	// InsecurePlaintext allows HTTP URLs (dev/test only). Default false.
 	InsecurePlaintext bool
 	// Labels are static Loki stream labels applied to all events.
-	// Keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$ (AUD4).
+	// Keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$.
 	Labels map[string]string
 	// BatchSize is the max events per push request (default 100).
 	BatchSize int
@@ -43,7 +43,7 @@ type Config struct {
 	TenantID string
 	// Client is the HTTP client to use (default http.DefaultClient).
 	Client *http.Client
-	// MaxConcurrentPushes limits background push goroutines (AUD6). Default 8.
+	// MaxConcurrentPushes limits background push goroutines. Default 8.
 	MaxConcurrentPushes int
 }
 
@@ -56,13 +56,13 @@ type Sink struct {
 	mu    sync.Mutex
 	batch []*audit.Event
 	timer *time.Timer
-	sem   chan struct{} // AUD6: bounded worker pool
+	sem   chan struct{} // bounded worker pool
 }
 
 // New creates a Loki audit sink. Returns an error if the config is invalid.
 // Call Close() on shutdown.
 func New(cfg Config) (*Sink, error) {
-	// AUD1: Validate URL scheme.
+	// Security: Validate URL scheme (HTTPS required).
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("loki: invalid URL: %w", err)
@@ -70,11 +70,11 @@ func New(cfg Config) (*Sink, error) {
 	if u.Scheme != "https" && !cfg.InsecurePlaintext {
 		return nil, fmt.Errorf("loki: URL must use HTTPS (got %q); set InsecurePlaintext=true for dev", u.Scheme)
 	}
-	// AUD2: Block SSRF to metadata/private IPs.
+	// Security: Block SSRF to cloud metadata endpoints.
 	if err := validateLokiHost(u.Hostname()); err != nil {
 		return nil, err
 	}
-	// AUD4: Validate label keys and values.
+	// Validate label keys and values.
 	for k, v := range cfg.Labels {
 		if !labelKeyRe.MatchString(k) {
 			return nil, fmt.Errorf("loki: invalid label key %q (must match %s)", k, labelKeyRe.String())
@@ -136,7 +136,7 @@ func (s *Sink) Close() {
 	}
 }
 
-// asyncPush sends a batch using the bounded worker pool (AUD6).
+// asyncPush sends a batch using the bounded worker pool.
 func (s *Sink) asyncPush(batch []*audit.Event) {
 	select {
 	case s.sem <- struct{}{}:
@@ -195,7 +195,7 @@ func (s *Sink) push(batch []*audit.Event) error {
 	if err != nil {
 		return err
 	}
-	// AUD9: Drain body for HTTP/1.1 connection reuse.
+	// Drain body for HTTP/1.1 connection reuse.
 	io.Copy(io.Discard, resp.Body) //nolint:errcheck
 	resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -204,7 +204,7 @@ func (s *Sink) push(batch []*audit.Event) error {
 	return nil
 }
 
-// --- SSRF protection (AUD2) ------------------------------------------------
+// --- SSRF protection --------------------------------------------------------
 
 func validateLokiHost(host string) error {
 	blocked := []string{

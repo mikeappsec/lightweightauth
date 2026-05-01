@@ -95,11 +95,11 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	var canaryWeight int
 	var canarySample string
 	if ac.Canary != nil {
-		// CAN2: Validate weight in [1, 100].
+		// Validate weight in [1, 100].
 		if ac.Canary.Weight < 1 || ac.Canary.Weight > 100 {
 			return nil, fmt.Errorf("%w: canary.weight must be 1-100, got %d", module.ErrConfig, ac.Canary.Weight)
 		}
-		// CAN4: Validate sample against recognized values.
+		// Validate sample against recognized values.
 		switch {
 		case ac.Canary.Sample == "":
 		case ac.Canary.Sample == "hash:sub":
@@ -107,11 +107,11 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		default:
 			return nil, fmt.Errorf("%w: canary.sample must be \"\", \"hash:sub\", or \"header:<name>\"; got %q", module.ErrConfig, ac.Canary.Sample)
 		}
-		// CAN3: Reject header-based routing with enforce (client-controllable).
+		// Reject header-based routing with enforce (client-controllable).
 		if ac.Canary.Enforce && len(ac.Canary.Sample) > 7 && ac.Canary.Sample[:7] == "header:" {
 			return nil, fmt.Errorf("%w: canary.enforce with sample=\"header:*\" is unsafe — clients can self-select into enforced canary", module.ErrConfig)
 		}
-		// CAN1: Require enforceAfter when enforce is true.
+		// Require enforceAfter when enforce is true.
 		if ac.Canary.Enforce {
 			if ac.Canary.EnforceAfter == "" {
 				return nil, fmt.Errorf("%w: canary.enforce requires canary.enforceAfter (RFC3339) to ensure minimum observation period", module.ErrConfig)
@@ -136,7 +136,7 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		canarySample = ac.Canary.Sample
 	}
 
-	// PM1: Parse shadowExpiry and enforce that shadow mode requires it.
+	// Parse shadowExpiry and enforce that shadow mode requires it.
 	var shadowExpiry time.Time
 	if ac.Mode.IsShadow() {
 		if ac.ShadowExpiry == "" {

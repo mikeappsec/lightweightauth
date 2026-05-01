@@ -42,7 +42,7 @@ func (a *AsyncSink) Record(_ context.Context, e *Event) {
 	case a.ch <- e:
 	default:
 		n := a.dropped.Add(1)
-		// AUD3: Log warning on first drop so operators notice.
+		// Security: Log warning on first drop so operators notice.
 		if a.loggedDrop.CompareAndSwap(false, true) {
 			slog.Warn("audit: async buffer full, dropping events", "dropped", n, "bufSize", cap(a.ch))
 		}

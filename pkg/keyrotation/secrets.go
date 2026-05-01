@@ -116,7 +116,7 @@ func ParseSecretsConfig(raw map[string]any) ([]SecretEntry, error) {
 }
 
 // DecodeSecret attempts base64 standard decode; falls back to raw UTF-8
-// with a warning (KR2).
+// with a warning.
 func DecodeSecret(s string) []byte {
 	decoded, err := base64.StdEncoding.DecodeString(s)
 	if err == nil {
