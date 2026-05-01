@@ -45,6 +45,10 @@ func main() {
 		drift(os.Args[2:])
 	case "replay":
 		replay()
+	case "backup":
+		backup(os.Args[2:])
+	case "restore":
+		restore(os.Args[2:])
 	default:
 		usage()
 	}
@@ -61,6 +65,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  promote --config FILE [--version V]      validate, tag version, and emit GitOps-ready YAML")
 	fmt.Fprintln(os.Stderr, "  rollback --config FILE --to-version V    rewrite spec.version to a previous value")
 	fmt.Fprintln(os.Stderr, "  drift --config FILE --namespace NS       compare local config to live AuthConfig status")
+	fmt.Fprintln(os.Stderr, "  backup --config FILE [--out FILE]        export config snapshot with SHA-256 integrity")
+	fmt.Fprintln(os.Stderr, "  restore --from FILE --out FILE           restore config from backup (verifies checksum)")
 	os.Exit(2)
 }
 
