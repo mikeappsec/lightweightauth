@@ -43,6 +43,8 @@ func main() {
 		rollback(os.Args[2:])
 	case "drift":
 		drift(os.Args[2:])
+	case "replay":
+		replay()
 	default:
 		usage()
 	}

@@ -34,9 +34,10 @@ import (
 type Recorder struct {
 	registry *prometheus.Registry
 
-	decisions       *prometheus.CounterVec
-	decisionLatency *prometheus.HistogramVec
-	identifierTotal *prometheus.CounterVec
+	decisions            *prometheus.CounterVec
+	decisionLatency      *prometheus.HistogramVec
+	identifierTotal      *prometheus.CounterVec
+	shadowDisagreements  *prometheus.CounterVec
 }
 
 // New constructs a Recorder against a fresh Registry. Pass the result to
@@ -60,8 +61,12 @@ func New() *Recorder {
 			Name: "lwauth_identifier_total",
 			Help: "Identifier outcomes (match, no_match, error).",
 		}, []string{"identifier", "outcome"}),
+		shadowDisagreements: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_shadow_disagreement_total",
+			Help: "Requests where a shadow policy would deny but production allows (D2).",
+		}, []string{"policy_version", "tenant"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -132,6 +137,16 @@ func (r *Recorder) ObserveIdentifier(identifier, outcome string) {
 		return
 	}
 	r.identifierTotal.WithLabelValues(identifier, outcome).Inc()
+}
+
+// ObserveShadowDisagreement records a shadow-mode disagreement: the shadow
+// pipeline would deny, but production allows. Tagged by policy_version and
+// tenant so operators can pinpoint which policy revision triggers denials.
+func (r *Recorder) ObserveShadowDisagreement(policyVersion, tenant string) {
+	if r == nil {
+		return
+	}
+	r.shadowDisagreements.WithLabelValues(policyVersion, tenant).Inc()
 }
 
 // RegisterCacheStats wires a named cache's live atomic counters into the

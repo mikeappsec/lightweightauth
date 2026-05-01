@@ -97,6 +97,8 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		IdentifierMode: mode,
 		DecisionCache:  dc,
 		RateLimiter:    lim,
+		Shadow:         ac.Mode.IsShadow(),
+		PolicyVersion:  ac.Version,
 	})
 }
 

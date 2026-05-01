@@ -41,6 +41,15 @@ type Engine struct {
 	// rateLimiter is optional; nil means "no rate limiting". Applied
 	// at the entry of Evaluate (M11 multi-tenancy hardening).
 	rateLimiter *ratelimit.Limiter
+
+	// shadow is true when spec.mode=shadow (D2). The pipeline runs
+	// normally but Evaluate always returns allow; disagreements are
+	// emitted to metrics and audit.
+	shadow bool
+
+	// policyVersion is the operator-assigned spec.version tag, carried
+	// through to metrics and audit events as policy_version (D2).
+	policyVersion string
 }
 
 // IdentifierMode controls multi-identifier composition. See DESIGN.md §2.
@@ -69,6 +78,12 @@ type Options struct {
 	// rejection it returns a 429 deny without consulting modules or
 	// the decision cache.
 	RateLimiter *ratelimit.Limiter
+	// Shadow enables shadow/observe-only mode (D2). The engine runs
+	// the full pipeline but always returns allow; disagreements are
+	// emitted to metrics and audit.
+	Shadow bool
+	// PolicyVersion is the operator-assigned spec.version tag.
+	PolicyVersion string
 }
 
 // New builds an Engine. Returns an error if required components are missing.
@@ -86,6 +101,8 @@ func New(o Options) (*Engine, error) {
 		identifierMode: o.IdentifierMode,
 		decisionCache:  o.DecisionCache,
 		rateLimiter:    o.RateLimiter,
+		shadow:         o.Shadow,
+		policyVersion:  o.PolicyVersion,
 	}, nil
 }
 
@@ -126,9 +143,28 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 		attribute.String("lwauth.path", r.Path),
 		attribute.String("lwauth.tenant", r.TenantID),
 	)
+	if e.policyVersion != "" {
+		span.SetAttributes(attribute.String("lwauth.policy_version", e.policyVersion))
+	}
 
 	dec, id, cacheHit, evalErr := e.evaluate(ctx, r)
-	e.report(ctx, r, id, dec, cacheHit, evalErr, time.Since(start), span)
+
+	// D2: shadow mode — run pipeline but always allow.
+	shadowDisagreement := false
+	if e.shadow && (evalErr != nil || dec == nil || !dec.Allow) {
+		shadowDisagreement = true
+		metrics.Default().ObserveShadowDisagreement(e.policyVersion, r.TenantID)
+		// Override to allow so upstream traffic is not affected.
+		dec = &module.Decision{Allow: true, Status: 200, Reason: "shadow: would deny"}
+		evalErr = nil
+	}
+
+	e.report(ctx, r, id, dec, cacheHit, evalErr, time.Since(start), span, shadowDisagreement)
+
+	if shadowDisagreement {
+		span.SetAttributes(attribute.Bool("lwauth.shadow_disagreement", true))
+	}
+
 	return dec, id, evalErr
 }
 
@@ -200,7 +236,7 @@ func (e *Engine) mutateWithSpan(ctx context.Context, m module.ResponseMutator, r
 // report fans out the terminal decision to metrics + audit + span.
 // Tolerates nil Recorder / Discard sink so tests and embedders pay nothing.
 func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Identity,
-	dec *module.Decision, cacheHit bool, evalErr error, latency time.Duration, span trace.Span) {
+	dec *module.Decision, cacheHit bool, evalErr error, latency time.Duration, span trace.Span, shadowDisagreement bool) {
 
 	outcome := "allow"
 	switch {
@@ -248,6 +284,8 @@ func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Ident
 		LatencyMs:      float64(latency.Microseconds()) / 1000.0,
 		CacheHit:       cacheHit,
 		TraceID:        tracing.TraceIDFromContext(ctx),
+		PolicyVersion:      e.policyVersion,
+		ShadowDisagreement: shadowDisagreement,
 	})
 
 	span.SetAttributes(

@@ -18,6 +18,13 @@ type AuthConfig struct {
 	// status.appliedDigest tracks config identity.
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 
+	// Mode controls enforcement behaviour. "enforce" (default) applies
+	// the pipeline verdict normally. "shadow" runs the full pipeline
+	// but always returns allow — disagreements between shadow and the
+	// previous production verdict are emitted as metrics + audit events
+	// so operators can compare policies before promotion. See D2.
+	Mode PolicyMode `json:"mode,omitempty" yaml:"mode,omitempty"`
+
 	// Hosts limits this config to specific virtual hosts. Empty = match all.
 	Hosts []string `json:"hosts,omitempty" yaml:"hosts,omitempty"`
 
@@ -46,6 +53,23 @@ const (
 	IdentifierFirstMatch IdentifierMode = "firstMatch"
 	IdentifierAllMust    IdentifierMode = "allMust"
 )
+
+// PolicyMode controls how the pipeline's verdict is applied.
+type PolicyMode string
+
+const (
+	// PolicyModeEnforce is the default: the pipeline verdict is authoritative.
+	PolicyModeEnforce PolicyMode = "enforce"
+	// PolicyModeShadow runs the pipeline but always allows; disagreements
+	// are emitted as metrics and audit events. Used for safe rollout of
+	// new policies (D2 — ENT-POLICY-1).
+	PolicyModeShadow PolicyMode = "shadow"
+)
+
+// IsShadow returns true when the config is in shadow/observe-only mode.
+func (m PolicyMode) IsShadow() bool {
+	return m == PolicyModeShadow
+}
 
 // ModuleSpec is the generic shape for any pipeline module: a name, a type
 // (registry key), and a free-form Config map the factory understands.
