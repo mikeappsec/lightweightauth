@@ -95,15 +95,43 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	var canaryWeight int
 	var canarySample string
 	if ac.Canary != nil {
-		if ac.Canary.Weight == 0 {
-			return nil, fmt.Errorf("%w: canary.weight must be explicitly set (1-100)", module.ErrConfig)
+		// CAN2: Validate weight in [1, 100].
+		if ac.Canary.Weight < 1 || ac.Canary.Weight > 100 {
+			return nil, fmt.Errorf("%w: canary.weight must be 1-100, got %d", module.ErrConfig, ac.Canary.Weight)
+		}
+		// CAN4: Validate sample against recognized values.
+		switch {
+		case ac.Canary.Sample == "":
+		case ac.Canary.Sample == "hash:sub":
+		case len(ac.Canary.Sample) > 7 && ac.Canary.Sample[:7] == "header:":
+		default:
+			return nil, fmt.Errorf("%w: canary.sample must be \"\", \"hash:sub\", or \"header:<name>\"; got %q", module.ErrConfig, ac.Canary.Sample)
+		}
+		// CAN3: Reject header-based routing with enforce (client-controllable).
+		if ac.Canary.Enforce && len(ac.Canary.Sample) > 7 && ac.Canary.Sample[:7] == "header:" {
+			return nil, fmt.Errorf("%w: canary.enforce with sample=\"header:*\" is unsafe — clients can self-select into enforced canary", module.ErrConfig)
+		}
+		// CAN1: Require enforceAfter when enforce is true.
+		if ac.Canary.Enforce {
+			if ac.Canary.EnforceAfter == "" {
+				return nil, fmt.Errorf("%w: canary.enforce requires canary.enforceAfter (RFC3339) to ensure minimum observation period", module.ErrConfig)
+			}
+			eat, err := time.Parse(time.RFC3339, ac.Canary.EnforceAfter)
+			if err != nil {
+				return nil, fmt.Errorf("%w: canary.enforceAfter: %v", module.ErrConfig, err)
+			}
+			if time.Now().Before(eat) {
+				// Not yet past the enforce-after time — downgrade to observe-only.
+				canaryEnforce = false
+			} else {
+				canaryEnforce = true
+			}
 		}
 		az, err := module.BuildAuthorizer(ac.Canary.Authorizer.Type, ac.Canary.Authorizer.Name, ac.Canary.Authorizer.Config)
 		if err != nil {
 			return nil, fmt.Errorf("canary authorizer %q: %w", ac.Canary.Authorizer.Name, err)
 		}
 		canaryAz = az
-		canaryEnforce = ac.Canary.Enforce
 		canaryWeight = ac.Canary.Weight
 		canarySample = ac.Canary.Sample
 	}

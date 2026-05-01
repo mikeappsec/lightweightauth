@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	rand2 "math/rand/v2"
 	"time"
 
@@ -181,7 +182,7 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 	// D3: canary evaluation — run concurrently with prod (already done),
 	// compare verdicts, emit agreement metric + audit fields.
 	var canaryAgreement string
-	if e.canary != nil && id != nil && e.shouldCanary(r, id) {
+	if e.canary != nil && e.shouldCanary(r, id) {
 		canaryDec, canaryErr := e.canary.Authorize(ctx, r, id)
 		canaryAgreement = e.classifyAgreement(dec, evalErr, canaryDec, canaryErr)
 		metrics.Default().ObserveCanaryAgreement(e.policyVersion, r.TenantID, canaryAgreement)
@@ -433,13 +434,11 @@ func (e *Engine) shouldCanary(r *module.Request, id *module.Identity) bool {
 		hdr := e.canarySample[7:]
 		_, ok := r.Headers[hdr]
 		return ok
-	case e.canarySample == "hash:sub" && id != nil:
-		// Sticky by subject hash — deterministic slice.
-		h := uint(0)
-		for _, c := range id.Subject {
-			h = h*31 + uint(c)
-		}
-		return int(h%100) < e.canaryWeight
+	case e.canarySample == "hash:sub" && id != nil && id.Subject != "":
+		// Sticky by subject hash — FNV-1a for uniform distribution (CAN6).
+		h := fnv.New32a()
+		h.Write([]byte(id.Subject))
+		return int(h.Sum32()%100) < e.canaryWeight
 	default:
 		// Random by weight using a proper PRNG (PM5).
 		if e.canaryWeight <= 0 || e.canaryWeight >= 100 {

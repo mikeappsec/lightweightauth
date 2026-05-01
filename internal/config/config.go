@@ -56,16 +56,18 @@ type AuthConfig struct {
 // The canary authorizer runs concurrently with production; its verdict is
 // observed (metrics + audit) but only enforced when Enforce is true.
 type CanarySpec struct {
-	// Weight is the percentage of traffic (0-100) that gets canary evaluation.
-	// 0 means evaluate on every request (observe-only is safe). Default 100.
+	// Weight is the percentage of traffic (1-100) that gets canary evaluation.
 	Weight int `json:"weight,omitempty" yaml:"weight,omitempty"`
 	// Sample controls sticky routing. "" = random by weight.
-	// "header:<name>" = route requests with that header to canary.
+	// "header:<name>" = route requests with that header to canary (observe-only).
 	// "hash:sub" = sticky by hash of identity subject.
 	Sample string `json:"sample,omitempty" yaml:"sample,omitempty"`
 	// Enforce when true uses the canary verdict as the real verdict.
-	// Default false (observe-only).
+	// Requires EnforceAfter to be set (CAN1).
 	Enforce bool `json:"enforce,omitempty" yaml:"enforce,omitempty"`
+	// EnforceAfter is an RFC3339 timestamp. Enforce is only honoured after
+	// this time, giving a minimum observation window (CAN1).
+	EnforceAfter string `json:"enforceAfter,omitempty" yaml:"enforceAfter,omitempty"`
 	// Authorizer is the canary authorizer module spec.
 	Authorizer ModuleSpec `json:"authorizer" yaml:"authorizer"`
 }
