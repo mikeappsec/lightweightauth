@@ -9,6 +9,12 @@
 #
 # Docker images (stock + FIPS) are produced by build.yaml which already
 # triggers on v* tags — this workflow adds the binary/Helm/signing layer.
+#
+# Security:
+#   - All third-party actions pinned by full commit SHA.
+#   - Jobs split by least-privilege scope.
+#   - Concurrency guard prevents parallel release races.
+#   - Tag-on-main verification prevents rogue tag releases.
 
 name: release
 
@@ -16,6 +22,11 @@ on:
   push:
     tags:
       - "v*"
+
+# Prevent parallel releases from racing on the same tag or overlapping tags.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -26,23 +37,44 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
+  # Job 0: Verify the tag points to a commit on main
+  # ------------------------------------------------------------------
+  verify-tag:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main branch
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "ERROR: Tag $GITHUB_REF_NAME does not point to a commit on main."
+            echo "Release tags must be created on the main branch."
+            exit 1
+          fi
+          echo "OK: Tag $GITHUB_REF_NAME is on main."
+
+  # ------------------------------------------------------------------
   # Job 1: Build binaries, generate SBOMs, create GitHub Release
   # ------------------------------------------------------------------
   goreleaser:
     runs-on: ubuntu-24.04
+    needs: verify-tag
     permissions:
       contents: write   # create release + upload assets
-      packages: write   # push Helm OCI chart
-      id-token: write   # Cosign keyless signing (Sigstore OIDC)
     outputs:
       version: ${{ steps.version.outputs.version }}
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0  # GoReleaser needs full history for changelog
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
         with:
           go-version: "1.26.2"
           cache: true
@@ -53,7 +85,7 @@ jobs:
 
       # GoReleaser builds cross-platform binaries and creates the
       # GitHub Release with archives and checksums.
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@9ed2f89a662bf1735a48bc8557fd212fa902bebf  # v6.1.0
         id: goreleaser
         with:
           distribution: goreleaser
@@ -73,31 +105,44 @@ jobs:
       # uploaded alongside the release archives so consumers can
       # verify the dependency tree.
       - name: Generate SBOMs (syft)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # v0.18.0
         with:
           path: ./dist
           output-file: dist/lightweightauth_${{ steps.version.outputs.version }}.sbom.json
           format: spdx-json
 
       - name: Upload SBOMs to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda  # v2.2.1
         with:
           files: dist/*.sbom.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Cosign keyless signing of the checksums file. Verifiers can
-      # check provenance without any out-of-band key exchange.
+  # ------------------------------------------------------------------
+  # Job 2: Sign release checksums with Cosign (keyless)
+  # ------------------------------------------------------------------
+  sign:
+    runs-on: ubuntu-24.04
+    needs: goreleaser
+    permissions:
+      contents: write   # upload signature files to release
+      id-token: write   # mint OIDC token for Sigstore
+    steps:
+      - name: Download release asset (checksums.txt)
+        run: |
+          mkdir -p dist
+          gh release download "$GITHUB_REF_NAME" --pattern "checksums.txt" --dir dist/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb  # v3.8.0
 
       - name: Sign checksums with Cosign (keyless)
         run: cosign sign-blob --yes dist/checksums.txt --output-signature dist/checksums.txt.sig --output-certificate dist/checksums.txt.pem
-        env:
-          COSIGN_EXPERIMENTAL: "1"
 
       - name: Upload signature + cert to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda  # v2.2.1
         with:
           files: |
             dist/checksums.txt.sig
@@ -106,7 +151,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ------------------------------------------------------------------
-  # Job 2: SLSA provenance for Go binaries (level 3)
+  # Job 3: SLSA provenance for Go binaries (level 3)
   # ------------------------------------------------------------------
   provenance:
     needs: goreleaser
@@ -120,7 +165,7 @@ jobs:
       upload-assets: true
 
   # ------------------------------------------------------------------
-  # Job 3: Package and push Helm chart as OCI artifact
+  # Job 4: Package and push Helm chart as OCI artifact
   # ------------------------------------------------------------------
   helm:
     runs-on: ubuntu-24.04
@@ -128,11 +173,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write   # Cosign chart signing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112  # v4.3.0
         with:
           version: "v3.16.0"
 
@@ -156,9 +202,7 @@ jobs:
       # Sign the Helm chart OCI artifact with Cosign so consumers can
       # verify the chart was published by this workflow.
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb  # v3.8.0
 
       - name: Sign Helm OCI artifact (keyless)
         run: cosign sign --yes ${{ env.CHART_REPO }}/lightweightauth:${{ needs.goreleaser.outputs.version }}
-        env:
-          COSIGN_EXPERIMENTAL: "1"

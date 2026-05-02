@@ -24,6 +24,9 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      - -buildmode=pie
+      - -trimpath
     ldflags:
       - -s -w
       - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version={{ .Version }}
@@ -42,6 +45,9 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      - -buildmode=pie
+      - -trimpath
     ldflags:
       - -s -w
       - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version={{ .Version }}

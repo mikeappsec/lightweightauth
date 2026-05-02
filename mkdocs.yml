@@ -156,6 +156,7 @@ nav:
       - Design: DESIGN.md
       - Architecture overview: ARCHITECTURE.md
       - HTTP / gRPC API: API.md
+      - Cache architecture: design/cache-architecture.md
       - Milestones: MILESTONES.md
   - Operations:
       - Deployment: DEPLOYMENT.md
@@ -166,6 +167,7 @@ nav:
       - Key rotation: operations/key-rotation.md
       - Policy rotation: operations/policy-rotation.md
       - Disaster recovery: operations/disaster-recovery.md
+      - Supply-chain trust: operations/supply-chain.md
       - Request invariants: testing/request-invariants.md
   - Security:
       - v1.0 security review: security/v1.0-review.md

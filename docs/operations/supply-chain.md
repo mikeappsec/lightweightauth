@@ -71,9 +71,14 @@ to an internal registry.
 ```bash
 VERSION=1.2.0
 
-# Pull from public registry (on a connected host)
-crane pull ghcr.io/mikeappsec/lightweightauth:${VERSION} lwauth-${VERSION}.tar
-crane pull ghcr.io/mikeappsec/lightweightauth:${VERSION}-fips lwauth-${VERSION}-fips.tar
+# Resolve tags to immutable digests first (prevents tag-swap attacks
+# between verification and pull).
+DIGEST=$(crane digest ghcr.io/mikeappsec/lightweightauth:${VERSION})
+DIGEST_FIPS=$(crane digest ghcr.io/mikeappsec/lightweightauth:${VERSION}-fips)
+
+# Pull by digest from public registry (on a connected host)
+crane pull ghcr.io/mikeappsec/lightweightauth@${DIGEST} lwauth-${VERSION}.tar
+crane pull ghcr.io/mikeappsec/lightweightauth@${DIGEST_FIPS} lwauth-${VERSION}-fips.tar
 
 # Transfer tarballs to air-gapped network, then push
 crane push lwauth-${VERSION}.tar registry.internal/lwauth/lightweightauth:${VERSION}
