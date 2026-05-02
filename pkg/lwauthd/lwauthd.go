@@ -133,6 +133,33 @@ type Options struct {
 	WatchNamespace string
 	AuthConfigName string
 
+	// --- Leader election (ENT-HA-1) ---
+
+	// LeaderElection enables controller-runtime leader election for the
+	// CRD reconciler. Only the elected leader runs the reconciler and
+	// publishes config; followers receive config via configstream and
+	// serve auth requests (active/active).
+	LeaderElection bool
+	// LeaderElectionID is the Lease resource name. Default "lwauth-controller-leader".
+	LeaderElectionID string
+	// LeaderElectionNamespace overrides where the Lease lives. Defaults
+	// to WatchNamespace.
+	LeaderElectionNamespace string
+	// LeaseDuration, RenewDeadline, RetryPeriod tune election timing.
+	// Defaults: 15s / 10s / 2s (controller-runtime defaults).
+	LeaseDuration time.Duration
+	RenewDeadline time.Duration
+	RetryPeriod   time.Duration
+
+	// ConfigStreamAddr is the gRPC address of the leader's configstream
+	// endpoint (e.g. "lwauth-headless:9001"). When LeaderElection is
+	// enabled and this pod is not the leader, it subscribes here to
+	// receive config snapshots. Required for active/active HA.
+	ConfigStreamAddr string
+	// ConfigStreamNodeID identifies this pod in the configstream
+	// subscription. Defaults to hostname.
+	ConfigStreamNodeID string
+
 	Logger *slog.Logger
 }
 
@@ -366,6 +393,11 @@ func Main() {
 	disableOpenAPI := flag.Bool("disable-http-openapi", false, "remove /openapi.json and /openapi.yaml from the HTTP mux")
 	maxBody := flag.Int64("max-request-bytes", 0, "cap on /v1/authorize body bytes (0 -> 1 MiB)")
 	printBuildInfo := flag.Bool("print-build-info", false, "print build attributes (version, commit, go runtime, FIPS mode) and exit")
+	leaderElect := flag.Bool("leader-election", false, "enable controller leader election (HA mode)")
+	leaderID := flag.String("leader-election-id", "lwauth-controller-leader", "Lease resource name for leader election")
+	leaderNS := flag.String("leader-election-namespace", "", "namespace for Lease (defaults to --watch-namespace)")
+	configStreamAddr := flag.String("config-stream-addr", "", "gRPC address for follower config subscription (e.g. lwauth-headless:9001)")
+	configStreamNode := flag.String("config-stream-node-id", "", "node ID for configstream subscription (default: hostname)")
 	flag.Parse()
 	if *printBuildInfo {
 		// Stable single-line format `version=... commit=... go_version=... fips_enabled=...`,
@@ -393,6 +425,11 @@ func Main() {
 		DisableHTTPMetrics:   *disableMetrics,
 		DisableHTTPOpenAPI:   *disableOpenAPI,
 		MaxRequestBytes:      *maxBody,
+		LeaderElection:       *leaderElect,
+		LeaderElectionID:     *leaderID,
+		LeaderElectionNamespace: *leaderNS,
+		ConfigStreamAddr:     *configStreamAddr,
+		ConfigStreamNodeID:   *configStreamNode,
 	}); err != nil {
 		slog.Error("lwauthd", "err", err)
 		os.Exit(1)
