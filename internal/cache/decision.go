@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +18,9 @@ import (
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
+// hmacKeySize is the size of the per-instance HMAC signing key.
+const hmacKeySize = 32
+
 // Decision is the opt-in cache that wraps the authorize step. It coalesces
 // concurrent misses with singleflight, applies a positive TTL on allow and
 // a negative TTL on deny, and is keyed by the (tenant, subject, request
@@ -25,6 +30,10 @@ import (
 // Upstream errors are NEVER cached: a transient outage of an external
 // authorizer (OPA bundle, OpenFGA, introspection) must not freeze a deny
 // in the cache.
+//
+// Values stored in the backend are HMAC-SHA256 signed with a per-instance
+// ephemeral key so that a compromised shared store (e.g. Valkey) cannot
+// inject forged allow decisions.
 type Decision struct {
 	backend     Backend
 	positiveTTL time.Duration
@@ -32,6 +41,10 @@ type Decision struct {
 	keyFields   []string
 	stats       *Stats
 	sf          singleflight.Group
+	// hmacKey is a random per-instance secret used to sign cached values.
+	// Generated at construction time; effectively invalidates stale L2
+	// entries from prior instances (safe — they're a cache, not a store).
+	hmacKey []byte
 }
 
 // DecisionOptions parameterises a decision cache. A nil DecisionOptions or
@@ -40,6 +53,16 @@ type Decision struct {
 type DecisionOptions struct {
 	Size        int
 	PositiveTTL time.Duration
+	// NegativeTTL is how long deny decisions are cached. Default 5s.
+	//
+	// Trade-off: during this window, repeated requests with the same
+	// cache key return a cached deny WITHOUT consulting the authorizer.
+	// This prevents stampede on the authorizer for repeated failures,
+	// but also means the external authorizer's own rate-limit or lockout
+	// counters will not increment for these cached denials. Operators
+	// should keep this short (≤10s) and rely on the pipeline's own
+	// rate limiter for brute-force protection rather than the external
+	// authorizer's counters.
 	NegativeTTL time.Duration
 	// KeyFields list which Request / Identity fields contribute to the
 	// cache key. Recognised values:
@@ -83,12 +106,17 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 		}
 	}
 	sort.Strings(keys) // deterministic key ordering
+	hk := make([]byte, hmacKeySize)
+	if _, err := rand.Read(hk); err != nil {
+		return nil, fmt.Errorf("decision cache: generate hmac key: %w", err)
+	}
 	return &Decision{
 		backend:     backend,
 		positiveTTL: o.PositiveTTL,
 		negativeTTL: o.NegativeTTL,
 		keyFields:   keys,
 		stats:       stats,
+		hmacKey:     hk,
 	}, nil
 }
 
@@ -123,12 +151,17 @@ func NewDecisionWithTiered(o DecisionOptions, tiered *Tiered, tieredStats *Tiere
 		}
 	}
 	sort.Strings(keys)
+	hk := make([]byte, hmacKeySize)
+	if _, err := rand.Read(hk); err != nil {
+		return nil, fmt.Errorf("decision cache: generate hmac key: %w", err)
+	}
 	return &Decision{
 		backend:     tiered,
 		positiveTTL: o.PositiveTTL,
 		negativeTTL: o.NegativeTTL,
 		keyFields:   keys,
 		stats:       aggStats,
+		hmacKey:     hk,
 	}, nil
 }
 
@@ -151,7 +184,7 @@ func (d *Decision) Key(r *module.Request, id *module.Identity) string {
 		return ""
 	}
 	h := sha256.Sum256([]byte(strings.Join(parts, "|")))
-	return hex.EncodeToString(h[:16])
+	return hex.EncodeToString(h[:]) // full 256-bit key — no truncation
 }
 
 // Do returns a Decision either from the cache or by calling fn (singleflight
@@ -164,11 +197,15 @@ func (d *Decision) Do(ctx context.Context, key string, fn func() (*module.Decisi
 		return dec, false, err
 	}
 	if raw, ok, _ := d.backend.Get(ctx, key); ok {
-		var dec module.Decision
-		if err := json.Unmarshal(raw, &dec); err == nil {
-			return &dec, true, nil
+		payload, valid := d.verifyHMAC(raw)
+		if valid {
+			var dec module.Decision
+			if err := json.Unmarshal(payload, &dec); err == nil {
+				return &dec, true, nil
+			}
 		}
-		// fall through on decode error
+		// Invalid HMAC or decode error — treat as miss (entry is tampered
+		// or from a prior instance). Fall through to re-evaluate.
 	}
 	v, err, _ := d.sf.Do(key, func() (any, error) {
 		dec, err := fn()
@@ -178,11 +215,12 @@ func (d *Decision) Do(ctx context.Context, key string, fn func() (*module.Decisi
 		// Never cache upstream/transient errors; we already returned them
 		// above. Cache the decision the authorizer produced.
 		raw, _ := json.Marshal(dec)
+		signed := d.signHMAC(raw)
 		ttl := d.positiveTTL
 		if !dec.Allow {
 			ttl = d.negativeTTL
 		}
-		_ = d.backend.Set(ctx, key, raw, ttl)
+		_ = d.backend.Set(ctx, key, signed, ttl)
 		return dec, nil
 	})
 	if err != nil {
@@ -193,6 +231,35 @@ func (d *Decision) Do(ctx context.Context, key string, fn func() (*module.Decisi
 		return nil, false, err
 	}
 	return v.(*module.Decision), false, nil
+}
+
+// signHMAC appends a 32-byte HMAC-SHA256 tag to the payload.
+// Wire format: [payload...][32-byte MAC]
+func (d *Decision) signHMAC(payload []byte) []byte {
+	mac := hmac.New(sha256.New, d.hmacKey)
+	mac.Write(payload)
+	tag := mac.Sum(nil)
+	out := make([]byte, len(payload)+len(tag))
+	copy(out, payload)
+	copy(out[len(payload):], tag)
+	return out
+}
+
+// verifyHMAC splits payload and tag, verifies the HMAC, and returns the
+// payload if valid. Returns (nil, false) on tampered/short data.
+func (d *Decision) verifyHMAC(data []byte) ([]byte, bool) {
+	if len(data) <= sha256.Size {
+		return nil, false
+	}
+	payload := data[:len(data)-sha256.Size]
+	tag := data[len(data)-sha256.Size:]
+	mac := hmac.New(sha256.New, d.hmacKey)
+	mac.Write(payload)
+	expected := mac.Sum(nil)
+	if !hmac.Equal(tag, expected) {
+		return nil, false
+	}
+	return payload, true
 }
 
 // isValidKeyField mirrors the switch in resolveField. Anything not listed

@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+// defaultL1MaxTTL is the maximum time an L1 write-back entry lives before
+// it must be re-validated against L2. This prevents stale entries persisting
+// indefinitely under low-cardinality workloads where LRU eviction is rare.
+const defaultL1MaxTTL = 60 * time.Second
+
 // TieredStats holds per-layer hit/miss counters for a two-tier cache.
 // These are separate from the aggregate Stats so operators can distinguish
 // L1 (in-process) hits from L2 (shared/Valkey) hits.
@@ -34,6 +39,11 @@ type Tiered struct {
 	// metrics registration (RegisterCacheStats) uses. A hit on either
 	// layer is an aggregate hit; a miss on both is an aggregate miss.
 	aggStats *Stats
+	// l1MaxTTL bounds how long an L1 write-back entry lives. Prevents
+	// stale entries persisting after L2 expiry or invalidation. A race
+	// between Get (write-back) and Delete is bounded by this TTL rather
+	// than living indefinitely until LRU eviction.
+	l1MaxTTL time.Duration
 }
 
 // TieredOptions configures a two-tier backend.
@@ -47,6 +57,10 @@ type TieredOptions struct {
 	// AggStats receives aggregate counters compatible with RegisterCacheStats.
 	// If nil, a new Stats is allocated.
 	AggStats *Stats
+	// L1MaxTTL caps the lifetime of L1 write-back entries. This bounds
+	// the stale window when a concurrent Delete races with a read-through
+	// write-back. Zero uses defaultL1MaxTTL (60s).
+	L1MaxTTL time.Duration
 }
 
 // NewTiered constructs a two-tier read-through/write-through Backend.
@@ -65,7 +79,11 @@ func NewTiered(opts TieredOptions) (*Tiered, error) {
 	if agg == nil {
 		agg = &Stats{}
 	}
-	return &Tiered{l1: opts.L1, l2: opts.L2, stats: ts, aggStats: agg}, nil
+	l1Max := opts.L1MaxTTL
+	if l1Max <= 0 {
+		l1Max = defaultL1MaxTTL
+	}
+	return &Tiered{l1: opts.L1, l2: opts.L2, stats: ts, aggStats: agg, l1MaxTTL: l1Max}, nil
 }
 
 var (
@@ -108,12 +126,12 @@ func (t *Tiered) Get(ctx context.Context, key string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
-	// L2 hit → read-through: write back to L1 with no TTL (L1 uses its
-	// own size-cap eviction; the authoritative TTL lives in L2).
+	// L2 hit → read-through: write back to L1 with bounded TTL so stale
+	// entries expire even if LRU eviction doesn't reach them. This also
+	// bounds the race window between a concurrent Get write-back and Delete.
 	t.stats.L2Hits.Add(1)
 	t.aggStats.Hits.Add(1)
-	// Best-effort write-back; ignore L1 set errors (in-memory LRU won't fail).
-	_ = t.l1.Set(ctx, key, val, 0)
+	_ = t.l1.Set(ctx, key, val, t.l1MaxTTL)
 	return val, true, nil
 }
 
@@ -140,7 +158,8 @@ func (t *Tiered) AggStats() *Stats { return t.aggStats }
 
 // Warm preloads L1 from L2 for the given keys. This is called on pod
 // startup so new replicas avoid a cold L1 causing p99 misses. Keys that
-// are missing or expired in L2 are silently skipped.
+// are missing or expired in L2 are silently skipped. Entries are stored
+// with l1MaxTTL to ensure they expire and are re-validated.
 func (t *Tiered) Warm(ctx context.Context, keys []string) (loaded int) {
 	for _, key := range keys {
 		if ctx.Err() != nil {
@@ -150,7 +169,7 @@ func (t *Tiered) Warm(ctx context.Context, keys []string) (loaded int) {
 		if err != nil || !ok {
 			continue
 		}
-		_ = t.l1.Set(ctx, key, val, 0)
+		_ = t.l1.Set(ctx, key, val, t.l1MaxTTL)
 		loaded++
 	}
 	return loaded

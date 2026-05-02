@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -81,6 +82,22 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	dc, err := buildDecisionCache(ac.Cache)
 	if err != nil {
 		return nil, err
+	}
+	// Warn if multi-tenant config omits "tenant" from cache key fields.
+	// Without "tenant" in the key, one tenant's cached decision may serve
+	// another tenant's request (cross-tenant data leakage via cache).
+	if dc != nil && ac.TenantID != "" && ac.Cache != nil {
+		hasTenant := false
+		for _, k := range ac.Cache.Key {
+			if k == "tenant" {
+				hasTenant = true
+				break
+			}
+		}
+		if !hasTenant {
+			slog.Warn("cache.key omits 'tenant' in a multi-tenant config — cached decisions may be shared across tenants",
+				"tenantId", ac.TenantID)
+		}
 	}
 	var lim *ratelimit.Limiter
 	if ac.RateLimit != nil {
