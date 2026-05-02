@@ -184,6 +184,20 @@ func (e *Engine) DecisionCacheTieredStats() *cache.TieredStats {
 	return t.TieredLayerStats()
 }
 
+// InvalidateCacheByTags evicts all decision cache entries matching any of
+// the given tags. If tags is nil/empty, invalidates all entries.
+// Returns the number of evicted entries. (E3)
+func (e *Engine) InvalidateCacheByTags(ctx context.Context, tags []string) int {
+	if e == nil || e.decisionCache == nil {
+		return 0
+	}
+	if len(tags) == 0 {
+		e.decisionCache.InvalidateAll(ctx)
+		return -1 // unknown count for full flush
+	}
+	return e.decisionCache.InvalidateByTags(ctx, tags)
+}
+
 // Evaluate runs the full identify → authorize → mutate pipeline.
 //
 // On allow, the returned Decision has Allow=true and any headers the
@@ -457,9 +471,27 @@ func (e *Engine) runAuthorize(ctx context.Context, r *module.Request, id *module
 		return dec, false, err
 	}
 	key := e.decisionCache.Key(r, id)
-	return e.decisionCache.Do(ctx, key, func() (*module.Decision, error) {
+	tags := e.deriveCacheTags(r, id)
+	return e.decisionCache.Do(ctx, key, tags, func() (*module.Decision, error) {
 		return e.authorizer.Authorize(ctx, r, id)
 	})
+}
+
+// deriveCacheTags produces the tag set for a cache entry. Tags enable
+// targeted invalidation (E3): e.g. invalidate all entries for tenant "acme"
+// or subject "user:42" without flushing the entire cache.
+func (e *Engine) deriveCacheTags(r *module.Request, id *module.Identity) []string {
+	var tags []string
+	if r.TenantID != "" {
+		tags = append(tags, "tenant:"+r.TenantID)
+	}
+	if id != nil && id.Subject != "" {
+		tags = append(tags, "subject:"+id.Subject)
+	}
+	if e.policyVersion != "" {
+		tags = append(tags, "policy_version:"+e.policyVersion)
+	}
+	return tags
 }
 
 func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Identity, error) {

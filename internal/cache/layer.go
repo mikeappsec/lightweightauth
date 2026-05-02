@@ -27,9 +27,10 @@ type Backend interface {
 
 // Stats are the per-cache counters exposed via Prometheus.
 type Stats struct {
-	Hits      atomic.Uint64
-	Misses    atomic.Uint64
-	Evictions atomic.Uint64
+	Hits        atomic.Uint64
+	Misses      atomic.Uint64
+	Evictions   atomic.Uint64
+	StaleServed atomic.Uint64 // E3: stale entries served during upstream outages
 }
 
 // Layer bundles the three caches the pipeline shares. Construct via New

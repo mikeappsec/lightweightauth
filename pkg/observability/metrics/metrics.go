@@ -40,6 +40,7 @@ type Recorder struct {
 	shadowDisagreements  *prometheus.CounterVec
 	canaryAgreements     *prometheus.CounterVec
 	revocationChecks     *prometheus.CounterVec
+	cacheStaleServed     *prometheus.CounterVec
 }
 
 // New constructs a Recorder against a fresh Registry. Pass the result to
@@ -75,8 +76,12 @@ func New() *Recorder {
 			Name: "lwauth_revocation_checks_total",
 			Help: "Revocation checks performed by the pipeline (E2).",
 		}, []string{"tenant", "result"}),
+		cacheStaleServed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_cache_stale_served_total",
+			Help: "Stale cache entries served during upstream outages (E3).",
+		}, []string{"tenant", "decision"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -175,6 +180,21 @@ func (r *Recorder) ObserveRevocationCheck(tenant, result string) {
 		return
 	}
 	r.revocationChecks.WithLabelValues(tenant, result).Inc()
+}
+
+// ObserveCacheStaleServed records a stale cache entry being served during
+// an upstream outage (E3). decision is "allow" or "deny".
+func (r *Recorder) ObserveCacheStaleServed(tenant, decision string) {
+	if r == nil {
+		return
+	}
+	r.cacheStaleServed.WithLabelValues(tenant, decision).Inc()
+}
+
+// RecordCacheStaleServed is a package-level convenience that delegates to
+// Default().ObserveCacheStaleServed.
+func RecordCacheStaleServed(tenant, decision string) {
+	Default().ObserveCacheStaleServed(tenant, decision)
 }
 
 // RecordRevocation is a package-level convenience that delegates to

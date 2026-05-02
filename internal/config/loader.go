@@ -213,6 +213,14 @@ func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
 		}
 	}
 
+	var maxStale time.Duration
+	if spec.MaxStaleness != "" {
+		maxStale, err = time.ParseDuration(spec.MaxStaleness)
+		if err != nil {
+			return nil, fmt.Errorf("%w: cache.maxStaleness: %v", module.ErrConfig, err)
+		}
+	}
+
 	backend := spec.Backend
 	// "tiered" is handled specially: we build L1 + L2 ourselves and
 	// pass a pre-built tiered.Backend into the Decision cache.
@@ -226,16 +234,20 @@ func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
 			return nil, err
 		}
 		return cache.NewDecisionWithTiered(cache.DecisionOptions{
-			PositiveTTL: pos,
-			NegativeTTL: neg,
-			KeyFields:   spec.Key,
+			PositiveTTL:       pos,
+			NegativeTTL:       neg,
+			KeyFields:         spec.Key,
+			ServeStaleOnError: spec.ServeStaleOnError,
+			MaxStaleness:      maxStale,
 		}, tieredBackend, tieredStats, aggStats)
 	}
 
 	return cache.NewDecision(cache.DecisionOptions{
-		PositiveTTL: pos,
-		NegativeTTL: neg,
-		KeyFields:   spec.Key,
+		PositiveTTL:       pos,
+		NegativeTTL:       neg,
+		KeyFields:         spec.Key,
+		ServeStaleOnError: spec.ServeStaleOnError,
+		MaxStaleness:      maxStale,
 		Backend: cache.BackendSpec{
 			Type:      spec.Backend,
 			Addr:      spec.Addr,

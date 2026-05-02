@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,10 @@ const (
 // 10 requests/second per IP with a burst of 20.
 var adminLimiter = httputil.NewTokenBucketLimiter(10, 20)
 
+// flushLimiter is a stricter rate limiter for scope=all invalidation.
+// 1 request per 60 seconds per IP with burst of 2 — prevents cache-busting DoS.
+var flushLimiter = httputil.NewTokenBucketLimiter(1.0/60.0, 2)
+
 // validScopes is the allowlist for cache invalidation scope (TC7).
 var validScopes = map[string]bool{
 	"all":     true,
@@ -42,6 +47,10 @@ type AdminDeps struct {
 
 	// EventBus is the cross-replica event bus. Nil if no Valkey pub/sub.
 	EventBus *eventbus.Bus
+
+	// InvalidateFunc is called for local cache invalidation (E3).
+	// Receives context and tags (nil = flush all). Returns evicted count.
+	InvalidateFunc func(ctx context.Context, tags []string) int
 }
 
 // NewAdminMux returns an http.Handler that serves all /v1/admin/ endpoints,
@@ -72,7 +81,7 @@ func NewAdminMux(mw *Middleware, deps *AdminDeps) http.Handler {
 
 	// POST /v1/admin/cache/invalidate — manual cache invalidation.
 	mux.Handle("/v1/admin/cache/invalidate", rl(mw.Require(VerbInvalidateCache,
-		http.HandlerFunc(handleCacheInvalidate))))
+		http.HandlerFunc(makeInvalidateHandler(deps)))))
 
 	// POST /v1/admin/revoke — token/session revocation (E2).
 	mux.Handle("/v1/admin/revoke", rl(mw.Require(VerbRevokeToken,
@@ -102,42 +111,128 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleCacheInvalidate accepts a cache invalidation request.
 // Body: {"scope": "tenant"|"subject"|"all", "tenant": "...", "subject": "..."}
-// Full implementation connects to the cache backend in E1/E3.
-func handleCacheInvalidate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAdminError(w, http.StatusMethodNotAllowed, "POST only")
-		return
-	}
-	var req struct {
-		Scope   string `json:"scope"`   // "all", "tenant", "subject"
-		Tenant  string `json:"tenant"`
-		Subject string `json:"subject"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAdminError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.Scope == "" {
-		req.Scope = "all"
-	}
-	// TC7: validate scope against allowlist.
-	if !validScopes[req.Scope] {
-		writeAdminError(w, http.StatusBadRequest, "invalid scope: must be one of all, tenant, subject")
-		return
-	}
+// Publishes an EventInvalidate on the event bus so all replicas evict
+// matching cache entries by tag (E3).
+func makeInvalidateHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeAdminError(w, http.StatusMethodNotAllowed, "POST only")
+			return
+		}
+		var req struct {
+			Scope   string `json:"scope"`   // "all", "tenant", "subject"
+			Tenant  string `json:"tenant"`
+			Subject string `json:"subject"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, adminBodyLimit)).Decode(&req); err != nil {
+			writeAdminError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.Scope == "" {
+			req.Scope = "all"
+		}
+		// TC7: validate scope against allowlist.
+		if !validScopes[req.Scope] {
+			writeAdminError(w, http.StatusBadRequest, "invalid scope: must be one of all, tenant, subject")
+			return
+		}
 
-	// TODO(ENT-CACHE-2): wire into cache.Backend tag-based invalidation.
-	// For now, log and acknowledge.
-	id := IdentityFromContext(r.Context())
-	_ = id // will be used in audit
+		// TC4: stricter rate limit for scope=all (cache-busting DoS prevention).
+		if req.Scope == "all" {
+			key := httputil.IPKeyFunc(r)
+			if !flushLimiter.Allow(key) {
+				writeAdminError(w, http.StatusTooManyRequests, "scope=all rate limit exceeded (max 1/60s)")
+				return
+			}
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"accepted": true,
-		"scope":    req.Scope,
-		"tenant":   req.Tenant,
-		"subject":  req.Subject,
-	})
+		// Validate scope-specific fields.
+		switch req.Scope {
+		case "tenant":
+			if req.Tenant == "" {
+				writeAdminError(w, http.StatusBadRequest, "tenant field required for scope=tenant")
+				return
+			}
+			if len(req.Tenant) > maxTenantLength {
+				writeAdminError(w, http.StatusBadRequest, "tenant too long")
+				return
+			}
+			// TC6: character-set validation (consistent with revoke handler).
+			if !isPrintableASCII(req.Tenant) {
+				writeAdminError(w, http.StatusBadRequest, "tenant contains invalid characters")
+				return
+			}
+		case "subject":
+			if req.Subject == "" {
+				writeAdminError(w, http.StatusBadRequest, "subject field required for scope=subject")
+				return
+			}
+			if len(req.Subject) > maxSubjectLength {
+				writeAdminError(w, http.StatusBadRequest, "subject too long")
+				return
+			}
+			// TC6: character-set validation (consistent with revoke handler).
+			if !isPrintableASCII(req.Subject) {
+				writeAdminError(w, http.StatusBadRequest, "subject contains invalid characters")
+				return
+			}
+		}
+
+		// Build invalidation tags from scope.
+		var tags []string
+		switch req.Scope {
+		case "tenant":
+			tags = []string{"tenant:" + req.Tenant}
+		case "subject":
+			tags = []string{"subject:" + req.Subject}
+		case "all":
+			// "all" scope uses a nil tags slice — the handler interprets
+			// this as a full cache flush rather than tag-based eviction.
+		}
+
+		// TC8: Perform local invalidation regardless of bus availability.
+		localEvicted := 0
+		if deps.InvalidateFunc != nil {
+			localEvicted = deps.InvalidateFunc(r.Context(), tags)
+		}
+
+		// Publish via event bus for cross-replica fan-out.
+		remotePublished := false
+		if deps.EventBus != nil {
+			evt := eventbus.Event{
+				Type: eventbus.EventInvalidate,
+				Tags: tags,
+			}
+			if err := deps.EventBus.Publish(r.Context(), evt); err != nil {
+				slog.Warn("admin: failed to publish invalidation event", "err", err)
+			} else {
+				remotePublished = true
+			}
+		}
+
+		// TC3: Formal audit event for cache invalidation (consistent with revoke).
+		adminID := IdentityFromContext(r.Context())
+		audit.Default().Record(r.Context(), &audit.Event{
+			Timestamp:      time.Now(),
+			Tenant:         req.Tenant,
+			Subject:        req.Subject,
+			IdentitySource: "admin:" + adminID.Subject,
+			Decision:       "cache_invalidate",
+			DenyReason:     "scope=" + req.Scope,
+			Method:         r.Method,
+			Path:           r.URL.Path,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accepted":         true,
+			"scope":            req.Scope,
+			"tenant":           req.Tenant,
+			"subject":          req.Subject,
+			"local_evicted":    localEvicted,
+			"remote_published": remotePublished,
+		})
+	}
 }
 
 // makeRevokeHandler returns a handler that writes to the revocation store (E2).

@@ -134,6 +134,15 @@ type CacheSpec struct {
 	// L1Size is the maximum number of entries in the in-process LRU tier
 	// when backend is "tiered". Default 10 000. Ignored for other backends.
 	L1Size int `json:"l1Size,omitempty" yaml:"l1Size,omitempty"`
+
+	// ServeStaleOnError enables stale-while-revalidate (E3). When the
+	// authorizer returns an upstream error and a stale cached decision
+	// exists, serve the stale entry rather than returning a 503.
+	ServeStaleOnError bool `json:"serveStaleOnError,omitempty" yaml:"serveStaleOnError,omitempty"`
+
+	// MaxStaleness caps how far past expiry a stale entry can be and still
+	// be served. Zero means unlimited. Example: "5m", "30m".
+	MaxStaleness string `json:"maxStaleness,omitempty" yaml:"maxStaleness,omitempty"`
 }
 
 // RevocationSpec configures the opt-in credential revocation store (E2).
