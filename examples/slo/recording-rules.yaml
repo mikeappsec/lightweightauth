@@ -69,31 +69,35 @@ spec:
       rules:
         # Ratio of rate-limited requests to total (per tenant).
         # Useful for SLO: "quota denial ratio < 1%".
+        # The `> 0` filter on the denominator prevents NaN for idle tenants.
         - record: lwauth:ratelimit_ratio_by_tenant:rate5m
           expr: |
             sum by (tenant) (rate(lwauth_ratelimit_denied_total[5m]))
             /
-            (sum by (tenant) (rate(lwauth_decisions_total[5m])) + sum by (tenant) (rate(lwauth_ratelimit_denied_total[5m])))
+            (
+              (sum by (tenant) (rate(lwauth_decisions_total[5m])) + sum by (tenant) (rate(lwauth_ratelimit_denied_total[5m])))
+              > 0
+            )
 
     # ── Error Budget ──────────────────────────────────────────────────
+    # Uses 1-day increase recordings aggregated by the operator's long-
+    # term storage (Thanos/Mimir) rather than raw 30d increase() which
+    # is unreliable across Prometheus restarts and compaction.
     - name: lwauth.slo.budget
       interval: 1m
       rules:
-        # 30-day error budget remaining (availability SLO = 99.9%).
-        # 1 - (errors_30d / (total_30d * (1 - 0.999)))
-        - record: lwauth:error_budget_remaining:30d
-          expr: |
-            1 - (
-              sum(increase(lwauth_decisions_total{outcome="error"}[30d]))
-              /
-              (sum(increase(lwauth_decisions_total[30d])) * 0.001)
-            )
+        # Daily error count — store this in long-term TSDB for 30d+ retention.
+        - record: lwauth:errors:increase1d
+          expr: sum(increase(lwauth_decisions_total{outcome="error"}[1d]))
 
-        # Per-tenant error budget remaining.
-        - record: lwauth:error_budget_remaining_by_tenant:30d
-          expr: |
-            1 - (
-              sum by (tenant) (increase(lwauth_decisions_total{outcome="error"}[30d]))
-              /
-              (sum by (tenant) (increase(lwauth_decisions_total[30d])) * 0.001)
-            )
+        # Daily total request count.
+        - record: lwauth:requests:increase1d
+          expr: sum(increase(lwauth_decisions_total[1d]))
+
+        # Per-tenant daily error count.
+        - record: lwauth:errors_by_tenant:increase1d
+          expr: sum by (tenant) (increase(lwauth_decisions_total{outcome="error"}[1d]))
+
+        # Per-tenant daily total.
+        - record: lwauth:requests_by_tenant:increase1d
+          expr: sum by (tenant) (increase(lwauth_decisions_total[1d]))

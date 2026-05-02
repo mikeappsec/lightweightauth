@@ -110,6 +110,7 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: rateLimit: %v", module.ErrConfig, err)
 		}
+		ratelimit.LogUnlimitedOverrides(slog.Default(), *ac.RateLimit)
 	}
 	var canaryAz module.Authorizer
 	var canaryEnforce bool

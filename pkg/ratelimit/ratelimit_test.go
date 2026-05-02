@@ -131,16 +131,16 @@ func TestOverrides_DisabledOverridePassesThrough(t *testing.T) {
 	l := MustNew(Spec{
 		PerTenant: Bucket{RPS: 1, Burst: 1},
 		Overrides: map[string]Bucket{
-			// RPS=0 means disabled for this tenant → always allow.
-			"vip": {RPS: 0, Burst: 0},
+			// Unlimited: true explicitly grants unlimited access.
+			"vip": {RPS: 0, Burst: 0, Unlimited: true},
 		},
 	})
 	l.now = func() time.Time { return now }
 
-	// "vip" override has RPS=0 which means disabled (no rate limiting).
+	// "vip" override has Unlimited: true → always allow.
 	for i := 0; i < 100; i++ {
 		if !l.Allow("vip") {
-			t.Fatalf("vip denied at #%d; override with RPS=0 should pass through", i)
+			t.Fatalf("vip denied at #%d; unlimited override should pass through", i)
 		}
 	}
 
@@ -150,5 +150,41 @@ func TestOverrides_DisabledOverridePassesThrough(t *testing.T) {
 	}
 	if l.Allow("other") {
 		t.Fatal("other should be denied after burst=1")
+	}
+}
+
+func TestOverrides_ZeroRPSWithoutUnlimited_RejectsConfig(t *testing.T) {
+	_, err := New(Spec{
+		PerTenant: Bucket{RPS: 1, Burst: 1},
+		Overrides: map[string]Bucket{
+			"misconfigured": {RPS: 0, Burst: 0},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for RPS=0 override without unlimited: true")
+	}
+}
+
+func TestOverrides_InvalidKey_Rejected(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{"empty", ""},
+		{"non-ascii", "tenant-\xff"},
+		{"too long", string(make([]byte, 200))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(Spec{
+				PerTenant: Bucket{RPS: 1, Burst: 1},
+				Overrides: map[string]Bucket{
+					tc.key: {RPS: 10, Burst: 10},
+				},
+			})
+			if err == nil {
+				t.Fatal("expected error for invalid override key")
+			}
+		})
 	}
 }
