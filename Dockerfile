@@ -22,10 +22,16 @@ ARG COMMIT=unknown
 ENV CGO_ENABLED=0 GOOS=linux
 
 RUN go build -trimpath \
-        -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
+        -ldflags "-s -w \
+          -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
+          -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT} \
+          -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         -o /out/lwauth     ./cmd/lwauth \
  && go build -trimpath \
-        -ldflags "-s -w" \
+        -ldflags "-s -w \
+          -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
+          -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT} \
+          -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         -o /out/lwauthctl  ./cmd/lwauthctl
 
 # ---- runtime stage -----------------------------------------------------------

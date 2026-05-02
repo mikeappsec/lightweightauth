@@ -1,0 +1,88 @@
+# GoReleaser configuration for LightweightAuth.
+# Triggered by .github/workflows/release.yaml on tag push.
+# Produces cross-compiled binaries, archives, and checksums.
+# Docker images are handled separately by build.yaml (already pushes
+# multi-arch OCI images with SBOM + provenance on tag).
+
+version: 2
+
+project_name: lightweightauth
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lwauth
+    main: ./cmd/lwauth
+    binary: lwauth
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version={{ .Version }}
+      - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Date={{ .Date }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: lwauthctl
+    main: ./cmd/lwauthctl
+    binary: lwauthctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version={{ .Version }}
+      - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Date={{ .Date }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    builds:
+      - lwauth
+      - lwauthctl
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - docs/operations/*.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: mikeappsec
+    name: lightweightauth
+  draft: false
+  prerelease: auto
+  name_template: "{{ .Tag }}"
+  extra_files:
+    - glob: dist/*.sbom.json
