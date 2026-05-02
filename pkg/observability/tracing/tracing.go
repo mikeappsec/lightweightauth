@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package tracing is a thin wrapper around the OpenTelemetry global
 // TracerProvider so the pipeline and modules can start spans without
 // coupling to a specific exporter (DESIGN.md M9).

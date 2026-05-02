@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package keyrotation implements seamless verifier-side key rotation for
 // all credential types (JWKS, HMAC, mTLS CA bundles). It provides:
 //

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package loki implements an audit.Sink that pushes events to a Grafana
 // Loki instance via the HTTP push API (/loki/api/v1/push).
 //

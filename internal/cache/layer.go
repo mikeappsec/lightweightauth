@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package cache holds the three pipeline caches described in DESIGN.md §5:
 //
 //  1. JWKS / IdP metadata    (issuer URL → keyset)

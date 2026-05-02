@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package lwauthclient is the lightweight Go SDK for callers of the
 // native Door B service (`lightweightauth.v1.Auth`). It is published
 // from the core repo because it is small and shares the wire format —

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package v1alpha1 contains the Kubernetes CRD types for LightweightAuth:
 // AuthConfig, AuthPolicy, IdentityProvider. See docs/DESIGN.md §3.
 //

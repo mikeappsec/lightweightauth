@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package upstream provides shared resilience primitives for every
 // network-touching built-in module: a Hystrix-style circuit breaker, a
 // gRPC-LB-style retry budget, and a small Do() helper that combines

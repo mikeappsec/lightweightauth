@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package session — AES-256-GCM cookie-backed Store implementation.
 //
 // The wire format of one cookie value is:

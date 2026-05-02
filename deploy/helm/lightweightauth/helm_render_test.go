@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package helmchart hosts golden-style render tests for the
 // lightweightauth Helm chart.
 //

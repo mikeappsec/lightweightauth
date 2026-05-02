@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package eventbus provides a cross-replica event fan-out mechanism
 // using Valkey Pub/Sub. It carries typed events (revocation, cache
 // invalidation, config updates) on a single shared channel so all

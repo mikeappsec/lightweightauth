@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package opa is the embedded OPA / Rego authorizer (DESIGN.md §5).
 //
 // Config shape:

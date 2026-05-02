@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package jwt is the default JWT identifier module.
 //
 // It validates RFC 7519 bearer tokens against a JWKS endpoint with:

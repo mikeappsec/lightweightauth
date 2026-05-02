@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package grpc is the out-of-process plugin host runtime (DESIGN.md §2,
 // M10). It registers three factories under the type name "grpc-plugin"
 // — one per pipeline stage (identifier / authorizer / mutator) — so any

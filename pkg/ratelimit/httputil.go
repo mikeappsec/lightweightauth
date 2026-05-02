@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 package ratelimit
 
 import "github.com/mikeappsec/lightweightauth/pkg/httputil"

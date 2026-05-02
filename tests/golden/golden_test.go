@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package golden enforces the v1.0 backwards-compatibility lock for
 // AuthConfig YAML and the plugin proto wire shape. Every fixture under
 // tests/golden/authconfig/ MUST parse with internal/config.LoadFile and

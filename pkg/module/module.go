@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package module defines the stable plugin contracts of LightweightAuth.
 //
 // Everything inside this package is part of the public API: built-in modules

@@ -1,4 +1,4 @@
-.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln fips fips-test fips-verify docker-fips docs docs-serve docs-deps
+.PHONY: build test vet tidy run lint clean docker proto proto-tools envtest envtest-bin fuzz soak chaos vuln fips fips-test fips-verify docker-fips docs docs-serve docs-deps release-snapshot
 
 GO     ?= go
 BIN    ?= bin
@@ -168,5 +168,11 @@ docs: docs-deps
 docs-serve: docs-deps
 	$(PYTHON) -m mkdocs serve --dev-addr 127.0.0.1:8000
 
+# F1 (RELEASE-1): local release dry-run. Builds all cross-platform
+# archives without publishing. Useful to verify .goreleaser.yaml
+# changes before pushing a tag.
+release-snapshot:
+	goreleaser release --snapshot --clean
+
 clean:
-	rm -rf $(BIN)
+	rm -rf $(BIN) dist

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package kafka implements an audit.Sink that produces events to an
 // Apache Kafka topic. Events are serialized as JSON and sent
 // asynchronously. The sink is non-blocking and drops on back-pressure.

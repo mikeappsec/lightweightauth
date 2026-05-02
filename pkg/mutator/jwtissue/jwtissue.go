@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package jwtissue is the response mutator that mints an internal JWT
 // for the upstream service (DESIGN.md §4 / M6).
 //

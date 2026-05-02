@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command lwauthctl is a small operator CLI for inspecting config,
 // listing registered modules, and dry-running an authorization request
 // against a local config file.

@@ -1958,42 +1958,46 @@ now based on operator benefit: first reduce adoption friction, then meet
 procurement and release requirements, then add ecosystem integrations,
 and only then graduate experimental data planes.
 
-F1. **RELEASE-1 — Automated build, package, and release pipeline.**
-  Highest customer benefit because it turns the project from source code
-  into a consumable product. Add a GitHub Actions release workflow that
-  on tag push builds Go binaries (linux/amd64, linux/arm64,
-  darwin/arm64), produces Docker images with version labels, generates
-  SBOMs, signs artifacts with Cosign, publishes the Helm OCI chart, and
-  creates a GitHub Release with checksums. Version is injected via
-  `-ldflags` from the git tag. Promotion trigger: repo is public and
-  ready for external consumption.
+F1. **RELEASE-1 — Automated build, package, and release pipeline.** ✅
+  shipped on `v1.2-tier-f`. GitHub Actions release workflow
+  (`.github/workflows/release.yaml`) triggers on tag push: GoReleaser
+  cross-compiles lwauth + lwauthctl for linux/{amd64,arm64} and
+  darwin/arm64, produces archives with SHA-256 checksums, generates
+  per-release SBOMs (syft/SPDX), signs checksums with Cosign (keyless
+  Sigstore OIDC), publishes the Helm chart to
+  `oci://ghcr.io/mikeappsec/charts/lightweightauth`, and creates a
+  GitHub Release. Version injected via `-ldflags` into
+  `pkg/buildinfo.{Version,Commit,Date}`. `.goreleaser.yaml` drives the
+  reproducible build matrix. `make release-snapshot` allows local
+  dry-run verification.
 
-F2. **HELM-OCI-1 — Publish Helm chart to GitHub OCI registry.**
-  Direct installability is the shortest path from evaluation to a live
-  cluster. Package `deploy/helm/lightweightauth` as an OCI artifact and
-  push to `ghcr.io/mikeappsec/charts/lightweightauth` on every tagged
-  release. Operators install directly from GitHub without cloning the
-  repo: `helm install lwauth oci://ghcr.io/mikeappsec/charts/lightweightauth`.
-  Promotion trigger: chart is stable and versioned (post Tier D).
+F2. **HELM-OCI-1 — Publish Helm chart to GitHub OCI registry.** ✅
+  shipped on `v1.2-tier-f`. The `helm` job in `release.yaml` packages
+  `deploy/helm/lightweightauth`, stamps `Chart.yaml` version from the
+  git tag, pushes to `oci://ghcr.io/mikeappsec/charts/lightweightauth`,
+  and Cosign-signs the OCI artifact. Operators install directly:
+  `helm install lwauth oci://ghcr.io/mikeappsec/charts/lightweightauth
+  --version <ver>`.
 
-F3. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
-  Procurement and regulated environments increasingly require signed
-  artifacts, SBOMs, provenance, and air-gap support before a proof of
-  concept can become a production rollout. Ship optional hardened image
-  profiles with Docker Hardened Image bases, Cosign-signed releases,
-  SBOM publication (`syft`) on every release, SLSA provenance, and
-  mirrored images for air-gapped deployments. FIPS mode (A5) is already
-  the crypto-primitive trust story; M13 is the release/image trust story.
-  Promotion trigger: an operator sponsors the required image entitlements
-  and release-signing root, or the project gains a foundation-level
-  release process.
+F3. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.** ✅
+  shipped on `v1.2-tier-f`. Release workflow now produces SLSA level-3
+  provenance for Go binaries via `slsa-github-generator`, Cosign-signed
+  checksums (keyless Sigstore OIDC), per-release SPDX SBOMs, and Docker
+  images with embedded provenance + SBOM (already in `build.yaml`).
+  New [docs/operations/supply-chain.md](operations/supply-chain.md)
+  covers: artifact verification (checksums, Cosign, SLSA), air-gap
+  mirror workflow (crane pull/push for images, helm pull/push for
+  charts), and admission-policy integration (Kyverno,
+  sigstore/policy-controller). Hardened-image bases (dhi.io) remain
+  deferred until an operator sponsors image entitlements.
 
-F4. **LICENSE-HEADERS-1 — Apache 2.0 license headers on all Go source.**
-  Low effort, high buyer-confidence housekeeping. Add the standard
-  Apache 2.0 SPDX header to every `.go` file in the repository and
-  integrate a CI check (e.g., `addlicense -check`) to prevent
-  regressions. Ensures legal compliance for all contributed code.
-  Promotion trigger: immediate (housekeeping).
+F4. **LICENSE-HEADERS-1 — Apache 2.0 license headers on all Go source.** ✅
+  shipped on `v1.2-tier-f`. Every non-generated `.go` file now carries
+  `// Copyright 2026 LightweightAuth Contributors` +
+  `// SPDX-License-Identifier: Apache-2.0`. CI enforcement via
+  `license-check` job in `build.yaml` (runs
+  `scripts/check-license-headers.sh`). Generated `.pb.go` files
+  excluded. `scripts/add-license-headers.sh` available for future use.
 
 F5. **INSTALL-TF-1 — Terraform and GitOps deployment modules.**
   New recommended feature. Many platform teams standardize on Terraform,

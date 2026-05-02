@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package pipeline composes module.Identifiers, module.Authorizer, and
 // module.ResponseMutators into a single Engine that the server layer calls
 // per request.
