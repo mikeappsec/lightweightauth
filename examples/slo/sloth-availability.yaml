@@ -1,0 +1,56 @@
+# Sloth SLO definition for LightWeightAuth availability.
+# Measures the proportion of non-error decisions over total decisions.
+#
+# Usage:
+#   sloth generate -i sloth-availability.yaml | kubectl apply -f -
+#
+# Produces PrometheusRule recording rules that power an error-budget
+# dashboard and SLO alerting.
+version: "prometheus/v1"
+service: "lwauth"
+labels:
+  owner: "platform-team"
+  repo: "lightweightauth"
+slos:
+  - name: "lwauth-availability"
+    objective: 99.9
+    description: "99.9% of auth decisions must not be errors (5xx / pipeline failures)."
+    labels:
+      category: "availability"
+    sli:
+      events:
+        error_query: >
+          sum(rate(lwauth_decisions_total{outcome="error"}[{{.window}}]))
+        total_query: >
+          sum(rate(lwauth_decisions_total[{{.window}}]))
+    alerting:
+      name: LWAuthAvailabilityBudgetBurn
+      labels:
+        severity: "critical"
+      annotations:
+        summary: "LightWeightAuth error budget burn rate is too high."
+      page_alert:
+        labels:
+          severity: "critical"
+      ticket_alert:
+        labels:
+          severity: "warning"
+
+  - name: "lwauth-availability-per-tenant"
+    objective: 99.9
+    description: "Per-tenant availability SLO (parameterised by tenant label)."
+    labels:
+      category: "availability"
+      tenant: "{{.tenant}}"
+    sli:
+      events:
+        error_query: >
+          sum(rate(lwauth_decisions_total{outcome="error", tenant="{{.tenant}}"}[{{.window}}]))
+        total_query: >
+          sum(rate(lwauth_decisions_total{tenant="{{.tenant}}"}[{{.window}}]))
+    alerting:
+      name: LWAuthTenantAvailabilityBudgetBurn
+      labels:
+        severity: "warning"
+      annotations:
+        summary: "Tenant {{.tenant}} error budget burn rate is too high."

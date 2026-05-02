@@ -1,0 +1,58 @@
+# Sloth SLO definition for LightWeightAuth latency.
+# Measures the proportion of requests completing within a target
+# latency (p99 < 100ms) as a ratio of total requests.
+#
+# Usage:
+#   sloth generate -i sloth-latency.yaml | kubectl apply -f -
+version: "prometheus/v1"
+service: "lwauth"
+labels:
+  owner: "platform-team"
+  repo: "lightweightauth"
+slos:
+  - name: "lwauth-latency-p99"
+    objective: 99.0
+    description: "99% of auth decisions must complete within 100ms (p99 latency SLO)."
+    labels:
+      category: "latency"
+    sli:
+      events:
+        error_query: >
+          sum(rate(lwauth_decision_latency_seconds_bucket{le="0.1"}[{{.window}}]))
+            -
+          sum(rate(lwauth_decision_latency_seconds_count[{{.window}}]))
+        total_query: >
+          sum(rate(lwauth_decision_latency_seconds_count[{{.window}}]))
+    alerting:
+      name: LWAuthLatencyBudgetBurn
+      labels:
+        severity: "warning"
+      annotations:
+        summary: "LightWeightAuth p99 latency SLO budget burn rate is too high."
+      page_alert:
+        labels:
+          severity: "critical"
+      ticket_alert:
+        labels:
+          severity: "warning"
+
+  - name: "lwauth-latency-per-tenant"
+    objective: 99.0
+    description: "Per-tenant p99 latency SLO (parameterised)."
+    labels:
+      category: "latency"
+      tenant: "{{.tenant}}"
+    sli:
+      events:
+        error_query: >
+          sum(rate(lwauth_decision_latency_seconds_bucket{le="0.1", tenant="{{.tenant}}"}[{{.window}}]))
+            -
+          sum(rate(lwauth_decision_latency_seconds_count{tenant="{{.tenant}}"}[{{.window}}]))
+        total_query: >
+          sum(rate(lwauth_decision_latency_seconds_count{tenant="{{.tenant}}"}[{{.window}}]))
+    alerting:
+      name: LWAuthTenantLatencyBudgetBurn
+      labels:
+        severity: "warning"
+      annotations:
+        summary: "Tenant {{.tenant}} latency SLO budget is burning."

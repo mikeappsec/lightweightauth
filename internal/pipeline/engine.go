@@ -267,6 +267,7 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 // emission. Returns (decision, identity, cacheHit, error).
 func (e *Engine) evaluate(ctx context.Context, r *module.Request) (*module.Decision, *module.Identity, bool, error) {
 	if e.rateLimiter != nil && !e.rateLimiter.Allow(r.TenantID) {
+		metrics.RecordRateLimitDenied(r.TenantID)
 		return &module.Decision{
 			Allow:  false,
 			Status: 429,

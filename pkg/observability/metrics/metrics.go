@@ -42,6 +42,7 @@ type Recorder struct {
 	revocationChecks     *prometheus.CounterVec
 	cacheStaleServed     *prometheus.CounterVec
 	cacheDistSF          *prometheus.CounterVec
+	rateLimitDenied      *prometheus.CounterVec
 }
 
 // New constructs a Recorder against a fresh Registry. Pass the result to
@@ -85,8 +86,12 @@ func New() *Recorder {
 			Name: "lwauth_cache_distsf_total",
 			Help: "Cross-replica singleflight outcomes (E4).",
 		}, []string{"outcome"}),
+		rateLimitDenied: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_ratelimit_denied_total",
+			Help: "Requests denied by per-tenant rate limiting / quota enforcement (E6).",
+		}, []string{"tenant"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed, r.cacheDistSF)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed, r.cacheDistSF, r.rateLimitDenied)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -215,6 +220,20 @@ func (r *Recorder) ObserveCacheDistSF(outcome string) {
 // Default().ObserveCacheDistSF.
 func RecordCacheDistSF(outcome string) {
 	Default().ObserveCacheDistSF(outcome)
+}
+
+// ObserveRateLimitDenied records a request denied by rate limiting (E6).
+func (r *Recorder) ObserveRateLimitDenied(tenant string) {
+	if r == nil {
+		return
+	}
+	r.rateLimitDenied.WithLabelValues(tenant).Inc()
+}
+
+// RecordRateLimitDenied is a package-level convenience that delegates to
+// Default().ObserveRateLimitDenied.
+func RecordRateLimitDenied(tenant string) {
+	Default().ObserveRateLimitDenied(tenant)
 }
 
 // RecordRevocation is a package-level convenience that delegates to

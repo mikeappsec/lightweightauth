@@ -35,6 +35,11 @@ type Spec struct {
 	// deployments, or tenants that haven't been stamped). Zero RPS
 	// disables it.
 	Default Bucket `json:"default,omitempty" yaml:"default,omitempty"`
+	// Overrides allows per-tenant quota customization (E6). Keys are
+	// tenant IDs; values override PerTenant for that specific tenant.
+	// This enables premium tenants to have higher quotas while shared
+	// tenants remain at the default rate.
+	Overrides map[string]Bucket `json:"overrides,omitempty" yaml:"overrides,omitempty"`
 	// Distributed opts into cluster-wide aggregation for the per-
 	// tenant bucket (K-DOS-1). nil = per-replica only (v1.0 default);
 	// non-nil = the named backend caps per-tenant requests across
@@ -180,6 +185,8 @@ func (l *Limiter) bucketFor(tenantID string) *bucket {
 	var spec Bucket
 	if tenantID == "" {
 		spec = l.spec.Default
+	} else if override, ok := l.spec.Overrides[tenantID]; ok {
+		spec = override
 	} else {
 		spec = l.spec.PerTenant
 	}
