@@ -1,0 +1,24 @@
+# Dependabot keeps third-party GitHub Actions pinned SHAs up to date.
+# This ensures we receive automated PRs when actions release security
+# fixes, without relying on mutable major-version tags.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    ignore:
+      # k8s.io/* is pinned to v0.35.4 due to controller-runtime
+      # compatibility — see DESIGN.md §7 (M12 dependency refresh).
+      - dependency-name: "k8s.io/*"
+        update-types: ["version-update:semver-minor"]
