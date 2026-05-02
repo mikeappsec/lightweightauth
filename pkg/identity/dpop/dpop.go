@@ -414,4 +414,27 @@ func durationFrom(raw map[string]any, key string) (time.Duration, bool) {
 	return 0, false
 }
 
+// RevocationKeys implements module.RevocationChecker for the DPoP identifier.
+// DPoP is a wrapper; it delegates revocation key derivation to the inner
+// identifier if that inner implements RevocationChecker. Additionally,
+// it checks the DPoP proof's jti for proof-level revocation.
+func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []string {
+	if id == nil {
+		return nil
+	}
+	var keys []string
+
+	// Delegate to inner identifier for token-level revocation.
+	if rc, ok := i.inner.(module.RevocationChecker); ok {
+		keys = append(keys, rc.RevocationKeys(id, tenantID)...)
+	}
+
+	// DPoP proof jti (if present in claims) for proof-specific revocation.
+	if dpopJTI, ok := id.Claims["dpop_jti"].(string); ok && dpopJTI != "" {
+		keys = append(keys, "dpop:"+dpopJTI)
+	}
+
+	return keys
+}
+
 func init() { module.RegisterIdentifier("dpop", factory) }

@@ -43,13 +43,14 @@ type AuthConfig struct {
 	WithBody     bool `json:"withBody,omitempty" yaml:"withBody,omitempty"`
 	MaxBodyBytes int  `json:"maxBodyBytes,omitempty" yaml:"maxBodyBytes,omitempty"`
 
-	Identifiers []ModuleSpec   `json:"identifiers" yaml:"identifiers"`
-	Authorizers []ModuleSpec   `json:"authorizers" yaml:"authorizers"`
-	Response    []ModuleSpec   `json:"response,omitempty" yaml:"response,omitempty"`
-	Cache       *CacheSpec     `json:"cache,omitempty" yaml:"cache,omitempty"`
-	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
-	Identifier  IdentifierMode `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
-	Canary      *CanarySpec    `json:"canary,omitempty" yaml:"canary,omitempty"`
+	Identifiers []ModuleSpec      `json:"identifiers" yaml:"identifiers"`
+	Authorizers []ModuleSpec      `json:"authorizers" yaml:"authorizers"`
+	Response    []ModuleSpec      `json:"response,omitempty" yaml:"response,omitempty"`
+	Cache       *CacheSpec        `json:"cache,omitempty" yaml:"cache,omitempty"`
+	RateLimit   *ratelimit.Spec   `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
+	Identifier  IdentifierMode   `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
+	Canary      *CanarySpec      `json:"canary,omitempty" yaml:"canary,omitempty"`
+	Revocation  *RevocationSpec  `json:"revocation,omitempty" yaml:"revocation,omitempty"`
 }
 
 // CanarySpec configures canary policy evaluation (D3 — ENT-POLICY-2).
@@ -133,4 +134,48 @@ type CacheSpec struct {
 	// L1Size is the maximum number of entries in the in-process LRU tier
 	// when backend is "tiered". Default 10 000. Ignored for other backends.
 	L1Size int `json:"l1Size,omitempty" yaml:"l1Size,omitempty"`
+}
+
+// RevocationSpec configures the opt-in credential revocation store (E2).
+// When absent or Enabled is false, no revocation checking is performed
+// and the pipeline incurs zero overhead.
+type RevocationSpec struct {
+	// Enabled explicitly opts in to revocation checking. Default false.
+	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+
+	// Backend selects the storage layer. "memory" (default) uses an
+	// in-process map with TTL (single-replica / dev). "valkey" uses a
+	// shared Valkey instance for multi-replica deployments.
+	Backend string `json:"backend,omitempty" yaml:"backend,omitempty"`
+
+	// Addr is the Valkey server address (required when backend=valkey).
+	Addr string `json:"addr,omitempty" yaml:"addr,omitempty"`
+
+	// Username for Valkey ACL auth (optional).
+	Username string `json:"username,omitempty" yaml:"username,omitempty"`
+
+	// Password for Valkey auth (optional).
+	Password string `json:"password,omitempty" yaml:"password,omitempty"`
+
+	// TLS enables TLS connections to Valkey.
+	TLS bool `json:"tls,omitempty" yaml:"tls,omitempty"`
+
+	// KeyPrefix namespaces revocation keys in Valkey. Default "lwauth/rev/".
+	KeyPrefix string `json:"keyPrefix,omitempty" yaml:"keyPrefix,omitempty"`
+
+	// DefaultTTL is how long revocation entries live. Default "24h".
+	DefaultTTL string `json:"defaultTTL,omitempty" yaml:"defaultTTL,omitempty"`
+
+	// NegCacheTTL is the local negative cache TTL — how long a "not-revoked"
+	// result is cached to avoid network round-trips. Default "2s".
+	NegCacheTTL string `json:"negCacheTTL,omitempty" yaml:"negCacheTTL,omitempty"`
+
+	// PubSubChannel is the Valkey Pub/Sub channel for cross-replica
+	// revocation fan-out. Default "lwauth/events".
+	PubSubChannel string `json:"pubsubChannel,omitempty" yaml:"pubsubChannel,omitempty"`
+
+	// OnStoreError controls behaviour when the revocation store is
+	// unreachable. "deny" (default) fails closed (401). "allow" fails
+	// open (skip revocation check).
+	OnStoreError string `json:"onStoreError,omitempty" yaml:"onStoreError,omitempty"`
 }

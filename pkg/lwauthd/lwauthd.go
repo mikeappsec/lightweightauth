@@ -253,7 +253,7 @@ func Run(opts Options) error {
 		if err != nil {
 			return fmt.Errorf("admin middleware: %w", err)
 		}
-		adminMux := admin.NewAdminMux(adminMW)
+		adminMux := admin.NewAdminMux(adminMW, nil)
 		// Compose: requests starting with /v1/admin/ go to the admin
 		// mux; everything else goes to the normal handler.
 		combined := http.NewServeMux()

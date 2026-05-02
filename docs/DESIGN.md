@@ -1781,11 +1781,23 @@ D3. **ENT-POLICY-2 — Canary policy enforcement.**
   canary verdict as the production verdict.
 
 D4. **ENT-AUDIT-1 — Pluggable audit sinks and retention controls.**
-  Extend M9's audit `Sink` beyond stdout JSONL with Loki and Kafka
-  sinks, sampling rules (`always: [deny, shadow_disagreement]`), and
-  back-pressure behaviour that never blocks the auth hot path. This
-  is the compliance counterpart to D2/D3: every shadow or canary
-  disagreement must be retained somewhere durable.
+  Extend M9's audit `Sink` beyond stdout JSONL with pluggable backends:
+
+  - **Loki** — log aggregation (already planned).
+  - **Kafka** — streaming to downstream consumers.
+  - **PostgreSQL** — queryable relational store for compliance teams.
+    Enables `SELECT * FROM audit_events WHERE tenant = 'acme' AND
+    action = 'revoke' ORDER BY ts DESC LIMIT 100`.
+  - **S3 / GCS** — cold-archive for long-term retention and forensics.
+    Batches events into Parquet or JSONL objects with hourly partitioning.
+
+  Add sampling rules (`always: [deny, shadow_disagreement, revoke]`),
+  back-pressure behaviour that never blocks the auth hot path, and a
+  sink registry so third-party sinks can be registered at import time.
+  This is the compliance counterpart to D2/D3: every shadow or canary
+  disagreement must be retained somewhere durable. Revocation events
+  (E2) are emitted as audit entries so revocation history is queryable
+  independently of the hot-path Valkey store (which TTL-expires entries).
 
 D5. **ENT-DR-1 — Backup, restore, and disaster-recovery runbooks.**
   Recommended new feature. Define export/import for CRDs, policy
@@ -1843,6 +1855,25 @@ E6. **ENT-SLO-1 — Per-AuthConfig quotas and SLO templates.**
   defaults, tenant overrides, and example Sloth/Grafana recording
   rules for p99 latency and deny/error rates. Core exports metrics and
   enforces quotas; it does not become an SLO engine.
+
+##### Tier E Cross-Item Dependency Analysis
+
+The items in Tier E share infrastructure and must be implemented in a
+way that avoids redundancy and conflict. The following matrix documents
+the interactions identified during E2 planning:
+
+| Pair   | Interaction | Resolution |
+|--------|-------------|------------|
+| E2↔E3  | Both use Valkey Pub/Sub for cross-replica fan-out. E3 invalidates cache entries by tag; E2 invalidates the revocation negative cache. | **Single unified event bus** (`pkg/revocation/eventbus`) with typed messages (`{"type":"revoke",...}` / `{"type":"invalidate",...}`). One subscriber goroutine per replica dispatches to the appropriate handler. E3 extends the existing bus rather than adding a second channel. |
+| E2↔E3  | Both need to purge decision-cache entries by pattern — E2 by `(tenant, sub)` on subject revocation, E3 by tag on policy update. | **Tag-aware cache eviction** is built generically in E2. E3 adds more tag types (policy_version, AuthConfig digest) to the same mechanism. |
+| E2↔E4  | After a subject is revoked and cache entries purged, many replicas may concurrently discover "cache miss" and hit the authorizer (thundering herd). | **No action in E2.** E4's distributed singleflight naturally prevents post-revocation stampedes. |
+| E2↔E5  | The Pub/Sub subscriber and negative cache run on **all** replicas, not just the leader. | **No conflict.** E5 leader election applies only to the config reconciler, not to the hot-path or revocation infra. |
+| E2↔E6  | Revocation metrics must follow the same labeling scheme so SLO templates can reference them. | Revocation counters use `{tenant, result}` labels consistent with `lwauth_decisions_total`. |
+| E3↔E4  | E3 invalidation may trigger a burst of cache misses; E4 dampens that burst. | E4 is complementary and naturally follows E3. |
+| E3↔E5  | Cache invalidation Pub/Sub messages must reach non-leader pods. | Same resolution as E2↔E5 — all pods subscribe. |
+
+**Implementation order constraint:** E2 → E3 → E4 → (E5, E6 are independent
+of each other but both follow E4).
 
 #### Tier F — ecosystem and experimental (demand-driven)
 

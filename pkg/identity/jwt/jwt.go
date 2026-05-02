@@ -191,4 +191,29 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 // Compile-time guard.
 var _ module.Identifier = (*identifier)(nil)
 
+// RevocationKeys implements module.RevocationChecker for the JWT identifier.
+// It derives keys from the token's jti claim and the identity's subject.
+func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []string {
+	if id == nil {
+		return nil
+	}
+	var keys []string
+
+	// Key by JTI (unique token ID) — most precise revocation.
+	if jti, ok := id.Claims["jti"].(string); ok && jti != "" {
+		keys = append(keys, "jti:"+jti)
+	}
+
+	// Key by subject — revokes ALL tokens for this user/service.
+	if id.Subject != "" {
+		prefix := "sub:"
+		if tenantID != "" {
+			prefix += tenantID + ":"
+		}
+		keys = append(keys, prefix+id.Subject)
+	}
+
+	return keys
+}
+
 func init() { module.RegisterIdentifier("jwt", factory) }

@@ -286,4 +286,29 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	return newIdentifier(name, cfg)
 }
 
+// RevocationKeys implements module.RevocationChecker for the OAuth2 identifier.
+// It derives keys from the session ID (sid) and the identity's subject.
+func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []string {
+	if id == nil {
+		return nil
+	}
+	var keys []string
+
+	// Key by session ID — revokes a specific OAuth2 session.
+	if sid, ok := id.Claims["sid"].(string); ok && sid != "" {
+		keys = append(keys, "sid:"+sid)
+	}
+
+	// Key by subject — revokes ALL sessions for this user (logout everywhere).
+	if id.Subject != "" {
+		prefix := "sub:"
+		if tenantID != "" {
+			prefix += tenantID + ":"
+		}
+		keys = append(keys, prefix+id.Subject)
+	}
+
+	return keys
+}
+
 func init() { module.RegisterIdentifier("oauth2", factory) }

@@ -39,6 +39,7 @@ type Recorder struct {
 	identifierTotal      *prometheus.CounterVec
 	shadowDisagreements  *prometheus.CounterVec
 	canaryAgreements     *prometheus.CounterVec
+	revocationChecks     *prometheus.CounterVec
 }
 
 // New constructs a Recorder against a fresh Registry. Pass the result to
@@ -70,8 +71,12 @@ func New() *Recorder {
 			Name: "lwauth_canary_agreement_total",
 			Help: "Canary vs production verdict agreement (D3).",
 		}, []string{"policy_version", "tenant", "agreement"}),
+		revocationChecks: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_revocation_checks_total",
+			Help: "Revocation checks performed by the pipeline (E2).",
+		}, []string{"tenant", "result"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -161,6 +166,21 @@ func (r *Recorder) ObserveCanaryAgreement(policyVersion, tenant, agreement strin
 		return
 	}
 	r.canaryAgreements.WithLabelValues(policyVersion, tenant, agreement).Inc()
+}
+
+// ObserveRevocationCheck records a revocation check (E2).
+// result is one of "revoked", "not_revoked", "error".
+func (r *Recorder) ObserveRevocationCheck(tenant, result string) {
+	if r == nil {
+		return
+	}
+	r.revocationChecks.WithLabelValues(tenant, result).Inc()
+}
+
+// RecordRevocation is a package-level convenience that delegates to
+// Default().ObserveRevocationCheck. Safe to call even if Default() is nil.
+func RecordRevocation(tenant, result string) {
+	Default().ObserveRevocationCheck(tenant, result)
 }
 
 // RegisterCacheStats wires a named cache's live atomic counters into the

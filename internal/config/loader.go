@@ -13,6 +13,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
+	"github.com/mikeappsec/lightweightauth/pkg/revocation"
 )
 
 // Source produces successive AuthConfig snapshots. The server layer
@@ -166,20 +167,28 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		shadowExpiry = t
 	}
 
+	// E2: Build revocation store (opt-in).
+	revStore, revFailOpen, err := buildRevocationStore(ac.Revocation)
+	if err != nil {
+		return nil, err
+	}
+
 	return pipeline.New(pipeline.Options{
-		Identifiers:    idents,
-		Authorizer:     top,
-		Mutators:       muts,
-		IdentifierMode: mode,
-		DecisionCache:  dc,
-		RateLimiter:    lim,
-		Shadow:         ac.Mode.IsShadow(),
-		ShadowExpiry:   shadowExpiry,
-		PolicyVersion:  ac.Version,
-		Canary:         canaryAz,
-		CanaryEnforce:  canaryEnforce,
-		CanaryWeight:   canaryWeight,
-		CanarySample:   canarySample,
+		Identifiers:        idents,
+		Authorizer:         top,
+		Mutators:           muts,
+		IdentifierMode:     mode,
+		DecisionCache:      dc,
+		RateLimiter:        lim,
+		Shadow:             ac.Mode.IsShadow(),
+		ShadowExpiry:       shadowExpiry,
+		PolicyVersion:      ac.Version,
+		Canary:             canaryAz,
+		CanaryEnforce:      canaryEnforce,
+		CanaryWeight:       canaryWeight,
+		CanarySample:       canarySample,
+		RevocationStore:    revStore,
+		RevocationFailOpen: revFailOpen,
 	})
 }
 
@@ -269,4 +278,64 @@ func buildTieredBackend(l1Size int, spec *CacheSpec) (*cache.Tiered, *cache.Tier
 		return nil, nil, nil, fmt.Errorf("%w: cache.tiered: %v", module.ErrConfig, err)
 	}
 	return tiered, tieredStats, aggStats, nil
+}
+
+// buildRevocationStore constructs the revocation store from the spec (E2).
+// Returns (nil, false, nil) when revocation is disabled.
+func buildRevocationStore(spec *RevocationSpec) (revocation.Store, bool, error) {
+	if spec == nil || !spec.Enabled {
+		return nil, false, nil
+	}
+
+	failOpen := spec.OnStoreError == "allow"
+
+	defaultTTL := 24 * time.Hour
+	if spec.DefaultTTL != "" {
+		d, err := time.ParseDuration(spec.DefaultTTL)
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: revocation.defaultTTL: %v", module.ErrConfig, err)
+		}
+		defaultTTL = d
+	}
+
+	negCacheTTL := 2 * time.Second
+	if spec.NegCacheTTL != "" {
+		d, err := time.ParseDuration(spec.NegCacheTTL)
+		if err != nil {
+			return nil, false, fmt.Errorf("%w: revocation.negCacheTTL: %v", module.ErrConfig, err)
+		}
+		negCacheTTL = d
+	}
+
+	var store revocation.Store
+
+	switch spec.Backend {
+	case "", "memory":
+		store = revocation.NewMemoryStore(revocation.WithDefaultTTL(defaultTTL))
+	case "valkey":
+		if spec.Addr == "" {
+			return nil, false, fmt.Errorf("%w: revocation.addr is required for backend=valkey", module.ErrConfig)
+		}
+		vs, err := revocation.NewValkeyStore(revocation.ValkeyConfig{
+			Addr:       spec.Addr,
+			Username:   spec.Username,
+			Password:   spec.Password,
+			TLS:        spec.TLS,
+			KeyPrefix:  spec.KeyPrefix,
+			DefaultTTL: defaultTTL,
+		})
+		if err != nil {
+			return nil, false, fmt.Errorf("revocation: %w", err)
+		}
+		store = vs
+	default:
+		return nil, false, fmt.Errorf("%w: revocation.backend: unknown %q (want \"memory\" or \"valkey\")", module.ErrConfig, spec.Backend)
+	}
+
+	// Wrap with negative cache for the Valkey backend to reduce network hops.
+	if spec.Backend == "valkey" {
+		store = revocation.NewNegCache(store, revocation.WithNegCacheTTL(negCacheTTL))
+	}
+
+	return store, failOpen, nil
 }

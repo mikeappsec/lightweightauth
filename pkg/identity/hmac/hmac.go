@@ -436,4 +436,29 @@ func dedupStrings(in []string) []string {
 	return out
 }
 
+// RevocationKeys implements module.RevocationChecker for the HMAC identifier.
+// It derives keys from the HMAC key ID and the identity's subject.
+func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []string {
+	if id == nil {
+		return nil
+	}
+	var keys []string
+
+	// Key by key ID — revokes a specific HMAC signing key.
+	if kid, ok := id.Claims["keyId"].(string); ok && kid != "" {
+		keys = append(keys, "kid:"+kid)
+	}
+
+	// Key by subject — revokes ALL credentials for this identity.
+	if id.Subject != "" {
+		prefix := "sub:"
+		if tenantID != "" {
+			prefix += tenantID + ":"
+		}
+		keys = append(keys, prefix+id.Subject)
+	}
+
+	return keys
+}
+
 func init() { module.RegisterIdentifier("hmac", factory) }
