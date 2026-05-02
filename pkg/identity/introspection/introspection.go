@@ -320,4 +320,34 @@ func durationFrom(raw map[string]any, key string) (time.Duration, bool) {
 	return 0, false
 }
 
+// RevocationKeys implements module.RevocationChecker for the introspection identifier.
+// It derives keys from the jti claim (if present) and the subject.
+func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []string {
+	if id == nil {
+		return nil
+	}
+	var keys []string
+
+	// Key by JTI (token ID) from introspection response.
+	if jti, ok := id.Claims["jti"].(string); ok && jti != "" {
+		keys = append(keys, "jti:"+jti)
+	}
+
+	// Key by token_type + client_id for service-to-service tokens.
+	if clientID, ok := id.Claims["client_id"].(string); ok && clientID != "" {
+		keys = append(keys, "client:"+clientID)
+	}
+
+	// Key by subject — revokes ALL tokens for this user/service.
+	if id.Subject != "" {
+		prefix := "sub:"
+		if tenantID != "" {
+			prefix += tenantID + ":"
+		}
+		keys = append(keys, prefix+id.Subject)
+	}
+
+	return keys
+}
+
 func init() { module.RegisterIdentifier("oauth2-introspection", factory) }

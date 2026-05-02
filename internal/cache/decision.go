@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +18,9 @@ import (
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
+// hmacKeySize is the size of the per-instance HMAC signing key.
+const hmacKeySize = 32
+
 // Decision is the opt-in cache that wraps the authorize step. It coalesces
 // concurrent misses with singleflight, applies a positive TTL on allow and
 // a negative TTL on deny, and is keyed by the (tenant, subject, request
@@ -25,6 +30,17 @@ import (
 // Upstream errors are NEVER cached: a transient outage of an external
 // authorizer (OPA bundle, OpenFGA, introspection) must not freeze a deny
 // in the cache.
+//
+// Values stored in the backend are HMAC-SHA256 signed with a per-instance
+// ephemeral key so that a compromised shared store (e.g. Valkey) cannot
+// inject forged allow decisions.
+//
+// E3 additions:
+//   - Tag-based invalidation: entries carry tags derived from the request
+//     (tenant, subject, policy_version). Invalidation by tag drops all
+//     matching L1 entries via the TagIndex.
+//   - Stale-while-revalidate: on upstream errors, a stale (expired but
+//     present) entry can be served when serveStaleOnError is enabled.
 type Decision struct {
 	backend     Backend
 	positiveTTL time.Duration
@@ -32,6 +48,31 @@ type Decision struct {
 	keyFields   []string
 	stats       *Stats
 	sf          singleflight.Group
+	// hmacKey is a random per-instance secret used to sign cached values.
+	// Generated at construction time; effectively invalidates stale L2
+	// entries from prior instances (safe — they're a cache, not a store).
+	hmacKey []byte
+
+	// sharedHMACKey is set when distributed singleflight (E4) is enabled.
+	// Used to sign L2 writes so other replicas can verify entries written
+	// by the singleflight winner. Reads accept either key.
+	sharedHMACKey []byte
+
+	// tagIndex tracks key→tags associations for tag-based invalidation (E3).
+	tagIndex *TagIndex
+
+	// serveStaleOnError enables stale-while-revalidate (E3). When the
+	// authorizer returns an upstream error and a stale cache entry exists,
+	// serve the stale entry instead of propagating the error.
+	serveStaleOnError bool
+
+	// maxStaleness caps how old a stale entry can be and still be served.
+	// Always positive when serveStaleOnError is true (enforced at construction).
+	maxStaleness time.Duration
+
+	// distSF is the cross-replica singleflight coordinator (E4). nil means
+	// disabled — falls back to in-process singleflight only.
+	distSF *DistSF
 }
 
 // DecisionOptions parameterises a decision cache. A nil DecisionOptions or
@@ -40,6 +81,16 @@ type Decision struct {
 type DecisionOptions struct {
 	Size        int
 	PositiveTTL time.Duration
+	// NegativeTTL is how long deny decisions are cached. Default 5s.
+	//
+	// Trade-off: during this window, repeated requests with the same
+	// cache key return a cached deny WITHOUT consulting the authorizer.
+	// This prevents stampede on the authorizer for repeated failures,
+	// but also means the external authorizer's own rate-limit or lockout
+	// counters will not increment for these cached denials. Operators
+	// should keep this short (≤10s) and rely on the pipeline's own
+	// rate limiter for brute-force protection rather than the external
+	// authorizer's counters.
 	NegativeTTL time.Duration
 	// KeyFields list which Request / Identity fields contribute to the
 	// cache key. Recognised values:
@@ -54,7 +105,31 @@ type DecisionOptions struct {
 	// shared "valkey" for multi-replica deployments). Empty Backend.Type
 	// falls back to the in-process LRU "memory" backend.
 	Backend BackendSpec
+
+	// ServeStaleOnError enables stale-while-revalidate (E3). When enabled,
+	// if the authorizer returns an upstream error and a stale (expired) entry
+	// exists in cache, serve the stale entry rather than returning a 503.
+	ServeStaleOnError bool
+	// MaxStaleness caps how far past expiry a stale entry can be and still
+	// be served. When ServeStaleOnError is true and MaxStaleness is zero,
+	// defaults to 5 minutes. Recommended: 5m–30m depending on security posture.
+	MaxStaleness time.Duration
+
+	// DistSF is the cross-replica singleflight coordinator (E4). nil means
+	// disabled — uses in-process singleflight only.
+	DistSF *DistSF
+
+	// SharedHMACKey is a secret shared across all replicas, used to sign
+	// L2 cache entries when distributed singleflight is enabled (E4).
+	// Required when DistSF is non-nil. 32 bytes recommended (HMAC-SHA256).
+	SharedHMACKey []byte
 }
+
+// defaultMaxStaleness is the default cap on how far past expiry a stale
+// entry can be served. Limits the exposure window when an authorizer is
+// unreachable. Operators can override via config; zero is not allowed when
+// serveStaleOnError is enabled.
+const defaultMaxStaleness = 5 * time.Minute
 
 // NewDecision returns a Decision cache or nil if disabled.
 func NewDecision(o DecisionOptions) (*Decision, error) {
@@ -66,6 +141,9 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 	}
 	if o.NegativeTTL <= 0 {
 		o.NegativeTTL = 5 * time.Second
+	}
+	if o.ServeStaleOnError && o.MaxStaleness <= 0 {
+		o.MaxStaleness = defaultMaxStaleness
 	}
 	stats := &Stats{}
 	spec := o.Backend
@@ -83,18 +161,91 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 		}
 	}
 	sort.Strings(keys) // deterministic key ordering
-	return &Decision{
-		backend:     backend,
-		positiveTTL: o.PositiveTTL,
-		negativeTTL: o.NegativeTTL,
-		keyFields:   keys,
-		stats:       stats,
-	}, nil
+	hk := make([]byte, hmacKeySize)
+	if _, err := rand.Read(hk); err != nil {
+		return nil, fmt.Errorf("decision cache: generate hmac key: %w", err)
+	}
+	d := &Decision{
+		backend:           backend,
+		positiveTTL:       o.PositiveTTL,
+		negativeTTL:       o.NegativeTTL,
+		keyFields:         keys,
+		stats:             stats,
+		hmacKey:           hk,
+		sharedHMACKey:     o.SharedHMACKey,
+		tagIndex:          NewTagIndex(),
+		serveStaleOnError: o.ServeStaleOnError,
+		maxStaleness:      o.MaxStaleness,
+		distSF:            o.DistSF,
+	}
+	// Hook LRU eviction to clean tag mappings (TC2: prevent memory leak).
+	if lruBackend, ok := backend.(*LRU); ok {
+		lruBackend.SetEvictCallback(func(key string) {
+			d.tagIndex.Remove(key)
+		})
+	}
+	return d, nil
 }
 
 // Stats returns the live counter struct (hits/misses/evictions). The
 // Decision cache emits a singleflight coalesce as a hit.
 func (d *Decision) Stats() *Stats { return d.stats }
+
+// TieredBackend returns the underlying Tiered backend if this Decision
+// cache was built with NewDecisionWithTiered. Returns nil otherwise.
+func (d *Decision) TieredBackend() *Tiered {
+	if d == nil {
+		return nil
+	}
+	t, _ := d.backend.(*Tiered)
+	return t
+}
+
+// NewDecisionWithTiered constructs a Decision cache using a pre-built
+// Tiered backend. This allows the config layer to supply the two-tier
+// backend (E1) and its per-layer stats.
+func NewDecisionWithTiered(o DecisionOptions, tiered *Tiered, tieredStats *TieredStats, aggStats *Stats) (*Decision, error) {
+	if o.PositiveTTL <= 0 {
+		return nil, nil
+	}
+	if o.NegativeTTL <= 0 {
+		o.NegativeTTL = 5 * time.Second
+	}
+	if o.ServeStaleOnError && o.MaxStaleness <= 0 {
+		o.MaxStaleness = defaultMaxStaleness
+	}
+	keys := append([]string(nil), o.KeyFields...)
+	for _, k := range keys {
+		if !isValidKeyField(k) {
+			return nil, fmt.Errorf("%w: cache.key: unknown field %q (recognised: sub, tenant, method, host, path, header:<Name>, claim:<Name>)", module.ErrConfig, k)
+		}
+	}
+	sort.Strings(keys)
+	hk := make([]byte, hmacKeySize)
+	if _, err := rand.Read(hk); err != nil {
+		return nil, fmt.Errorf("decision cache: generate hmac key: %w", err)
+	}
+	d := &Decision{
+		backend:           tiered,
+		positiveTTL:       o.PositiveTTL,
+		negativeTTL:       o.NegativeTTL,
+		keyFields:         keys,
+		stats:             aggStats,
+		hmacKey:           hk,
+		sharedHMACKey:     o.SharedHMACKey,
+		tagIndex:          NewTagIndex(),
+		serveStaleOnError: o.ServeStaleOnError,
+		maxStaleness:      o.MaxStaleness,
+		distSF:            o.DistSF,
+	}
+	// Hook L1 eviction to clean tag mappings (TC2: prevent memory leak).
+	if lruL1, ok := tiered.l1.(*LRU); ok {
+		lruL1.SetEvictCallback(func(key string) {
+			d.tagIndex.Remove(key)
+		})
+	}
+	return d, nil
+}
 
 // Key computes the cache key for this request+identity, returning ""
 // when the cache should be skipped (e.g. no identity yet, or the configured
@@ -115,48 +266,250 @@ func (d *Decision) Key(r *module.Request, id *module.Identity) string {
 		return ""
 	}
 	h := sha256.Sum256([]byte(strings.Join(parts, "|")))
-	return hex.EncodeToString(h[:16])
+	return hex.EncodeToString(h[:]) // full 256-bit key — no truncation
 }
 
 // Do returns a Decision either from the cache or by calling fn (singleflight
 // coalesced). fn must return an error in the upstream/config taxonomy; the
 // result is cached for positiveTTL on allow and negativeTTL on a clean deny.
 // Errors are surfaced to the caller and never cached.
-func (d *Decision) Do(ctx context.Context, key string, fn func() (*module.Decision, error)) (*module.Decision, bool, error) {
+//
+// When serveStaleOnError is enabled (E3), entries are stored with an
+// extended TTL (ttl + maxStaleness) and carry a freshUntil timestamp in the
+// payload. On upstream errors, a stale (expired past freshUntil but still
+// present) entry is served instead of propagating a 503.
+//
+// tags are associated with the cache key for tag-based invalidation (E3).
+// Pass nil if no tags apply.
+func (d *Decision) Do(ctx context.Context, key string, tags []string, fn func() (*module.Decision, error)) (*module.Decision, bool, error) {
 	if d == nil || key == "" {
 		dec, err := fn()
 		return dec, false, err
 	}
+
+	// Try cache lookup.
 	if raw, ok, _ := d.backend.Get(ctx, key); ok {
-		var dec module.Decision
-		if err := json.Unmarshal(raw, &dec); err == nil {
-			return &dec, true, nil
+		payload, valid := d.verifyHMAC(raw)
+		if valid {
+			var entry decisionEntry
+			if err := json.Unmarshal(payload, &entry); err == nil {
+				now := time.Now()
+				if now.Before(entry.FreshUntil) {
+					// Fresh hit.
+					return &entry.Decision, true, nil
+				}
+				// Entry is stale but present — try revalidation below.
+				// If revalidation fails with upstream error and stale is
+				// enabled, we'll fall back to this entry.
+			}
 		}
-		// fall through on decode error
+	}
+
+	// E4: Cross-replica singleflight. If we lose the distributed lock,
+	// another replica is evaluating — use its L2 result directly.
+	if d.distSF != nil {
+		won, raw, err := d.distSF.Do(ctx, key)
+		if err == nil && !won && raw != nil {
+			// Another replica wrote the result. Verify and return.
+			payload, valid := d.verifyHMAC(raw)
+			if valid {
+				var entry decisionEntry
+				if err2 := json.Unmarshal(payload, &entry); err2 == nil {
+					d.stats.DistSFWaited.Add(1)
+					return &entry.Decision, true, nil
+				}
+			}
+			// HMAC mismatch or unmarshal error: fall through to local evaluation.
+		}
+		if won {
+			d.stats.DistSFWon.Add(1)
+		}
+		// If won==true or err!=nil, proceed with local singleflight.
+	}
+
+	// Singleflight: coalesce concurrent misses/revalidations.
+	type doResult struct {
+		dec      *module.Decision
+		fromStale bool
+		fromCache bool
 	}
 	v, err, _ := d.sf.Do(key, func() (any, error) {
 		dec, err := fn()
 		if err != nil {
+			// Upstream error — try stale fallback.
+			if d.serveStaleOnError && errors.Is(err, module.ErrUpstream) {
+				if stale := d.getStaleEntry(ctx, key); stale != nil {
+					return &doResult{dec: stale, fromStale: true, fromCache: true}, nil
+				}
+			}
 			return nil, err
 		}
-		// Never cache upstream/transient errors; we already returned them
-		// above. Cache the decision the authorizer produced.
-		raw, _ := json.Marshal(dec)
+		// Success: cache the decision.
 		ttl := d.positiveTTL
 		if !dec.Allow {
 			ttl = d.negativeTTL
 		}
-		_ = d.backend.Set(ctx, key, raw, ttl)
-		return dec, nil
+		d.storeEntry(ctx, key, dec, ttl, tags)
+		// E4: release distributed lock after writing result to L2.
+		d.distSF.Release(ctx, key)
+		return &doResult{dec: dec}, nil
 	})
 	if err != nil {
-		// Upstream errors propagate; do not negative-cache them.
-		if errors.Is(err, module.ErrUpstream) {
-			return nil, false, err
-		}
 		return nil, false, err
 	}
-	return v.(*module.Decision), false, nil
+	res := v.(*doResult)
+	if res.fromStale {
+		d.stats.StaleServed.Add(1)
+	}
+	return res.dec, res.fromCache, nil
+}
+
+// decisionEntry is the JSON structure stored in the cache backend.
+// It wraps the actual Decision with freshness metadata for stale serving.
+type decisionEntry struct {
+	Decision   module.Decision `json:"d"`
+	FreshUntil time.Time       `json:"f"`
+}
+
+// storeEntry writes a decision to the backend with tag association and
+// stale-window-aware TTL.
+func (d *Decision) storeEntry(ctx context.Context, key string, dec *module.Decision, ttl time.Duration, tags []string) {
+	entry := decisionEntry{
+		Decision:   *dec,
+		FreshUntil: time.Now().Add(ttl),
+	}
+	raw, _ := json.Marshal(entry)
+	signed := d.signHMAC(raw)
+
+	// Store with extended TTL so stale entries remain readable.
+	// maxStaleness is always >0 when serveStaleOnError is true (enforced
+	// at construction). The storeTTL = ttl + maxStaleness bounds how long
+	// the entry persists; after that it's truly gone.
+	storeTTL := ttl
+	if d.serveStaleOnError && d.maxStaleness > 0 {
+		storeTTL = ttl + d.maxStaleness
+	}
+	_ = d.backend.Set(ctx, key, signed, storeTTL)
+
+	// Associate tags for tag-based invalidation.
+	if len(tags) > 0 && d.tagIndex != nil {
+		d.tagIndex.Associate(key, tags)
+	}
+}
+
+// getStaleEntry retrieves a stale (past FreshUntil but still in backend)
+// entry. Returns nil if no valid stale entry exists or if it exceeds
+// maxStaleness.
+func (d *Decision) getStaleEntry(ctx context.Context, key string) *module.Decision {
+	raw, ok, _ := d.backend.Get(ctx, key)
+	if !ok {
+		return nil
+	}
+	payload, valid := d.verifyHMAC(raw)
+	if !valid {
+		return nil
+	}
+	var entry decisionEntry
+	if err := json.Unmarshal(payload, &entry); err != nil {
+		return nil
+	}
+	// Check maxStaleness bound.
+	if d.maxStaleness > 0 {
+		staleDeadline := entry.FreshUntil.Add(d.maxStaleness)
+		if time.Now().After(staleDeadline) {
+			return nil // too stale
+		}
+	}
+	return &entry.Decision
+}
+
+// InvalidateByTags evicts all L1 cache entries matching any of the given
+// tags. Called by the event bus handler when an EventInvalidate arrives.
+func (d *Decision) InvalidateByTags(ctx context.Context, tags []string) int {
+	if d == nil || d.tagIndex == nil {
+		return 0
+	}
+	keys := d.tagIndex.KeysForTags(tags)
+	for _, k := range keys {
+		_ = d.backend.Delete(ctx, k)
+		d.tagIndex.Remove(k)
+	}
+	return len(keys)
+}
+
+// InvalidateAll evicts all entries by clearing the backend (if supported)
+// and the tag index.
+func (d *Decision) InvalidateAll(ctx context.Context) {
+	if d == nil {
+		return
+	}
+	// For LRU or Tiered backends we don't have a "clear all" on the Backend
+	// interface. We clear the tag index; entries will expire via TTL.
+	if d.tagIndex != nil {
+		// Evict all tracked keys.
+		d.tagIndex.mu.Lock()
+		for key := range d.tagIndex.keyToTags {
+			_ = d.backend.Delete(ctx, key)
+		}
+		d.tagIndex.tagToKeys = make(map[string]map[string]struct{})
+		d.tagIndex.keyToTags = make(map[string]map[string]struct{})
+		d.tagIndex.mu.Unlock()
+	}
+}
+
+// TagIndex returns the tag index for external inspection (tests/metrics).
+func (d *Decision) TagIndex() *TagIndex {
+	if d == nil {
+		return nil
+	}
+	return d.tagIndex
+}
+
+// signHMAC appends a 32-byte HMAC-SHA256 tag to the payload.
+// Wire format: [payload...][32-byte MAC]
+// When sharedHMACKey is set (E4), signs with the shared key so other
+// replicas can verify entries in L2.
+func (d *Decision) signHMAC(payload []byte) []byte {
+	key := d.hmacKey
+	if len(d.sharedHMACKey) > 0 {
+		key = d.sharedHMACKey
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write(payload)
+	tag := mac.Sum(nil)
+	out := make([]byte, len(payload)+len(tag))
+	copy(out, payload)
+	copy(out[len(payload):], tag)
+	return out
+}
+
+// verifyHMAC splits payload and tag, verifies the HMAC, and returns the
+// payload if valid. Returns (nil, false) on tampered/short data.
+// When sharedHMACKey is set (E4), tries the shared key first (for cross-
+// replica entries), then falls back to the instance key (for L1 entries
+// from before E4 was enabled, or during migration).
+func (d *Decision) verifyHMAC(data []byte) ([]byte, bool) {
+	if len(data) <= sha256.Size {
+		return nil, false
+	}
+	payload := data[:len(data)-sha256.Size]
+	tag := data[len(data)-sha256.Size:]
+
+	// Try shared key first (common case when E4 enabled).
+	if len(d.sharedHMACKey) > 0 {
+		mac := hmac.New(sha256.New, d.sharedHMACKey)
+		mac.Write(payload)
+		if hmac.Equal(tag, mac.Sum(nil)) {
+			return payload, true
+		}
+	}
+	// Fall back to instance key.
+	mac := hmac.New(sha256.New, d.hmacKey)
+	mac.Write(payload)
+	if hmac.Equal(tag, mac.Sum(nil)) {
+		return payload, true
+	}
+	return nil, false
 }
 
 // isValidKeyField mirrors the switch in resolveField. Anything not listed

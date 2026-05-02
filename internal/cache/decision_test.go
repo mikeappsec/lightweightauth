@@ -41,7 +41,7 @@ func TestDecision_HitsPositive(t *testing.T) {
 	key := d.Key(r, id)
 
 	for i := 0; i < 5; i++ {
-		dec, _, err := d.Do(context.Background(), key, fn)
+		dec, _, err := d.Do(context.Background(), key, nil, fn)
 		if err != nil || !dec.Allow {
 			t.Fatalf("iter %d: %+v %v", i, dec, err)
 		}
@@ -63,7 +63,7 @@ func TestDecision_HitsNegative(t *testing.T) {
 	key := d.Key(&module.Request{}, id)
 
 	for i := 0; i < 4; i++ {
-		dec, _, err := d.Do(context.Background(), key, fn)
+		dec, _, err := d.Do(context.Background(), key, nil, fn)
 		if err != nil || dec.Allow {
 			t.Fatalf("iter %d: %+v %v", i, dec, err)
 		}
@@ -85,7 +85,7 @@ func TestDecision_UpstreamErrorNotCached(t *testing.T) {
 	key := d.Key(&module.Request{}, id)
 
 	for i := 0; i < 3; i++ {
-		_, _, err := d.Do(context.Background(), key, fn)
+		_, _, err := d.Do(context.Background(), key, nil, fn)
 		if !errors.Is(err, module.ErrUpstream) {
 			t.Fatalf("iter %d: err = %v", i, err)
 		}
@@ -133,7 +133,7 @@ func TestDecision_SingleflightCoalesces(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func() {
 			defer wg.Done()
-			_, _, _ = d.Do(context.Background(), key, fn)
+			_, _, _ = d.Do(context.Background(), key, nil, fn)
 		}()
 	}
 	time.Sleep(20 * time.Millisecond)

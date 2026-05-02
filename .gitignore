@@ -31,3 +31,4 @@ Thumbs.db
 # verify hardening fixes; they never belong in source control.
 /docs/SECURITY_REVIEW_*.md
 /docs/security/SECURITY_REVIEW_*.md
+/pentest-report*.md

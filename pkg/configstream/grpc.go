@@ -53,6 +53,11 @@ func (s *Server) Register(gs grpc.ServiceRegistrar) {
 	authv1.RegisterConfigDiscoveryServer(gs, s)
 }
 
+// maxSnapshotBytes is the maximum serialized size of a single config
+// snapshot that the server will send. Prevents OOM-bombing followers
+// with pathologically large configs.
+const maxSnapshotBytes = 4 * 1024 * 1024 // 4 MiB
+
 // StreamAuthConfig serves one client. It runs the configured Authorizer
 // against the stream context first, then subscribes to the broker (which
 // primes the channel with the latest snapshot, if any) and forwards each
@@ -79,6 +84,11 @@ func (s *Server) StreamAuthConfig(_ *authv1.StreamAuthConfigRequest, stream grpc
 			body, err := json.Marshal(snap.Spec)
 			if err != nil {
 				return fmt.Errorf("marshal spec: %w", err)
+			}
+			if len(body) > maxSnapshotBytes {
+				return status.Errorf(codes.ResourceExhausted,
+					"snapshot v%d exceeds max size (%d > %d bytes)",
+					snap.Version, len(body), maxSnapshotBytes)
 			}
 			if err := stream.Send(&authv1.AuthConfigSnapshot{
 				Version:  snap.Version,

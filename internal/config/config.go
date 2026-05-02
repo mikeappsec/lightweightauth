@@ -43,13 +43,14 @@ type AuthConfig struct {
 	WithBody     bool `json:"withBody,omitempty" yaml:"withBody,omitempty"`
 	MaxBodyBytes int  `json:"maxBodyBytes,omitempty" yaml:"maxBodyBytes,omitempty"`
 
-	Identifiers []ModuleSpec   `json:"identifiers" yaml:"identifiers"`
-	Authorizers []ModuleSpec   `json:"authorizers" yaml:"authorizers"`
-	Response    []ModuleSpec   `json:"response,omitempty" yaml:"response,omitempty"`
-	Cache       *CacheSpec     `json:"cache,omitempty" yaml:"cache,omitempty"`
-	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
-	Identifier  IdentifierMode `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
-	Canary      *CanarySpec    `json:"canary,omitempty" yaml:"canary,omitempty"`
+	Identifiers []ModuleSpec      `json:"identifiers" yaml:"identifiers"`
+	Authorizers []ModuleSpec      `json:"authorizers" yaml:"authorizers"`
+	Response    []ModuleSpec      `json:"response,omitempty" yaml:"response,omitempty"`
+	Cache       *CacheSpec        `json:"cache,omitempty" yaml:"cache,omitempty"`
+	RateLimit   *ratelimit.Spec   `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
+	Identifier  IdentifierMode   `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
+	Canary      *CanarySpec      `json:"canary,omitempty" yaml:"canary,omitempty"`
+	Revocation  *RevocationSpec  `json:"revocation,omitempty" yaml:"revocation,omitempty"`
 }
 
 // CanarySpec configures canary policy evaluation (D3 — ENT-POLICY-2).
@@ -121,12 +122,87 @@ type CacheSpec struct {
 
 	// Backend selects the storage layer. Empty / "memory" uses the
 	// in-process LRU (default). "valkey" turns on the shared backend
-	// described in DESIGN.md §5; the additional fields below are
-	// forwarded to that backend's factory.
+	// described in DESIGN.md §5. "tiered" enables the two-tier
+	// read-through cache (E1): L1 in-process LRU + L2 Valkey.
 	Backend   string `json:"backend,omitempty" yaml:"backend,omitempty"`
 	Addr      string `json:"addr,omitempty" yaml:"addr,omitempty"`
 	Username  string `json:"username,omitempty" yaml:"username,omitempty"`
 	Password  string `json:"password,omitempty" yaml:"password,omitempty"`
 	KeyPrefix string `json:"keyPrefix,omitempty" yaml:"keyPrefix,omitempty"`
 	TLS       bool   `json:"tls,omitempty" yaml:"tls,omitempty"`
+
+	// L1Size is the maximum number of entries in the in-process LRU tier
+	// when backend is "tiered". Default 10 000. Ignored for other backends.
+	L1Size int `json:"l1Size,omitempty" yaml:"l1Size,omitempty"`
+
+	// ServeStaleOnError enables stale-while-revalidate (E3). When the
+	// authorizer returns an upstream error and a stale cached decision
+	// exists, serve the stale entry rather than returning a 503.
+	ServeStaleOnError bool `json:"serveStaleOnError,omitempty" yaml:"serveStaleOnError,omitempty"`
+
+	// MaxStaleness caps how far past expiry a stale entry can be and still
+	// be served. Zero means unlimited. Example: "5m", "30m".
+	MaxStaleness string `json:"maxStaleness,omitempty" yaml:"maxStaleness,omitempty"`
+
+	// DistributedSingleflight enables cross-replica singleflight (E4).
+	// When true and backend is "tiered", cache misses acquire a short
+	// distributed lock via Valkey SETNX so only one replica evaluates
+	// the authorizer for a given key. Others poll L2 for the result.
+	// Requires backend "tiered" (ignored otherwise).
+	DistributedSingleflight bool `json:"distributedSingleflight,omitempty" yaml:"distributedSingleflight,omitempty"`
+
+	// SFHoldDuration is how long the distributed singleflight lock lives.
+	// Should exceed p99 evaluation latency. Default "200ms". Example: "500ms".
+	SFHoldDuration string `json:"sfHoldDuration,omitempty" yaml:"sfHoldDuration,omitempty"`
+
+	// SharedHMACKey is a base64-encoded secret shared across all replicas
+	// for signing L2 cache entries when distributed singleflight is enabled.
+	// 32 bytes (256-bit) recommended. If empty when distributedSingleflight
+	// is true, a random key is generated (cross-replica verification will
+	// fail gracefully — each replica evaluates independently).
+	SharedHMACKey string `json:"sharedHmacKey,omitempty" yaml:"sharedHmacKey,omitempty"`
+}
+
+// RevocationSpec configures the opt-in credential revocation store (E2).
+// When absent or Enabled is false, no revocation checking is performed
+// and the pipeline incurs zero overhead.
+type RevocationSpec struct {
+	// Enabled explicitly opts in to revocation checking. Default false.
+	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+
+	// Backend selects the storage layer. "memory" (default) uses an
+	// in-process map with TTL (single-replica / dev). "valkey" uses a
+	// shared Valkey instance for multi-replica deployments.
+	Backend string `json:"backend,omitempty" yaml:"backend,omitempty"`
+
+	// Addr is the Valkey server address (required when backend=valkey).
+	Addr string `json:"addr,omitempty" yaml:"addr,omitempty"`
+
+	// Username for Valkey ACL auth (optional).
+	Username string `json:"username,omitempty" yaml:"username,omitempty"`
+
+	// Password for Valkey auth (optional).
+	Password string `json:"password,omitempty" yaml:"password,omitempty"`
+
+	// TLS enables TLS connections to Valkey.
+	TLS bool `json:"tls,omitempty" yaml:"tls,omitempty"`
+
+	// KeyPrefix namespaces revocation keys in Valkey. Default "lwauth/rev/".
+	KeyPrefix string `json:"keyPrefix,omitempty" yaml:"keyPrefix,omitempty"`
+
+	// DefaultTTL is how long revocation entries live. Default "24h".
+	DefaultTTL string `json:"defaultTTL,omitempty" yaml:"defaultTTL,omitempty"`
+
+	// NegCacheTTL is the local negative cache TTL — how long a "not-revoked"
+	// result is cached to avoid network round-trips. Default "2s".
+	NegCacheTTL string `json:"negCacheTTL,omitempty" yaml:"negCacheTTL,omitempty"`
+
+	// PubSubChannel is the Valkey Pub/Sub channel for cross-replica
+	// revocation fan-out. Default "lwauth/events".
+	PubSubChannel string `json:"pubsubChannel,omitempty" yaml:"pubsubChannel,omitempty"`
+
+	// OnStoreError controls behaviour when the revocation store is
+	// unreachable. "deny" (default) fails closed (401). "allow" fails
+	// open (skip revocation check).
+	OnStoreError string `json:"onStoreError,omitempty" yaml:"onStoreError,omitempty"`
 }

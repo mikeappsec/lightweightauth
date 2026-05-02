@@ -173,4 +173,29 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 	return nil, fmt.Errorf("%w: apikey %q: hashed needs one of file / dir / entries", module.ErrConfig, name)
 }
 
+// RevocationKeys implements module.RevocationChecker for the API key identifier.
+// It derives keys from the key ID and the identity's subject.
+func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []string {
+	if id == nil {
+		return nil
+	}
+	var keys []string
+
+	// Key by key ID — revokes a specific API key.
+	if kid, ok := id.Claims["keyId"].(string); ok && kid != "" {
+		keys = append(keys, "kid:"+kid)
+	}
+
+	// Key by subject — revokes ALL credentials for this user/service.
+	if id.Subject != "" {
+		prefix := "sub:"
+		if tenantID != "" {
+			prefix += tenantID + ":"
+		}
+		keys = append(keys, prefix+id.Subject)
+	}
+
+	return keys
+}
+
 func init() { module.RegisterIdentifier("apikey", factory) }

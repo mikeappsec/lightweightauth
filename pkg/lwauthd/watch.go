@@ -17,24 +17,30 @@ import (
 
 	"github.com/mikeappsec/lightweightauth/internal/controller"
 	"github.com/mikeappsec/lightweightauth/internal/server"
+	"github.com/mikeappsec/lightweightauth/pkg/configstream"
 )
 
 // startCRDController boots a controller-runtime manager that watches the
 // AuthConfig CR identified by Options.WatchNamespace + AuthConfigName
 // and atomically swaps its compiled engine into holder.
 //
+// When LeaderElection is enabled (ENT-HA-1), only the elected leader
+// runs the reconciler; follower replicas subscribe to the leader's
+// configstream endpoint and receive compiled engine snapshots for
+// active/active request serving.
+//
 // The manager starts in its own goroutine so HTTP/gRPC remain the
 // authoritative lifecycle. If the manager exits with an error, errCh
 // surfaces it so the main Run loop can shut everything down.
-func startCRDController(ctx context.Context, log *slog.Logger, opts Options, holder *server.EngineHolder, errCh chan<- error) error {
+func startCRDController(ctx context.Context, log *slog.Logger, opts Options, holder *server.EngineHolder, errCh chan<- error) (*configstream.Broker, error) {
 	scheme := runtime.NewScheme()
 	if err := controller.AddToScheme(scheme); err != nil {
-		return fmt.Errorf("scheme: %w", err)
+		return nil, fmt.Errorf("scheme: %w", err)
 	}
 
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
-		return fmt.Errorf("get kubeconfig: %w (is KUBECONFIG / in-cluster config available?)", err)
+		return nil, fmt.Errorf("get kubeconfig: %w (is KUBECONFIG / in-cluster config available?)", err)
 	}
 
 	cacheOpts := cache.Options{}
@@ -42,16 +48,45 @@ func startCRDController(ctx context.Context, log *slog.Logger, opts Options, hol
 		cacheOpts.DefaultNamespaces = map[string]cache.Config{opts.WatchNamespace: {}}
 	}
 
-	mgr, err := ctrl.NewManager(cfg, manager.Options{
-		Scheme:                 scheme,
-		Cache:                  cacheOpts,
-		HealthProbeBindAddress: "0",
-		Metrics:                metricsserver.Options{BindAddress: "0"},
-		LeaderElection:         false, // single-replica file-replacement model for M4
-	})
-	if err != nil {
-		return fmt.Errorf("new manager: %w", err)
+	// ENT-HA-1: leader election configuration.
+	leaderElectionID := opts.LeaderElectionID
+	if leaderElectionID == "" {
+		leaderElectionID = "lwauth-controller-leader"
 	}
+	leaderElectionNS := opts.LeaderElectionNamespace
+	if leaderElectionNS == "" {
+		leaderElectionNS = opts.WatchNamespace
+	}
+
+	mgrOpts := manager.Options{
+		Scheme:                        scheme,
+		Cache:                         cacheOpts,
+		HealthProbeBindAddress:        "0",
+		Metrics:                       metricsserver.Options{BindAddress: "0"},
+		LeaderElection:                opts.LeaderElection,
+		LeaderElectionID:              leaderElectionID,
+		LeaderElectionNamespace:       leaderElectionNS,
+		LeaderElectionReleaseOnCancel: true,
+	}
+	if opts.LeaseDuration > 0 {
+		mgrOpts.LeaseDuration = &opts.LeaseDuration
+	}
+	if opts.RenewDeadline > 0 {
+		mgrOpts.RenewDeadline = &opts.RenewDeadline
+	}
+	if opts.RetryPeriod > 0 {
+		mgrOpts.RetryPeriod = &opts.RetryPeriod
+	}
+
+	mgr, err := ctrl.NewManager(cfg, mgrOpts)
+	if err != nil {
+		return nil, fmt.Errorf("new manager: %w", err)
+	}
+
+	// The Broker lets the leader push compiled config to followers via
+	// configstream. If leader election is disabled (single-replica), the
+	// broker is still created but never subscribed to.
+	broker := configstream.NewBroker()
 
 	r := &controller.AuthConfigReconciler{
 		Client: mgr.GetClient(),
@@ -60,20 +95,36 @@ func startCRDController(ctx context.Context, log *slog.Logger, opts Options, hol
 			Namespace: opts.WatchNamespace,
 			Name:      opts.AuthConfigName,
 		},
+		Broker: broker,
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("setup reconciler: %w", err)
+		return nil, fmt.Errorf("setup reconciler: %w", err)
+	}
+
+	// ENT-HA-1: when leader election is on and a configstream address
+	// is provided, start a follower subscription loop. This goroutine
+	// receives config from the leader and swaps it into the holder,
+	// enabling active/active serving. The loop terminates if this pod
+	// wins the leader election (preventing self-connect).
+	if opts.LeaderElection && opts.ConfigStreamAddr != "" {
+		var leaderCh <-chan struct{}
+		if le, ok := mgr.(interface{ Elected() <-chan struct{} }); ok {
+			leaderCh = le.Elected()
+		}
+		go startFollowerSubscription(ctx, log, opts, holder, leaderCh)
 	}
 
 	go func() {
 		log.Info("controller manager starting",
 			"namespace", opts.WatchNamespace,
-			"authconfig", opts.AuthConfigName)
+			"authconfig", opts.AuthConfigName,
+			"leaderElection", opts.LeaderElection,
+			"leaderElectionID", leaderElectionID)
 		if err := mgr.Start(ctx); err != nil {
 			errCh <- fmt.Errorf("manager: %w", err)
 		}
 	}()
-	return nil
+	return broker, nil
 }
 
 // startFileWatcher watches opts.ConfigPath with fsnotify and atomically
@@ -151,3 +202,20 @@ func StartFileWatcherForTest(ctx context.Context, path string, holder *server.En
 type stderrSink struct{}
 
 func (stderrSink) Write(p []byte) (int, error) { return len(p), nil }
+
+// validateLeaseTimings checks that the operator's lease timing knobs
+// satisfy controller-runtime's invariants: leaseDuration > renewDeadline
+// > retryPeriod. Invalid timing can cause split-brain or panic.
+func validateLeaseTimings(opts Options) error {
+	if opts.LeaseDuration > 0 && opts.RenewDeadline > 0 {
+		if opts.LeaseDuration <= opts.RenewDeadline {
+			return errors.New("lwauthd: leaseDuration must be greater than renewDeadline")
+		}
+	}
+	if opts.RenewDeadline > 0 && opts.RetryPeriod > 0 {
+		if opts.RenewDeadline <= opts.RetryPeriod {
+			return errors.New("lwauthd: renewDeadline must be greater than retryPeriod")
+		}
+	}
+	return nil
+}

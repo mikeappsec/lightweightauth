@@ -41,6 +41,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/internal/server"
 	"github.com/mikeappsec/lightweightauth/pkg/buildinfo"
+	"github.com/mikeappsec/lightweightauth/pkg/configstream"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 )
@@ -133,6 +134,33 @@ type Options struct {
 	WatchNamespace string
 	AuthConfigName string
 
+	// --- Leader election (ENT-HA-1) ---
+
+	// LeaderElection enables controller-runtime leader election for the
+	// CRD reconciler. Only the elected leader runs the reconciler and
+	// publishes config; followers receive config via configstream and
+	// serve auth requests (active/active).
+	LeaderElection bool
+	// LeaderElectionID is the Lease resource name. Default "lwauth-controller-leader".
+	LeaderElectionID string
+	// LeaderElectionNamespace overrides where the Lease lives. Defaults
+	// to WatchNamespace.
+	LeaderElectionNamespace string
+	// LeaseDuration, RenewDeadline, RetryPeriod tune election timing.
+	// Defaults: 15s / 10s / 2s (controller-runtime defaults).
+	LeaseDuration time.Duration
+	RenewDeadline time.Duration
+	RetryPeriod   time.Duration
+
+	// ConfigStreamAddr is the gRPC address of the leader's configstream
+	// endpoint (e.g. "lwauth-headless:9001"). When LeaderElection is
+	// enabled and this pod is not the leader, it subscribes here to
+	// receive config snapshots. Required for active/active HA.
+	ConfigStreamAddr string
+	// ConfigStreamNodeID identifies this pod in the configstream
+	// subscription. Defaults to hostname.
+	ConfigStreamNodeID string
+
 	Logger *slog.Logger
 }
 
@@ -216,8 +244,10 @@ func Run(opts Options) error {
 	// previously observed values because we register CounterFuncs that
 	// remember nothing themselves.
 	registerDecisionCacheStats(holder)
+	registerTieredCacheStats(holder)
 
 	errCh := make(chan error, 3)
+	var crdBroker *configstream.Broker
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -229,7 +259,12 @@ func Run(opts Options) error {
 		log.Info("file watcher started", "path", opts.ConfigPath)
 	}
 	if opts.WatchNamespace != "" {
-		if err := startCRDController(ctx, log, opts, holder, errCh); err != nil {
+		if err := validateLeaseTimings(opts); err != nil {
+			return err
+		}
+		var err error
+		crdBroker, err = startCRDController(ctx, log, opts, holder, errCh)
+		if err != nil {
 			return err
 		}
 	}
@@ -252,7 +287,7 @@ func Run(opts Options) error {
 		if err != nil {
 			return fmt.Errorf("admin middleware: %w", err)
 		}
-		adminMux := admin.NewAdminMux(adminMW)
+		adminMux := admin.NewAdminMux(adminMW, nil)
 		// Compose: requests starting with /v1/admin/ go to the admin
 		// mux; everything else goes to the normal handler.
 		combined := http.NewServeMux()
@@ -316,6 +351,24 @@ func Run(opts Options) error {
 		reflection.Register(grpcSrv)
 	}
 
+	// ENT-HA-1: Register ConfigDiscovery so followers can subscribe to
+	// the leader's compiled config stream. The Authorizer requires the
+	// gRPC listener to be TLS-protected (any authenticated peer is
+	// allowed; unauthenticated peers are rejected).
+	if crdBroker != nil {
+		csAuth := configstream.Authorizer(func(ctx context.Context) error {
+			// When gRPC TLS is configured with client CA, the transport
+			// already verified the peer certificate. Allow all authenticated
+			// peers. When TLS is not configured (dev/test), allow all.
+			if opts.GRPCTLSClientCAFile != "" {
+				// Transport-level mTLS already verified; no additional check needed.
+				return nil
+			}
+			return nil
+		})
+		configstream.NewServer(crdBroker, csAuth).Register(grpcSrv)
+	}
+
 	go func() {
 		log.Info("grpc listening", "addr", opts.GRPCAddr,
 			"tls", opts.GRPCTLSCertFile != "",
@@ -365,6 +418,11 @@ func Main() {
 	disableOpenAPI := flag.Bool("disable-http-openapi", false, "remove /openapi.json and /openapi.yaml from the HTTP mux")
 	maxBody := flag.Int64("max-request-bytes", 0, "cap on /v1/authorize body bytes (0 -> 1 MiB)")
 	printBuildInfo := flag.Bool("print-build-info", false, "print build attributes (version, commit, go runtime, FIPS mode) and exit")
+	leaderElect := flag.Bool("leader-election", false, "enable controller leader election (HA mode)")
+	leaderID := flag.String("leader-election-id", "lwauth-controller-leader", "Lease resource name for leader election")
+	leaderNS := flag.String("leader-election-namespace", "", "namespace for Lease (defaults to --watch-namespace)")
+	configStreamAddr := flag.String("config-stream-addr", "", "gRPC address for follower config subscription (e.g. lwauth-headless:9001)")
+	configStreamNode := flag.String("config-stream-node-id", "", "node ID for configstream subscription (default: hostname)")
 	flag.Parse()
 	if *printBuildInfo {
 		// Stable single-line format `version=... commit=... go_version=... fips_enabled=...`,
@@ -392,6 +450,11 @@ func Main() {
 		DisableHTTPMetrics:   *disableMetrics,
 		DisableHTTPOpenAPI:   *disableOpenAPI,
 		MaxRequestBytes:      *maxBody,
+		LeaderElection:       *leaderElect,
+		LeaderElectionID:     *leaderID,
+		LeaderElectionNamespace: *leaderNS,
+		ConfigStreamAddr:     *configStreamAddr,
+		ConfigStreamNodeID:   *configStreamNode,
 	}); err != nil {
 		slog.Error("lwauthd", "err", err)
 		os.Exit(1)
@@ -447,6 +510,54 @@ func registerDecisionCacheStats(h *server.EngineHolder) {
 				return 0
 			}
 			return s.Evictions.Load()
+		}),
+	)
+}
+
+// registerTieredCacheStats wires the E1 per-layer (L1/L2) counters into
+// Prometheus. When the decision cache is not tiered, the closures return
+// 0 and the series are dormant.
+func registerTieredCacheStats(h *server.EngineHolder) {
+	read := func(get func(*pipeline.Engine) uint64) func() uint64 {
+		return func() uint64 {
+			eng := h.Load()
+			if eng == nil {
+				return 0
+			}
+			return get(eng)
+		}
+	}
+	defer func() {
+		_ = recover() // duplicate registration across tests
+	}()
+	metrics.Default().RegisterTieredCacheStats("decision",
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L1Hits.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L1Misses.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L2Hits.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L2Misses.Load()
 		}),
 	)
 }

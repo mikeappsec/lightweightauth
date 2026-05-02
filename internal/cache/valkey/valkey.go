@@ -154,6 +154,16 @@ func factory(spec cache.BackendSpec, _ *cache.Stats) (cache.Backend, error) {
 	if spec.TLS {
 		opt.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
+	// Connection pool cap (CAC9): bound the number of connections to
+	// prevent unbounded FD consumption under memory pressure. The
+	// valkey-go PipelineMultiplex controls how many server connections
+	// are used for pipelining; 0 uses the library default (usually
+	// runtime.GOMAXPROCS × 2). Operators can tune via extra.maxConns.
+	if v, ok := spec.Extra["maxConns"]; ok {
+		if n, ok := v.(int); ok && n > 0 {
+			opt.PipelineMultiplex = n
+		}
+	}
 	client, err := valkey.NewClient(opt)
 	if err != nil {
 		return nil, fmt.Errorf("valkey: dial %s: %w", spec.Addr, err)

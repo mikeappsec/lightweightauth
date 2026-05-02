@@ -39,6 +39,10 @@ type Recorder struct {
 	identifierTotal      *prometheus.CounterVec
 	shadowDisagreements  *prometheus.CounterVec
 	canaryAgreements     *prometheus.CounterVec
+	revocationChecks     *prometheus.CounterVec
+	cacheStaleServed     *prometheus.CounterVec
+	cacheDistSF          *prometheus.CounterVec
+	rateLimitDenied      *prometheus.CounterVec
 }
 
 // New constructs a Recorder against a fresh Registry. Pass the result to
@@ -70,8 +74,24 @@ func New() *Recorder {
 			Name: "lwauth_canary_agreement_total",
 			Help: "Canary vs production verdict agreement (D3).",
 		}, []string{"policy_version", "tenant", "agreement"}),
+		revocationChecks: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_revocation_checks_total",
+			Help: "Revocation checks performed by the pipeline (E2).",
+		}, []string{"tenant", "result"}),
+		cacheStaleServed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_cache_stale_served_total",
+			Help: "Stale cache entries served during upstream outages (E3).",
+		}, []string{"tenant", "decision"}),
+		cacheDistSF: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_cache_distsf_total",
+			Help: "Cross-replica singleflight outcomes (E4).",
+		}, []string{"outcome"}),
+		rateLimitDenied: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_ratelimit_denied_total",
+			Help: "Requests denied by per-tenant rate limiting / quota enforcement (E6).",
+		}, []string{"tenant"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed, r.cacheDistSF, r.rateLimitDenied)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -163,6 +183,65 @@ func (r *Recorder) ObserveCanaryAgreement(policyVersion, tenant, agreement strin
 	r.canaryAgreements.WithLabelValues(policyVersion, tenant, agreement).Inc()
 }
 
+// ObserveRevocationCheck records a revocation check (E2).
+// result is one of "revoked", "not_revoked", "error".
+func (r *Recorder) ObserveRevocationCheck(tenant, result string) {
+	if r == nil {
+		return
+	}
+	r.revocationChecks.WithLabelValues(tenant, result).Inc()
+}
+
+// ObserveCacheStaleServed records a stale cache entry being served during
+// an upstream outage (E3). decision is "allow" or "deny".
+func (r *Recorder) ObserveCacheStaleServed(tenant, decision string) {
+	if r == nil {
+		return
+	}
+	r.cacheStaleServed.WithLabelValues(tenant, decision).Inc()
+}
+
+// RecordCacheStaleServed is a package-level convenience that delegates to
+// Default().ObserveCacheStaleServed.
+func RecordCacheStaleServed(tenant, decision string) {
+	Default().ObserveCacheStaleServed(tenant, decision)
+}
+
+// ObserveCacheDistSF records a distributed singleflight outcome (E4).
+// outcome is "won" or "waited".
+func (r *Recorder) ObserveCacheDistSF(outcome string) {
+	if r == nil {
+		return
+	}
+	r.cacheDistSF.WithLabelValues(outcome).Inc()
+}
+
+// RecordCacheDistSF is a package-level convenience that delegates to
+// Default().ObserveCacheDistSF.
+func RecordCacheDistSF(outcome string) {
+	Default().ObserveCacheDistSF(outcome)
+}
+
+// ObserveRateLimitDenied records a request denied by rate limiting (E6).
+func (r *Recorder) ObserveRateLimitDenied(tenant string) {
+	if r == nil {
+		return
+	}
+	r.rateLimitDenied.WithLabelValues(tenant).Inc()
+}
+
+// RecordRateLimitDenied is a package-level convenience that delegates to
+// Default().ObserveRateLimitDenied.
+func RecordRateLimitDenied(tenant string) {
+	Default().ObserveRateLimitDenied(tenant)
+}
+
+// RecordRevocation is a package-level convenience that delegates to
+// Default().ObserveRevocationCheck. Safe to call even if Default() is nil.
+func RecordRevocation(tenant, result string) {
+	Default().ObserveRevocationCheck(tenant, result)
+}
+
 // RegisterCacheStats wires a named cache's live atomic counters into the
 // recorder using prometheus.CounterFunc — no polling, the registry pulls
 // the current values at scrape time.
@@ -196,6 +275,43 @@ func (r *Recorder) RegisterCacheStats(name string, hits, misses, evictions func(
 			Help:        "Cache evictions by named cache.",
 			ConstLabels: prometheus.Labels{"cache": name},
 		}, func() float64 { return float64(evictions()) }),
+	)
+}
+
+// RegisterTieredCacheStats wires a two-tier cache's per-layer counters into
+// the recorder. Emits:
+//
+//	lwauth_cache_layer_hits_total{cache=<name>, layer="l1"|"l2"}
+//	lwauth_cache_layer_misses_total{cache=<name>, layer="l1"|"l2"}
+//
+// These complement the aggregate lwauth_cache_hits_total / misses_total
+// registered via RegisterCacheStats and let operators distinguish in-process
+// hits from shared-store hits for capacity planning.
+func (r *Recorder) RegisterTieredCacheStats(name string, l1Hits, l1Misses, l2Hits, l2Misses func() uint64) {
+	if r == nil {
+		return
+	}
+	r.registry.MustRegister(
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_hits_total",
+			Help:        "Cache hits by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l1"},
+		}, func() float64 { return float64(l1Hits()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_hits_total",
+			Help:        "Cache hits by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l2"},
+		}, func() float64 { return float64(l2Hits()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_misses_total",
+			Help:        "Cache misses by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l1"},
+		}, func() float64 { return float64(l1Misses()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_misses_total",
+			Help:        "Cache misses by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l2"},
+		}, func() float64 { return float64(l2Misses()) }),
 	)
 }
 

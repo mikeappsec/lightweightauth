@@ -1781,11 +1781,23 @@ D3. **ENT-POLICY-2 — Canary policy enforcement.**
   canary verdict as the production verdict.
 
 D4. **ENT-AUDIT-1 — Pluggable audit sinks and retention controls.**
-  Extend M9's audit `Sink` beyond stdout JSONL with Loki and Kafka
-  sinks, sampling rules (`always: [deny, shadow_disagreement]`), and
-  back-pressure behaviour that never blocks the auth hot path. This
-  is the compliance counterpart to D2/D3: every shadow or canary
-  disagreement must be retained somewhere durable.
+  Extend M9's audit `Sink` beyond stdout JSONL with pluggable backends:
+
+  - **Loki** — log aggregation (already planned).
+  - **Kafka** — streaming to downstream consumers.
+  - **PostgreSQL** — queryable relational store for compliance teams.
+    Enables `SELECT * FROM audit_events WHERE tenant = 'acme' AND
+    action = 'revoke' ORDER BY ts DESC LIMIT 100`.
+  - **S3 / GCS** — cold-archive for long-term retention and forensics.
+    Batches events into Parquet or JSONL objects with hourly partitioning.
+
+  Add sampling rules (`always: [deny, shadow_disagreement, revoke]`),
+  back-pressure behaviour that never blocks the auth hot path, and a
+  sink registry so third-party sinks can be registered at import time.
+  This is the compliance counterpart to D2/D3: every shadow or canary
+  disagreement must be retained somewhere durable. Revocation events
+  (E2) are emitted as audit entries so revocation history is queryable
+  independently of the hot-path Valkey store (which TTL-expires entries).
 
 D5. **ENT-DR-1 — Backup, restore, and disaster-recovery runbooks.**
   Recommended new feature. Define export/import for CRDs, policy
@@ -1825,11 +1837,86 @@ E3. **ENT-CACHE-2 — Tag-based invalidation and stale-while-revalidate.**
   outages degrade predictably instead of turning every TTL expiry into
   a hard 503.
 
-E4. **ENT-CACHE-3 — Cross-replica singleflight.**
+E4. **ENT-CACHE-3 — Cross-replica singleflight + peer broadcast.**
   Add Valkey `SETNX`-style short locks around hot cache misses so N
   replicas do not stampede the IdP, OpenFGA, or OPA sidecar on the
   same key. Fallback to in-process singleflight when Valkey is down;
   never block longer than the caller's request context.
+
+  Additionally, harden revocation and invalidation propagation via
+  direct HTTP peer broadcast so that safety-critical events reach all
+  replicas even when Valkey Pub/Sub is partitioned.
+
+  **Implementation:**
+
+  1. *Distributed singleflight* — `internal/cache/distsf.go` provides a
+     `DistSF` coordinator backed by `DistSFLocker` (Valkey `SET NX PX`).
+     On cache miss: try distributed lock → winner evaluates, stores to L2,
+     releases lock. Losers poll L2 every 5ms for the winner's result
+     (bounded by holdDuration, default 200ms). On Valkey error or context
+     cancellation, each replica falls back to per-pod singleflight (zero
+     correctness impact, only N× authorizer load).
+
+  2. *Shared HMAC key* — When `distributedSingleflight` is enabled,
+     operators provide a `sharedHmacKey` (base64, ≥16 bytes). All replicas
+     sign L2 entries with this shared secret so winners' results are
+     verifiable by losers. The per-instance ephemeral key remains as
+     fallback for L1 entries.
+
+  3. *Peer broadcast* (`internal/admin/peerbroadcast.go`) — On revocation
+     or cache invalidation, the admin handler fans out the request body to
+     all discovered peers via HTTP POST. Peers are discovered via a
+     `PeerResolver` interface (DNS headless Service by default, static list
+     for non-Kubernetes). A sentinel header `X-Peer-Broadcast: true`
+     prevents infinite re-fan-out. Fire-and-forget: failures are logged but
+     never block the admin caller. Pub/Sub remains the primary propagation
+     channel; peer broadcast is belt-and-suspenders.
+
+  **Revocation safety during Valkey outage:**
+
+  The pipeline already checks the revocation store *before* the decision
+  cache (E2: `checkRevocation` → `runAuthorize`), so a cached "allow"
+  can never bypass a known revocation. The remaining gap was *propagation*:
+  if replica A issues a revocation but Pub/Sub is down, replicas B–N don't
+  learn about it until Pub/Sub recovers.
+
+  Peer broadcast closes this gap: the revoking replica sends the
+  revocation directly to all peers. Each peer writes to its local store
+  and the next request for that credential hits the revocation gate.
+  Worst-case latency: one HTTP round-trip per peer (typically <2ms
+  in-cluster).
+
+  **Trade-off analysis (why #2 + #4 over alternatives):**
+
+  | Approach | Per-request cost | Complexity | Failure coverage |
+  |----------|-----------------|------------|------------------|
+  | 1. Disable stale on CB open | 0 | Config-only | Loses E3 value during combined failures |
+  | 2. Revocation before cache | ~30ns (map lookup) | Already done (E2) | Enforces known revocations regardless of cache |
+  | 3. Peer gossip (CRDT mesh) | Background O(n²) | High (protocol, convergence) | Strongest, but operational burden |
+  | **4. Admin peer broadcast** | **0 per request; O(n) per revocation** | **~50 lines** | **Covers Pub/Sub outage; only gap is full network partition** |
+
+  We chose **#2 + #4** because:
+  - #2 is already free (pipeline ordering from E2 ensures revocation
+    gate runs unconditionally before cache lookup — zero new cost).
+  - #4 adds negligible complexity (one file, DNS resolution + HTTP POST)
+    and covers 99% of real-world Valkey outage scenarios.
+  - #3 (gossip) would add operational burden disproportionate to the
+    marginal coverage gain (only helps if replicas can't reach each other
+    *at all*, which implies broader service degradation).
+
+  **Config:**
+  ```yaml
+  cache:
+    backend: tiered
+    distributedSingleflight: true
+    sfHoldDuration: "200ms"
+    sharedHmacKey: "<base64-32-bytes>"
+  admin:
+    peerBroadcast:
+      enabled: true
+      headlessService: "lwauth-headless.ns.svc.cluster.local"
+      port: "8080"
+  ```
 
 E5. **ENT-HA-1 — Controller leader election and active/active safety.**
   Enable `controller-runtime` leader election by default when
@@ -1844,211 +1931,279 @@ E6. **ENT-SLO-1 — Per-AuthConfig quotas and SLO templates.**
   rules for p99 latency and deny/error rates. Core exports metrics and
   enforces quotas; it does not become an SLO engine.
 
-#### Tier F — ecosystem and experimental (demand-driven)
+##### Tier E Cross-Item Dependency Analysis
 
-These are valuable, but they should graduate only when an operator or
-maintainer can commit to the surrounding ecosystem work. They are no
-longer a disconnected Tier X; each item has a promotion trigger.
+The items in Tier E share infrastructure and must be implemented in a
+way that avoids redundancy and conflict. The following matrix documents
+the interactions identified during E2 planning:
 
-F1. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
-  Optional hardened image profile with Docker Hardened Image bases,
-  Cosign-signed releases, SBOM publication (`syft`) on every release,
-  and mirrored images for air-gapped deployments. FIPS mode (A5) is
-  already the crypto-primitive trust story; M13 is the release/image
-  trust story. Promotion trigger: an operator sponsors the required
-  image entitlements and release-signing root, or the project gains a
-  foundation-level release process.
+| Pair   | Interaction | Resolution |
+|--------|-------------|------------|
+| E2↔E3  | Both use Valkey Pub/Sub for cross-replica fan-out. E3 invalidates cache entries by tag; E2 invalidates the revocation negative cache. | **Single unified event bus** (`pkg/revocation/eventbus`) with typed messages (`{"type":"revoke",...}` / `{"type":"invalidate",...}`). One subscriber goroutine per replica dispatches to the appropriate handler. E3 extends the existing bus rather than adding a second channel. |
+| E2↔E3  | Both need to purge decision-cache entries by pattern — E2 by `(tenant, sub)` on subject revocation, E3 by tag on policy update. | **Tag-aware cache eviction** is built generically in E2. E3 adds more tag types (policy_version, AuthConfig digest) to the same mechanism. |
+| E2↔E4  | After a subject is revoked and cache entries purged, many replicas may concurrently discover "cache miss" and hit the authorizer (thundering herd). | E4's distributed singleflight prevents post-revocation stampedes. E4's peer broadcast also ensures the revocation itself propagates without Pub/Sub dependency. |
+| E2↔E5  | The Pub/Sub subscriber and negative cache run on **all** replicas, not just the leader. | **No conflict.** E5 leader election applies only to the config reconciler, not to the hot-path or revocation infra. |
+| E2↔E6  | Revocation metrics must follow the same labeling scheme so SLO templates can reference them. | Revocation counters use `{tenant, result}` labels consistent with `lwauth_decisions_total`. |
+| E3↔E4  | E3 invalidation may trigger a burst of cache misses; E4 dampens that burst. E3 invalidation also needs to reach peers when Pub/Sub is down. | E4's distributed singleflight dampens the burst. Peer broadcast propagates invalidation requests directly. |
+| E3↔E5  | Cache invalidation Pub/Sub messages must reach non-leader pods. | Same resolution as E2↔E5 — all pods subscribe. |
 
-F2. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
-  Land `pkg/authz/spicedb` registered as `spicedb`, composing under
-  `composite` exactly like `openfga` does. Decision-cache and
-  `pkg/upstream` Guard wiring is reused verbatim. Promotion trigger:
-  at least one operator needs SpiceDB specifically rather than the
-  already-shipped OpenFGA adapter.
+**Implementation order constraint:** E2 → E3 → E4 → (E5, E6 are independent
+of each other but both follow E4).
 
-F3. **WASM plugins (was 17) — sandboxed in-process extension runtime.**
-  Evaluate `wazero` for untrusted policy/credential snippets with CPU,
-  memory, and wall-clock budgets. Promotion trigger: auth-library
-  support in WASM is mature enough that users can implement real
-  identifiers/authorizers without reimplementing crypto badly.
+#### Tier F — ecosystem and experimental (customer-benefit ordered)
 
-F4. **eBPF data plane (was 16) — experimental Mode C.**
-  Continue in the separate `lightweightauth-ebpf` repo. Linux-only,
-  privileged, kernel-sensitive, and not a v1.x stability promise.
-  Promotion trigger: at least three production reference deployments
-  report stable operation and a maintainer signs up for kernel-version
-  support.
+These items sit outside the core enterprise runtime path, but they have
+real customer value when the surrounding ecosystem is ready. The order is
+now based on operator benefit: first reduce adoption friction, then meet
+procurement and release requirements, then add ecosystem integrations,
+and only then graduate experimental data planes.
 
-F5. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.**
-  Recommended new feature, but explicitly later than HA/revocation.
-  Define how multiple clusters share signed config snapshots, tenant
-  policy versions, and revocation events without trusting a single
-  Kubernetes API server. This is useful for global edge deployments,
-  but it depends on admin-plane auth (C3), policy versioning (D2),
-  audit retention (D4), and cache invalidation (E3).
+F1. **RELEASE-1 — Automated build, package, and release pipeline.**
+  Highest customer benefit because it turns the project from source code
+  into a consumable product. Add a GitHub Actions release workflow that
+  on tag push builds Go binaries (linux/amd64, linux/arm64,
+  darwin/arm64), produces Docker images with version labels, generates
+  SBOMs, signs artifacts with Cosign, publishes the Helm OCI chart, and
+  creates a GitHub Release with checksums. Version is injected via
+  `-ldflags` from the git tag. Promotion trigger: repo is public and
+  ready for external consumption.
 
-F6. **HELM-OCI-1 — Publish Helm chart to GitHub OCI registry.**
-  Package `deploy/helm/lightweightauth` as an OCI artifact and push to
-  `ghcr.io/mikeappsec/charts/lightweightauth` on every tagged release.
-  Operators install directly from GitHub without cloning the repo:
-  `helm install lwauth oci://ghcr.io/mikeappsec/charts/lightweightauth`.
+F2. **HELM-OCI-1 — Publish Helm chart to GitHub OCI registry.**
+  Direct installability is the shortest path from evaluation to a live
+  cluster. Package `deploy/helm/lightweightauth` as an OCI artifact and
+  push to `ghcr.io/mikeappsec/charts/lightweightauth` on every tagged
+  release. Operators install directly from GitHub without cloning the
+  repo: `helm install lwauth oci://ghcr.io/mikeappsec/charts/lightweightauth`.
   Promotion trigger: chart is stable and versioned (post Tier D).
 
-F7. **RELEASE-1 — Automated build, package, and release pipeline.**
-  Add a GitHub Actions release workflow that on tag push: builds Go
-  binaries (linux/amd64, linux/arm64, darwin/arm64), produces Docker
-  images with version labels, generates SBOM, signs with Cosign,
-  publishes the Helm OCI chart (F6), and creates a GitHub Release with
-  checksums. Version is injected via `-ldflags` from the git tag.
-  Promotion trigger: repo is public and ready for external consumption.
+F3. **M13-SUPPLY-CHAIN (was 15) — Supply-chain hardening.**
+  Procurement and regulated environments increasingly require signed
+  artifacts, SBOMs, provenance, and air-gap support before a proof of
+  concept can become a production rollout. Ship optional hardened image
+  profiles with Docker Hardened Image bases, Cosign-signed releases,
+  SBOM publication (`syft`) on every release, SLSA provenance, and
+  mirrored images for air-gapped deployments. FIPS mode (A5) is already
+  the crypto-primitive trust story; M13 is the release/image trust story.
+  Promotion trigger: an operator sponsors the required image entitlements
+  and release-signing root, or the project gains a foundation-level
+  release process.
 
-F8. **LICENSE-HEADERS-1 — Apache 2.0 license headers on all Go source.**
-  Add the standard Apache 2.0 SPDX header to every `.go` file in the
-  repository. Integrate a CI check (e.g., `addlicense -check`) to
-  prevent regressions. Ensures legal compliance for all contributed code.
+F4. **LICENSE-HEADERS-1 — Apache 2.0 license headers on all Go source.**
+  Low effort, high buyer-confidence housekeeping. Add the standard
+  Apache 2.0 SPDX header to every `.go` file in the repository and
+  integrate a CI check (e.g., `addlicense -check`) to prevent
+  regressions. Ensures legal compliance for all contributed code.
   Promotion trigger: immediate (housekeeping).
 
-#### Tier G — enterprise customer requests (v1.3+)
+F5. **INSTALL-TF-1 — Terraform and GitOps deployment modules.**
+  New recommended feature. Many platform teams standardize on Terraform,
+  OpenTofu, Argo CD, or Flux rather than hand-running Helm. Ship a small
+  Terraform/OpenTofu module that installs the Helm chart, wires common
+  ServiceMonitor / NetworkPolicy / values defaults, and emits a matching
+  Argo CD Application example. Promotion trigger: Helm OCI publishing
+  (F2) is stable and at least one reference cloud deployment is tested.
 
-These items came from enterprise-buyer feedback. They are grouped here
-because each is a feature an enterprise customer would specifically
-evaluate during procurement, not a foundational hardening or HA item.
-The order below reflects buyer-priority weighting (G3, G2, G5, G13, G6
-are the top five).
+F6. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
+  Customer benefit is strongest for teams already invested in Authzed or
+  Zanzibar-style permissions. Land `pkg/authz/spicedb` registered as
+  `spicedb`, composing under `composite` exactly like `openfga` does.
+  Decision-cache and `pkg/upstream` Guard wiring is reused verbatim.
+  Promotion trigger: at least one operator needs SpiceDB specifically
+  rather than the already-shipped OpenFGA adapter.
 
-G1. **POL-TEST-1 — Policy-as-Code testing framework.**
-  Add `lwauthctl test` that runs YAML test fixtures
-  (`request → expected decision`) like Rego unit tests. Generate test
-  scaffolds from `lwauthctl explain` outputs. Provide a Go testing
-  harness for CI integration. Allow fixtures to be checked into Git
-  alongside `AuthConfig` CRDs so PRs require passing tests.
-  Promotion trigger: D2 (policy versioning) shipped.
+F7. **POL-MARKET-1 — Policy bundle registry.**
+  Moved up from the enterprise request list because its strongest value
+  is ecosystem acceleration: reusable, signed policy bundles reduce
+  time-to-first-policy for every customer. Publish reusable `AuthConfig`
+  snippets and authorizer bundles ("PCI-DSS baseline", "OWASP Top 10
+  rate-limit bundle", "GDPR audit profile") as OCI artifacts pulled by
+  `lwauthctl`. Promotion trigger: F1 + F2 shipped, plus at least three
+  reference policies authored and maintained by the project.
 
-G2. **POL-SIM-1 — Policy simulation and impact analysis.**
-  Replay last N hours of production audit events against a candidate
-  policy; report % decisions changed, top affected subjects/paths,
+F8. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.**
+  High value for global edge deployments, but gated by the correctness
+  and audit work in tiers C/D/E. Define how multiple clusters share
+  signed config snapshots, tenant policy versions, and revocation events
+  without trusting a single Kubernetes API server. Promotion trigger:
+  admin-plane auth (C3), policy versioning (D2), audit retention (D4),
+  and cache invalidation (E3) are shipped.
+
+F9. **eBPF data plane (was 16) — experimental Mode C.**
+  Customer benefit is meaningful for high-density or non-HTTP east-west
+  enforcement, but the operational risk is high. Continue in the
+  separate `lightweightauth-ebpf` repo. Linux-only, privileged,
+  kernel-sensitive, and not a v1.x stability promise. Promotion
+  trigger: at least three production reference deployments report stable
+  operation and a maintainer signs up for kernel-version support.
+
+F10. **WASM plugins (was 17) — sandboxed in-process extension runtime.**
+  Useful for policy snippets and lightweight custom logic, but lower
+  near-term customer value than out-of-process plugins because auth
+  libraries in WASM remain immature. Evaluate `wazero` for untrusted
+  policy/credential snippets with CPU, memory, and wall-clock budgets.
+  Promotion trigger: auth-library support in WASM is mature enough that
+  users can implement real identifiers/authorizers without
+  reimplementing crypto badly.
+
+#### Tier G — enterprise customer requests (v1.3+, customer-benefit ordered)
+
+These items are features enterprise customers would specifically evaluate
+during procurement or platform rollout. The order now prioritizes buyer
+benefit: removing blockers for regulated adoption first, then reducing
+policy-change risk, then improving supportability, and finally adding
+advanced or narrower integrations.
+
+G1. **SEC-EXTREF-1 — External secret-backend resolvers.**
+  Highest enterprise benefit because many regulated customers cannot
+  accept plaintext secrets in Kubernetes manifests. Add a pluggable
+  `SecretResolver` interface in `pkg/secrets`. Reference format:
+  `secretRef: "vault://kv/lwauth/jwt-key#current"` resolved at compile
+  time, with TTL-bounded caching. Adapters: HashiCorp Vault, AWS
+  Secrets Manager, GCP Secret Manager, Azure Key Vault, Kubernetes CSI
+  Secrets Store driver. Promotion trigger: D1 (key rotation) shipped —
+  secret refs feed rotatable identifiers.
+
+G2. **ADMIN-RBAC-1 — RBAC for the admin plane itself.**
+  Required by separation-of-duties programs and most enterprise change
+  management. Per-tenant policy authors: who can edit which
+  `AuthConfig` CRD? Today anyone with K8s edit on the namespace can
+  change auth. Implement Kubernetes RBAC + admission webhook validation
+  so one team cannot edit another team's policy. Promotion trigger: C3
+  (admin-plane auth) shipped — that gates *who* can call the API; G2
+  gates *which* policies they can edit.
+
+G3. **DATA-RES-1 — PII redaction and data residency.**
+  Non-negotiable for EU and multi-region customers. Audit events gain
+  configurable PII fields that are auto-hashed or dropped per region
+  (GDPR Art. 17 right-to-erasure). Audit sink routing by tenant region
+  (EU events -> EU Loki only; US events -> US Kafka). Per-tenant
+  data-residency policy attaches to `AuthConfig`. Promotion trigger:
+  D4 (audit sinks) shipped.
+
+G4. **COMP-REPORT-1 — Compliance report generator.**
+  Converts technical controls into procurement evidence. `lwauthctl
+  compliance --framework {soc2|iso27001|pci-dss|hipaa|fedramp}` emits
+  PDF and JSON evidence: who can access what, who changed policy when
+  (immutable audit trail), key-rotation history, audit retention proof,
+  MFA enforcement coverage, break-glass history, and unresolved drift.
+  Scheduled generation via CronJob; exportable to GRC tools. Promotion
+  trigger: D2 + D4 (versioned policy + durable audit).
+
+G5. **ID-MFA-1 — Step-up MFA and assurance-level policies.**
+  New recommended feature. Enterprise buyers often need policies like
+  "allow read with normal SSO, require phishing-resistant MFA for admin
+  writes". Add identity assurance claims (`acr`, `amr`, device posture,
+  IdP risk level) as first-class policy inputs and a response path that
+  can return a step-up challenge hint to the upstream or IdP. Promotion
+  trigger: D2 (policy versioning) and OAuth2/OIDC flow docs are stable.
+
+G6. **EXPLAIN-API-1 — Decision explainability API.**
+  High day-two value: support teams need to answer "why was this denied?"
+  without reproducing a live request. `POST /v1/explain` (admin-gated)
+  returns a full trace for a request: which identifier matched, which
+  authorizer ran, which rule fired, which mutators executed, with
+  per-stage timing and the policy version evaluated. Outputs are
+  structured JSON suitable for support tooling and incident response.
+  Promotion trigger: D2 (policy versioning) for trace stamping.
+
+G7. **POL-SIM-1 — Policy simulation and impact analysis.**
+  Reduces production-change risk. Replay last N hours of production
+  audit events against a candidate policy; report percentage of
+  decisions changed, top affected subjects/paths, deny reasons, and
   per-tenant breakdown. Goes beyond shadow mode by answering "if I
-  merge this, who breaks?" *before* committing the change. Reuses the
-  D2 replay infrastructure.
-  Promotion trigger: D2 + D4 (audit sinks for replay source).
+  merge this, who breaks?" before committing the change. Promotion
+  trigger: D2 + D4 (audit sinks for replay source).
 
-G3. **SEC-EXTREF-1 — External secret-backend resolvers.**
-  Pluggable `SecretResolver` interface in `pkg/secrets`. Reference
-  format: `secretRef: "vault://kv/lwauth/jwt-key#current"` resolved
-  at compile time, with TTL-bounded caching. Adapters: HashiCorp
-  Vault, AWS Secrets Manager, GCP Secret Manager, Azure Key Vault,
-  Kubernetes CSI Secrets Store driver. Required because plaintext
-  Secrets in K8s manifests are unacceptable in regulated industries.
-  Promotion trigger: D1 (key rotation) shipped — secret refs feed
-  rotatable identifiers.
-
-G4. **PORTAL-RO-1 — Self-service policy portal (read-only first).**
-  Web UI gated by SSO that lets app teams: search "why was my request
-  denied?" by trace ID, view their tenant's effective policy,
-  view recent decisions, and request changes via a generated PR.
-  Read-only first; write access (G6 RBAC required) is a follow-up.
-  Reduces ticket volume to the platform team substantially.
-  Promotion trigger: G6 (admin RBAC) for write mode.
-
-G5. **COMP-REPORT-1 — Compliance report generator.**
-  `lwauthctl compliance --framework {soc2|iso27001|pci-dss|hipaa|fedramp}`
-  emits PDF and JSON evidence: who can access what, who changed
-  policy when (immutable audit trail), key-rotation history, audit
-  retention proof, MFA enforcement coverage. Scheduled generation via
-  CronJob; exportable to GRC tools.
-  Promotion trigger: D2 + D4 (versioned policy + durable audit).
-
-G6. **ADMIN-RBAC-1 — RBAC for the admin plane itself.**
-  Per-tenant policy authors: who can edit which `AuthConfig` CRD?
-  Today anyone with K8s edit on the namespace can change auth.
-  Implements separation-of-duties via Kubernetes RBAC + admission
-  webhook validation. Required by SOX, ISO 27001 A.9.4, and most
-  enterprise change-management programs.
-  Promotion trigger: C3 (admin-plane auth) shipped — that gates *who*
-  can call the API; G6 gates *which* policies they can edit.
-
-G7. **FED-CRDT-1 — Multi-region active/active policy sync.**
-  Extends F5 (federation): CRDT-style policy version vectors so two
-  regions can edit independently and merge cleanly without a global
-  lock or single write region. Conflict resolution rules per
-  policy-section type (lattice for rate limits, last-writer-wins for
-  rule lists, etc.).
-  Promotion trigger: F5 prototype + at least one customer with a
-  global active/active deployment commitment.
-
-G8. **QUOTA-TIER-1 — Per-tenant SLA & quota enforcement.**
-  Beyond rate limiting: burst credits, monthly quotas, "tier=enterprise
-  gets 10K rps, tier=free gets 100 rps" with billing-grade accounting.
-  Quota state durable in Valkey; overage events publishable to billing
-  pipelines. Compatible with the existing rate limiter API.
-  Promotion trigger: E1 (two-tier cache) for quota state.
+G8. **POL-TEST-1 — Policy-as-Code testing framework.**
+  Gives application teams a CI contract for policy changes. Add
+  `lwauthctl test` that runs YAML test fixtures (`request -> expected
+  decision`) like Rego unit tests. Generate test scaffolds from
+  `lwauthctl explain` outputs. Provide a Go testing harness for CI
+  integration. Allow fixtures to be checked into Git alongside
+  `AuthConfig` CRDs so PRs require passing tests. Promotion trigger:
+  D2 (policy versioning) shipped.
 
 G9. **ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**
-  Add `pkg/identity/saml` (SP-initiated and IdP-initiated flows,
-  signature validation, NotBefore/NotOnOrAfter) and `pkg/identity/scim`
-  (provisioning callbacks). Required by FSI and government customers
+  Common procurement blocker in FSI, healthcare, education, and
+  government. Add `pkg/identity/saml` (SP-initiated and IdP-initiated
+  flows, signature validation, NotBefore/NotOnOrAfter) and
+  `pkg/identity/scim` (provisioning callbacks). Required for customers
   whose IdPs (PingFederate, ADFS, older Okta) emit SAML, not OIDC.
   Promotion trigger: at least one customer commitment — adds
   significant XML / xmldsig dependency surface.
 
-G10. **DATA-RES-1 — PII redaction and data residency.**
-  Audit events: configurable PII fields auto-hashed or dropped per
-  region (GDPR Art. 17 right-to-erasure). Audit sink routing by
-  tenant region (EU events → EU Loki only; US events → US Kafka).
-  Per-tenant data-residency policy attached to `AuthConfig`. Required
-  for GDPR compliance and Schrems II.
-  Promotion trigger: D4 (audit sinks) shipped; non-negotiable for any
-  EU customer.
+G10. **BREAKGLASS-1 — Time-bounded / break-glass access.**
+  Operationally important for on-call and incident response. Built-in
+  support for: "grant `user X` role `admin` until `T+1h`, audited as
+  break-glass". Auto-revokes; emits a distinct compliance event tagged
+  `break_glass=true`; requires ticket / incident ID metadata. Promotion
+  trigger: E2 (revocation) shipped — uses the same store.
 
-G11. **DEC-SIGN-1 — Bring-your-own KMS for decision signing.**
-  Sign decision responses (Door A/B/C) with a tenant-scoped key from
-  external KMS (AWS KMS, GCP KMS, Azure Key Vault, Vault Transit) so
-  downstream services can verify the decision came from a trusted
-  policy engine. Optional but enables zero-trust mesh patterns and
-  aligns with NIST SP 800-207 / SPIRE-style attestation.
-  Promotion trigger: G3 (external secrets) shipped — same plugin
-  surface.
+G11. **QUOTA-TIER-1 — Per-tenant SLA & quota enforcement.**
+  Buyer value is strongest for SaaS platforms that map commercial tiers
+  to technical limits. Beyond rate limiting: burst credits, monthly
+  quotas, "tier=enterprise gets 10K rps, tier=free gets 100 rps" with
+  billing-grade accounting. Quota state durable in Valkey; overage
+  events publishable to billing pipelines. Compatible with the existing
+  rate limiter API. Promotion trigger: E1 (two-tier cache) for quota
+  state.
 
-G12. **POL-LINT-1 — Policy linting and best-practice rules.**
-  `lwauthctl lint` warns on: overly permissive rules
-  (`defaultAllow: true`), missing rate limits, identifiers without
-  `requireMfa`, unbounded session TTLs, deprecated module types,
-  and config-shape antipatterns. Configurable rule severity. Hooks
-  into `lwauthctl validate` and CI.
+G12. **DEC-SIGN-1 — Bring-your-own KMS for decision signing.**
+  Valuable for zero-trust mesh and high-assurance integrations. Sign
+  decision responses (Door A/B/C) with a tenant-scoped key from external
+  KMS (AWS KMS, GCP KMS, Azure Key Vault, Vault Transit) so downstream
+  services can verify the decision came from a trusted policy engine.
+  Promotion trigger: G1 (external secrets) shipped — same resolver and
+  key-management surface.
+
+G13. **CHANGE-APPROVAL-1 — Policy change approval workflow.**
+  New recommended feature. Many enterprises require two-person review
+  for production authorization changes. Add optional approval metadata
+  (`approvedBy`, `changeTicket`, `expiresAt`) validated by an admission
+  webhook or `lwauthctl promote`; block production promotion when the
+  approval is missing, stale, or self-approved. Promotion trigger: G2
+  (admin RBAC) + C2 (GitOps promotion) shipped.
+
+G14. **PORTAL-RO-1 — Self-service policy portal (read-only first).**
+  Reduces platform-team ticket volume once the admin model is safe. Web
+  UI gated by SSO that lets app teams search "why was my request
+  denied?" by trace ID, view their tenant's effective policy, view
+  recent decisions, and request changes via a generated PR. Read-only
+  first; write access (G2 RBAC + G13 approvals required) is a follow-up.
+  Promotion trigger: G2 (admin RBAC) for write mode.
+
+G15. **POL-LINT-1 — Policy linting and best-practice rules.**
+  Good ROI and useful early, but less of a blocker than secrets,
+  residency, or compliance evidence. `lwauthctl lint` warns on overly
+  permissive rules (`defaultAllow: true`), missing rate limits,
+  identifiers without `requireMfa`, unbounded session TTLs, deprecated
+  module types, config-shape antipatterns, and missing owner metadata.
+  Configurable rule severity. Hooks into `lwauthctl validate` and CI.
   Promotion trigger: immediate — pure additive tooling.
 
-G13. **EXPLAIN-API-1 — Decision explainability API.**
-  `POST /v1/explain` (admin-gated) returns a full trace for a request:
-  which identifier matched, which authorizer ran, which rule fired,
-  which mutators executed, with per-stage timing and the policy
-  version evaluated. Beyond the current `reason` string. Outputs are
-  structured JSON suitable for support tooling and incident response.
-  Promotion trigger: D2 (policy versioning) for trace stamping.
+G16. **SIEM-DETECT-1 — SIEM mappings and detection content.**
+  New recommended feature. Ship Splunk, Elastic, Microsoft Sentinel,
+  and Chronicle parsers/dashboards for audit events plus detection
+  rules for unusual deny spikes, break-glass use, admin-policy edits,
+  key-rotation failures, and cross-tenant access attempts. Promotion
+  trigger: D4 (audit sinks) shipped and audit event schemas are stable.
 
-G14. **CDC-INVAL-1 — Cross-cluster cache invalidation via CDC.**
-  Stream cache-invalidation events through Kafka or NATS instead of
-  point-to-point Valkey pubsub. Bounded-staleness guarantees per
-  tenant; survives regional Valkey outages because invalidation
-  events buffer at the broker. Decouples invalidation from a single
-  Valkey instance.
-  Promotion trigger: E3 (cache invalidation) plus at least one
-  multi-region customer.
+G17. **CDC-INVAL-1 — Cross-cluster cache invalidation via CDC.**
+  Important for multi-region customers, but behind the core revocation
+  and invalidation work. Stream cache-invalidation events through Kafka
+  or NATS instead of point-to-point Valkey Pub/Sub. Bounded-staleness
+  guarantees per tenant; survives regional Valkey outages because
+  invalidation events buffer at the broker. Promotion trigger: E3
+  (cache invalidation) plus at least one multi-region customer.
 
-G15. **BREAKGLASS-1 — Time-bounded / break-glass access.**
-  Built-in support for: "grant `user X` role `admin` until `T+1h`,
-  audited as break-glass". Auto-revokes; emits a distinct compliance
-  event tagged `break_glass=true`. Required for SRE on-call patterns
-  and PCI-DSS Req 7.2.
-  Promotion trigger: E2 (revocation) shipped — uses the same store.
-
-G16. **POL-MARKET-1 — Policy marketplace / shared module registry.**
-  Versioned, Cosign-signed publishing of reusable `AuthConfig`
-  snippets and authorizer bundles ("PCI-DSS baseline", "OWASP Top 10
-  rate-limit bundle", "GDPR audit profile"). Pulled via OCI registry
-  (same plumbing as F6 Helm chart). Reduces time-to-first-policy
-  from days to hours.
-  Promotion trigger: F6 + F7 (release pipeline) shipped, plus at
-  least three reference policies authored by the project.
+G18. **FED-CRDT-1 — Multi-region active/active policy sync.**
+  Advanced global-control-plane feature. Extends F8 (federation):
+  CRDT-style policy version vectors so two regions can edit
+  independently and merge cleanly without a global lock or single write
+  region. Conflict resolution rules per policy-section type (lattice for
+  rate limits, last-writer-wins for rule lists, etc.). Promotion
+  trigger: F8 prototype + at least one customer with a global
+  active/active deployment commitment.
 
 ### Prioritization rationale
 
@@ -2079,16 +2234,18 @@ a known security or correctness gap.** Concretely:
   two-tier caches, cross-replica singleflight, leader election, and SLO
   templates are grouped together because they all affect HA behaviour
   across replicas.
-- **Tier F is demand-driven ecosystem work.** Supply-chain hardening,
-  SpiceDB, WASM, eBPF, and multi-cluster federation stay out of the
-  committed v1.x path until an operator or maintainer owns the external
-  prerequisites.
-- **Tier G is enterprise-customer requests.** Each item is a feature an
-  enterprise buyer would specifically evaluate during procurement
-  (compliance reports, external secret backends, SAML/SCIM, decision
-  explainability, admin RBAC). They land after the underlying tier
-  capability is shipped — e.g., G5 compliance reports require D2 + D4,
-  G6 admin RBAC requires C3, G3 external secrets pairs with D1.
+- **Tier F is demand-driven ecosystem work.** Its order is customer-
+  benefit weighted: release automation, Helm OCI, supply-chain trust,
+  and deployment modules come before optional adapters or experimental
+  runtimes because they shorten the path from evaluation to production.
+  SpiceDB, federation, eBPF, and WASM still require an operator or
+  maintainer to own the external ecosystem before they graduate.
+- **Tier G is enterprise-customer requests.** Its order is buyer-
+  benefit weighted: external secrets, admin RBAC, data residency,
+  compliance evidence, and MFA step-up remove procurement blockers;
+  explainability, simulation, and policy tests reduce day-two support
+  and change risk; quota, signing, portal, SIEM, CDC, and global sync
+  follow once their prerequisite runtime surfaces are stable.
 
 The sibling repos (`lightweightauth-idp`, `lightweightauth-plugins`,
 `lightweightauth-ebpf`) inherit this ordering: plugin work follows the
@@ -2419,7 +2576,7 @@ that:
 | Failure mode | Today's behaviour | Proposed mitigation |
 |---|---|---|
 | **Cold pod starts cold** — replica added by HPA serves p99 misses for the first ~minute | Each pod's LRU fills independently | Two-tier read-through: L1 = in-process LRU (already in `internal/cache/lru.go`), L2 = Valkey (already in `internal/cache/valkey`). On L1 miss, read L2 before evaluating; on evaluate, write through both. New replicas warm L1 from L2 in O(p99 latency). |
-| **Stampede on hot key after revoke** | TTL expiry → all replicas evaluate at once → singleflight is per-pod, so N replicas = N concurrent evaluations | Promote `singleflight` to a *cross-replica* primitive via Valkey `SETNX` lock with a short hold (ex. 100 ms); whichever replica wins writes the answer and the rest read it from L2. Falls back gracefully to per-pod singleflight if Valkey is unreachable. |
+| **Stampede on hot key after revoke** | TTL expiry → all replicas evaluate at once → singleflight is per-pod, so N replicas = N concurrent evaluations | Promote `singleflight` to a *cross-replica* primitive via Valkey `SETNX` lock with a short hold (200 ms default); whichever replica wins writes the answer and the rest read it from L2. Falls back gracefully to per-pod singleflight if Valkey is unreachable. Additionally, peer broadcast ensures revocations propagate without Valkey Pub/Sub dependency. |
 | **Manual revocation can't beat TTL** | Operators wait for TTL to elapse, or restart pods | Tag-based invalidation. Cache writes carry tags `{tenant=…, sub=…, policy_version=…}`; revocation publishes a `cache.invalidate` event over Valkey pub/sub, every replica drops L1 entries matching the tags. New `lwauth_cache_invalidations_total{scope}` counter. |
 | **Stale-while-revalidate** for upstream lookups (introspection / OpenFGA `Check`) goes silent on upstream outage | TTL hits → entry evicted → next request hits ErrUpstream | Add `staleTtl` per layer: on `ErrUpstream` and `now > expiresAt && now < expiresAt + staleTtl`, serve the stale value and fire a background refresh. Behaviour is opt-in per `AuthConfig.cache.serveStaleOnUpstreamError: true`. |
 

@@ -16,6 +16,7 @@ type LRU struct {
 	c          *lru[lruEntry]
 	defaultTTL time.Duration
 	stats      *Stats
+	onEvict    func(key string) // optional callback for tag cleanup
 }
 
 type lruEntry struct {
@@ -33,12 +34,22 @@ func NewLRU(size int, defaultTTL time.Duration, stats *Stats) (*LRU, error) {
 	if stats == nil {
 		stats = &Stats{}
 	}
-	onEvict := func(_ string, _ lruEntry) { stats.Evictions.Add(1) }
-	return &LRU{
-		c:          newLRU[lruEntry](size, onEvict),
-		defaultTTL: defaultTTL,
-		stats:      stats,
-	}, nil
+	l := &LRU{defaultTTL: defaultTTL, stats: stats}
+	onEvict := func(key string, _ lruEntry) {
+		stats.Evictions.Add(1)
+		if l.onEvict != nil {
+			l.onEvict(key)
+		}
+	}
+	l.c = newLRU[lruEntry](size, onEvict)
+	return l, nil
+}
+
+// SetEvictCallback registers a function called whenever an entry is
+// evicted by capacity pressure. Used by the Decision cache to clean
+// the TagIndex on eviction (TC2).
+func (l *LRU) SetEvictCallback(fn func(key string)) {
+	l.onEvict = fn
 }
 
 // Get returns the cached value or ok=false on miss/expiry.
@@ -51,6 +62,10 @@ func (l *LRU) Get(_ context.Context, key string) ([]byte, bool, error) {
 	if !e.expiry.IsZero() && time.Now().After(e.expiry) {
 		l.c.Remove(key)
 		l.stats.Misses.Add(1)
+		// Notify tag cleanup on TTL expiry.
+		if l.onEvict != nil {
+			l.onEvict(key)
+		}
 		return nil, false, nil
 	}
 	l.stats.Hits.Add(1)

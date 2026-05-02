@@ -283,4 +283,29 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	}, nil
 }
 
+// RevocationKeys implements module.RevocationChecker for the mTLS identifier.
+// It derives keys from the certificate serial number and the identity's subject.
+func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []string {
+	if id == nil {
+		return nil
+	}
+	var keys []string
+
+	// Key by certificate serial number — revokes a specific cert.
+	if serial, ok := id.Claims["serialNumber"].(string); ok && serial != "" {
+		keys = append(keys, "serial:"+serial)
+	}
+
+	// Key by subject — revokes ALL certificates for this identity.
+	if id.Subject != "" {
+		prefix := "sub:"
+		if tenantID != "" {
+			prefix += tenantID + ":"
+		}
+		keys = append(keys, prefix+id.Subject)
+	}
+
+	return keys
+}
+
 func init() { module.RegisterIdentifier("mtls", factory) }

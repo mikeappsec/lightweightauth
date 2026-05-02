@@ -25,6 +25,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/tracing"
 	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
+	"github.com/mikeappsec/lightweightauth/pkg/revocation"
 )
 
 // Engine is the per-request entry point. Construct via New and never
@@ -65,6 +66,17 @@ type Engine struct {
 	canaryEnforce bool
 	canaryWeight  int
 	canarySample  string
+
+	// revocationStore is optional (E2). When non-nil AND the active
+	// identifier implements module.RevocationChecker, the pipeline
+	// checks whether the credential is revoked after identification
+	// but before authorization. Nil means no revocation checking.
+	revocationStore revocation.Store
+
+	// revocationFailOpen controls behaviour when the store is unreachable.
+	// When true, the pipeline skips the check (fail-open). When false
+	// (default), the pipeline returns 401 on store errors (fail-closed).
+	revocationFailOpen bool
 }
 
 // IdentifierMode controls multi-identifier composition. See DESIGN.md §2.
@@ -109,6 +121,14 @@ type Options struct {
 	CanaryWeight int
 	// CanarySample is the routing strategy ("" = random, "header:X", "hash:sub").
 	CanarySample string
+
+	// RevocationStore is optional (E2). When non-nil, the pipeline checks
+	// for credential revocation after identification.
+	RevocationStore revocation.Store
+	// RevocationFailOpen controls behaviour on store errors. When true,
+	// revocation check is skipped on errors (fail-open). Default false
+	// (fail-closed: return 401).
+	RevocationFailOpen bool
 }
 
 // New builds an Engine. Returns an error if required components are missing.
@@ -120,19 +140,21 @@ func New(o Options) (*Engine, error) {
 		return nil, fmt.Errorf("%w: pipeline needs an authorizer", module.ErrConfig)
 	}
 	return &Engine{
-		identifiers:    o.Identifiers,
-		authorizer:     o.Authorizer,
-		mutators:       o.Mutators,
-		identifierMode: o.IdentifierMode,
-		decisionCache:  o.DecisionCache,
-		rateLimiter:    o.RateLimiter,
-		shadow:         o.Shadow,
-		shadowExpiry:   o.ShadowExpiry,
-		policyVersion:  o.PolicyVersion,
-		canary:         o.Canary,
-		canaryEnforce:  o.CanaryEnforce,
-		canaryWeight:   o.CanaryWeight,
-		canarySample:   o.CanarySample,
+		identifiers:        o.Identifiers,
+		authorizer:         o.Authorizer,
+		mutators:           o.Mutators,
+		identifierMode:     o.IdentifierMode,
+		decisionCache:      o.DecisionCache,
+		rateLimiter:        o.RateLimiter,
+		shadow:             o.Shadow,
+		shadowExpiry:       o.ShadowExpiry,
+		policyVersion:      o.PolicyVersion,
+		canary:             o.Canary,
+		canaryEnforce:      o.CanaryEnforce,
+		canaryWeight:       o.CanaryWeight,
+		canarySample:       o.CanarySample,
+		revocationStore:    o.RevocationStore,
+		revocationFailOpen: o.RevocationFailOpen,
 	}, nil
 }
 
@@ -147,6 +169,33 @@ func (e *Engine) DecisionCacheStats() *cache.Stats {
 		return nil
 	}
 	return e.decisionCache.Stats()
+}
+
+// DecisionCacheTieredStats returns the per-layer stats of a two-tier
+// decision cache, or nil if the cache is disabled or not tiered (E1).
+func (e *Engine) DecisionCacheTieredStats() *cache.TieredStats {
+	if e == nil || e.decisionCache == nil {
+		return nil
+	}
+	t := e.decisionCache.TieredBackend()
+	if t == nil {
+		return nil
+	}
+	return t.TieredLayerStats()
+}
+
+// InvalidateCacheByTags evicts all decision cache entries matching any of
+// the given tags. If tags is nil/empty, invalidates all entries.
+// Returns the number of evicted entries. (E3)
+func (e *Engine) InvalidateCacheByTags(ctx context.Context, tags []string) int {
+	if e == nil || e.decisionCache == nil {
+		return 0
+	}
+	if len(tags) == 0 {
+		e.decisionCache.InvalidateAll(ctx)
+		return -1 // unknown count for full flush
+	}
+	return e.decisionCache.InvalidateByTags(ctx, tags)
 }
 
 // Evaluate runs the full identify → authorize → mutate pipeline.
@@ -218,6 +267,7 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 // emission. Returns (decision, identity, cacheHit, error).
 func (e *Engine) evaluate(ctx context.Context, r *module.Request) (*module.Decision, *module.Identity, bool, error) {
 	if e.rateLimiter != nil && !e.rateLimiter.Allow(r.TenantID) {
+		metrics.RecordRateLimitDenied(r.TenantID)
 		return &module.Decision{
 			Allow:  false,
 			Status: 429,
@@ -229,6 +279,17 @@ func (e *Engine) evaluate(ctx context.Context, r *module.Request) (*module.Decis
 		return denyFromError(err), nil, false, err
 	}
 	r.Context["identity"] = id
+
+	// E2: Revocation check — runs after identify, before decision cache.
+	if e.revocationStore != nil && id != nil {
+		if revoked, revErr := e.checkRevocation(ctx, r, id); revoked {
+			return &module.Decision{
+				Allow:  false,
+				Status: 401,
+				Reason: "credential revoked",
+			}, id, false, revErr
+		}
+	}
 
 	dec, hit, err := e.runAuthorize(ctx, r, id)
 	if err != nil {
@@ -277,6 +338,64 @@ func (e *Engine) mutateWithSpan(ctx context.Context, m module.ResponseMutator, r
 		return err
 	}
 	return nil
+}
+
+// checkRevocation queries the revocation store for the credential's keys.
+// Returns (true, nil) if revoked, (false, nil) if not revoked, or handles
+// store errors according to the failOpen setting.
+func (e *Engine) checkRevocation(ctx context.Context, r *module.Request, id *module.Identity) (bool, error) {
+	// Find the identifier that produced this identity and check if it
+	// implements RevocationChecker.
+	var checker module.RevocationChecker
+	for _, ident := range e.identifiers {
+		if ident.Name() == id.Source {
+			if rc, ok := ident.(module.RevocationChecker); ok {
+				checker = rc
+			}
+			break
+		}
+	}
+	if checker == nil {
+		return false, nil
+	}
+
+	keys := checker.RevocationKeys(id, r.TenantID)
+	if len(keys) == 0 {
+		return false, nil
+	}
+
+	ctx, span := tracing.Tracer().Start(ctx, "pipeline.RevocationCheck")
+	defer span.End()
+	span.SetAttributes(attribute.Int("lwauth.revocation.keys_checked", len(keys)))
+
+	for _, key := range keys {
+		revoked, err := e.revocationStore.Exists(ctx, key)
+		if err != nil {
+			span.SetAttributes(attribute.String("lwauth.revocation.error", err.Error()))
+			if e.revocationFailOpen {
+				// Fail-open: skip check on store error. Emit metric so
+				// operators detect this immediately.
+				span.SetAttributes(attribute.Bool("lwauth.revocation.fail_open", true))
+				metrics.RecordRevocation(r.TenantID, "fail_open")
+				return false, nil
+			}
+			// Fail-closed (default): treat store error as revoked.
+			span.SetStatus(codes.Error, "revocation store error")
+			metrics.RecordRevocation(r.TenantID, "fail_closed")
+			return true, nil
+		}
+		if revoked {
+			span.SetAttributes(
+				attribute.String("lwauth.revocation.matched_key", key),
+				attribute.Bool("lwauth.revocation.revoked", true),
+			)
+			metrics.RecordRevocation(r.TenantID, "revoked")
+			return true, nil
+		}
+	}
+
+	metrics.RecordRevocation(r.TenantID, "not_revoked")
+	return false, nil
 }
 
 // report fans out the terminal decision to metrics + audit + span.
@@ -353,9 +472,27 @@ func (e *Engine) runAuthorize(ctx context.Context, r *module.Request, id *module
 		return dec, false, err
 	}
 	key := e.decisionCache.Key(r, id)
-	return e.decisionCache.Do(ctx, key, func() (*module.Decision, error) {
+	tags := e.deriveCacheTags(r, id)
+	return e.decisionCache.Do(ctx, key, tags, func() (*module.Decision, error) {
 		return e.authorizer.Authorize(ctx, r, id)
 	})
+}
+
+// deriveCacheTags produces the tag set for a cache entry. Tags enable
+// targeted invalidation (E3): e.g. invalidate all entries for tenant "acme"
+// or subject "user:42" without flushing the entire cache.
+func (e *Engine) deriveCacheTags(r *module.Request, id *module.Identity) []string {
+	var tags []string
+	if r.TenantID != "" {
+		tags = append(tags, "tenant:"+r.TenantID)
+	}
+	if id != nil && id.Subject != "" {
+		tags = append(tags, "subject:"+id.Subject)
+	}
+	if e.policyVersion != "" {
+		tags = append(tags, "policy_version:"+e.policyVersion)
+	}
+	return tags
 }
 
 func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Identity, error) {

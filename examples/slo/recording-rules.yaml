@@ -1,0 +1,103 @@
+# Prometheus recording rules for LightWeightAuth SLO dashboards.
+#
+# These rules pre-aggregate expensive queries so Grafana dashboards load
+# instantly. Apply via:
+#   kubectl apply -f recording-rules.yaml
+# or embed in your PrometheusRule CRD.
+#
+# Pairs with the Sloth-generated alerting rules in sloth-*.yaml.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lwauth-slo-recording-rules
+  labels:
+    app.kubernetes.io/name: lightweightauth
+    prometheus: default
+spec:
+  groups:
+    # ── Availability ──────────────────────────────────────────────────
+    - name: lwauth.slo.availability
+      interval: 30s
+      rules:
+        # Total request rate (all tenants).
+        - record: lwauth:requests:rate5m
+          expr: sum(rate(lwauth_decisions_total[5m]))
+
+        # Error rate (all tenants).
+        - record: lwauth:errors:rate5m
+          expr: sum(rate(lwauth_decisions_total{outcome="error"}[5m]))
+
+        # Per-tenant request rate.
+        - record: lwauth:requests_by_tenant:rate5m
+          expr: sum by (tenant) (rate(lwauth_decisions_total[5m]))
+
+        # Per-tenant error rate.
+        - record: lwauth:errors_by_tenant:rate5m
+          expr: sum by (tenant) (rate(lwauth_decisions_total{outcome="error"}[5m]))
+
+        # Per-tenant deny rate (policy denies, not errors).
+        - record: lwauth:denies_by_tenant:rate5m
+          expr: sum by (tenant) (rate(lwauth_decisions_total{outcome="deny"}[5m]))
+
+        # Per-tenant rate-limit denied (quota exhaustion, E6).
+        - record: lwauth:ratelimit_denied_by_tenant:rate5m
+          expr: sum by (tenant) (rate(lwauth_ratelimit_denied_total[5m]))
+
+    # ── Latency ───────────────────────────────────────────────────────
+    - name: lwauth.slo.latency
+      interval: 30s
+      rules:
+        # p50 latency (all tenants).
+        - record: lwauth:latency_p50:5m
+          expr: histogram_quantile(0.50, sum(rate(lwauth_decision_latency_seconds_bucket[5m])) by (le))
+
+        # p90 latency (all tenants).
+        - record: lwauth:latency_p90:5m
+          expr: histogram_quantile(0.90, sum(rate(lwauth_decision_latency_seconds_bucket[5m])) by (le))
+
+        # p99 latency (all tenants).
+        - record: lwauth:latency_p99:5m
+          expr: histogram_quantile(0.99, sum(rate(lwauth_decision_latency_seconds_bucket[5m])) by (le))
+
+        # p99 latency per tenant.
+        - record: lwauth:latency_p99_by_tenant:5m
+          expr: histogram_quantile(0.99, sum by (tenant, le) (rate(lwauth_decision_latency_seconds_bucket[5m])))
+
+    # ── Quota / Rate Limiting ─────────────────────────────────────────
+    - name: lwauth.slo.quota
+      interval: 30s
+      rules:
+        # Ratio of rate-limited requests to total (per tenant).
+        # Useful for SLO: "quota denial ratio < 1%".
+        # The `> 0` filter on the denominator prevents NaN for idle tenants.
+        - record: lwauth:ratelimit_ratio_by_tenant:rate5m
+          expr: |
+            sum by (tenant) (rate(lwauth_ratelimit_denied_total[5m]))
+            /
+            (
+              (sum by (tenant) (rate(lwauth_decisions_total[5m])) + sum by (tenant) (rate(lwauth_ratelimit_denied_total[5m])))
+              > 0
+            )
+
+    # ── Error Budget ──────────────────────────────────────────────────
+    # Uses 1-day increase recordings aggregated by the operator's long-
+    # term storage (Thanos/Mimir) rather than raw 30d increase() which
+    # is unreliable across Prometheus restarts and compaction.
+    - name: lwauth.slo.budget
+      interval: 1m
+      rules:
+        # Daily error count — store this in long-term TSDB for 30d+ retention.
+        - record: lwauth:errors:increase1d
+          expr: sum(increase(lwauth_decisions_total{outcome="error"}[1d]))
+
+        # Daily total request count.
+        - record: lwauth:requests:increase1d
+          expr: sum(increase(lwauth_decisions_total[1d]))
+
+        # Per-tenant daily error count.
+        - record: lwauth:errors_by_tenant:increase1d
+          expr: sum by (tenant) (increase(lwauth_decisions_total{outcome="error"}[1d]))
+
+        # Per-tenant daily total.
+        - record: lwauth:requests_by_tenant:increase1d
+          expr: sum by (tenant) (increase(lwauth_decisions_total[1d]))

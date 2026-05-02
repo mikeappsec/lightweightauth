@@ -96,3 +96,95 @@ func TestConcurrent(t *testing.T) {
 	wg.Wait()
 	// No data race / panic = success.
 }
+
+func TestOverrides_TenantGetsCustomBucket(t *testing.T) {
+	now := time.Unix(0, 0)
+	l := MustNew(Spec{
+		PerTenant: Bucket{RPS: 1, Burst: 1},
+		Overrides: map[string]Bucket{
+			"premium": {RPS: 10, Burst: 5},
+		},
+	})
+	l.now = func() time.Time { return now }
+
+	// "premium" gets its override bucket (burst=5).
+	for i := 0; i < 5; i++ {
+		if !l.Allow("premium") {
+			t.Fatalf("premium burst #%d denied", i)
+		}
+	}
+	if l.Allow("premium") {
+		t.Fatal("premium should be denied after burst=5 exhausted")
+	}
+
+	// "basic" gets the PerTenant bucket (burst=1).
+	if !l.Allow("basic") {
+		t.Fatal("basic burst #1 denied")
+	}
+	if l.Allow("basic") {
+		t.Fatal("basic should be denied after burst=1 exhausted")
+	}
+}
+
+func TestOverrides_DisabledOverridePassesThrough(t *testing.T) {
+	now := time.Unix(0, 0)
+	l := MustNew(Spec{
+		PerTenant: Bucket{RPS: 1, Burst: 1},
+		Overrides: map[string]Bucket{
+			// Unlimited: true explicitly grants unlimited access.
+			"vip": {RPS: 0, Burst: 0, Unlimited: true},
+		},
+	})
+	l.now = func() time.Time { return now }
+
+	// "vip" override has Unlimited: true → always allow.
+	for i := 0; i < 100; i++ {
+		if !l.Allow("vip") {
+			t.Fatalf("vip denied at #%d; unlimited override should pass through", i)
+		}
+	}
+
+	// Non-override tenant still limited.
+	if !l.Allow("other") {
+		t.Fatal("other burst #1 denied")
+	}
+	if l.Allow("other") {
+		t.Fatal("other should be denied after burst=1")
+	}
+}
+
+func TestOverrides_ZeroRPSWithoutUnlimited_RejectsConfig(t *testing.T) {
+	_, err := New(Spec{
+		PerTenant: Bucket{RPS: 1, Burst: 1},
+		Overrides: map[string]Bucket{
+			"misconfigured": {RPS: 0, Burst: 0},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for RPS=0 override without unlimited: true")
+	}
+}
+
+func TestOverrides_InvalidKey_Rejected(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{"empty", ""},
+		{"non-ascii", "tenant-\xff"},
+		{"too long", string(make([]byte, 200))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(Spec{
+				PerTenant: Bucket{RPS: 1, Burst: 1},
+				Overrides: map[string]Bucket{
+					tc.key: {RPS: 10, Burst: 10},
+				},
+			})
+			if err == nil {
+				t.Fatal("expected error for invalid override key")
+			}
+		})
+	}
+}
