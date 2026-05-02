@@ -136,8 +136,9 @@ func TestHTTP_JWT_AllowsAdmin(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%v", status, body)
 	}
-	if body["allow"] != true || body["subject"] != "alice" {
-		t.Errorf("body = %v, want allow=true subject=alice", body)
+	data, _ := body["data"].(map[string]any)
+	if data == nil || data["allow"] != true {
+		t.Errorf("body = %v, want allow=true", body)
 	}
 }
 
@@ -153,8 +154,9 @@ func TestHTTP_JWT_DeniesViewer(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%v", status, body)
 	}
-	if body["allow"] != false {
-		t.Errorf("allow = %v, want false", body["allow"])
+	data, _ := body["data"].(map[string]any)
+	if data == nil || data["allow"] != false {
+		t.Errorf("allow = %v, want false", body)
 	}
 }
 

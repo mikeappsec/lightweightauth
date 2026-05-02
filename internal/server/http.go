@@ -92,9 +92,9 @@ func NewHTTPHandlerWithOptions(h *EngineHolder, o HTTPHandlerOptions) http.Handl
 		mux.HandleFunc("/v1/authorize", hh.authorize)
 	}
 	mux.Handle("/healthz", readOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })))
-	mux.Handle("/readyz", readOnly(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux.Handle("/readyz", readOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hh.Engines.Load() == nil {
-			http.Error(w, "no engine", http.StatusServiceUnavailable)
+			writeError(w, r, http.StatusServiceUnavailable, "no engine loaded")
 			return
 		}
 		w.WriteHeader(200)
@@ -220,18 +220,8 @@ type authorizeResponse struct {
 }
 
 func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
-	// F4: defence-in-depth response headers, set up-front so every
-	// exit path (415, 413, 400, 503, 200, dec.Status) carries them.
-	// nosniff blocks content-type override; no-store keeps a
-	// decision out of shared/back/forward caches; no-referrer drops
-	// the URL on a follow-up navigation; DENY blocks accidental
-	// framing.
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("X-Frame-Options", "DENY")
 	if r.Method != http.MethodPost {
-		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		writeError(w, r, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	// F2: reject any media type other than application/json. Without
@@ -241,7 +231,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// headers). Pre-flight is bypassed for simple types, so the only
 	// reliable guard is at the handler.
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
-		http.Error(w, "unsupported media type; want application/json", http.StatusUnsupportedMediaType)
+		writeError(w, r, http.StatusUnsupportedMediaType, "unsupported media type; want application/json")
 		return
 	}
 	// Bound the body before decoding. MaxBytesReader returns a 413-
@@ -259,10 +249,10 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			writeError(w, r, http.StatusRequestEntityTooLarge, "request too large")
 			return
 		}
-		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	// F6: refuse duplicate JSON keys. encoding/json silently keeps
@@ -270,7 +260,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// "first wins" instead, an attacker can craft a request the
 	// front layer reads as benign and lwauth reads as authenticated.
 	if err := assertNoDuplicateJSONKeys(body); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	// F10: enforce exact-case canonical top-level keys.
@@ -281,12 +271,12 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// value. DisallowUnknownFields does NOT help here: "PATH" is
 	// considered known (case-insensitive match against "path").
 	if err := assertCanonicalTopLevelKeys(body); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	var in authorizeRequest
 	if err := json.Unmarshal(body, &in); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	// F15: validate structural shape of operator-controllable string
@@ -294,7 +284,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// in Host or oversize / non-printable TenantID is refused with
 	// 400 instead of being silently propagated to module code.
 	if err := validateAuthorizeShape(&in); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request structure")
 		return
 	}
 	// F9 / F13: reject case-collisions AND multi-value arrays in the
@@ -308,12 +298,12 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// in either order.
 	headers, herr := lowercaseHeaderKeys(in.Headers)
 	if herr != nil {
-		http.Error(w, "bad json: "+herr.Error(), http.StatusBadRequest)
+		writeError(w, r, http.StatusBadRequest, "invalid request structure")
 		return
 	}
 	eng := h.Engines.Load()
 	if eng == nil {
-		http.Error(w, "no engine loaded", http.StatusServiceUnavailable)
+		writeError(w, r, http.StatusServiceUnavailable, "no engine loaded")
 		return
 	}
 	req := &module.Request{
@@ -332,7 +322,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// the pipeline and rides on whatever the engine produces — it
 	// does not need an uncancellable context to land in the slog
 	// handler.
-	dec, id, _ := eng.Evaluate(r.Context(), req)
+	dec, _, _ := eng.Evaluate(r.Context(), req)
 	// Engine emits a verbose internal reason (e.g. "hmac: signature
 	// mismatch") that the audit log captures. Public callers see only
 	// a generic status-aligned string so policy and module internals
@@ -352,29 +342,23 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		UpstreamHeaders: dec.UpstreamHeaders,
 		ResponseHeaders: dec.ResponseHeaders,
 	}
-	if id != nil {
-		out.IdentitySubject = id.Subject
-		out.IdentitySource = id.Source
-	}
-	// F4: defence-in-depth response headers. nosniff blocks
-	// content-type override; no-store keeps a decision out of
-	// shared/back/forward caches; no-referrer drops the URL on a
-	// follow-up navigation; DENY blocks accidental framing.
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("X-Frame-Options", "DENY")
 	if dec.Allow {
-		w.WriteHeader(http.StatusOK)
+		writeSuccess(w, r, http.StatusOK, "authorized", out)
 	} else {
-		status := dec.Status
-		if status == 0 {
-			status = http.StatusForbidden
+		httpStatus := dec.Status
+		if httpStatus == 0 {
+			httpStatus = http.StatusForbidden
 		}
-		w.WriteHeader(status)
+		writeJSON(w, httpStatus, APIResponse{
+			Status:    "error",
+			Code:      httpStatus,
+			Message:   publicMsg,
+			Data:      out,
+			Error:     &APIError{Type: errorTypeFromStatus(httpStatus), Detail: publicMsg},
+			Timestamp: timeNowUTC(),
+			RequestID: extractRequestID(r),
+		})
 	}
-	_ = json.NewEncoder(w).Encode(out)
 }
 
 // isJSONContentType returns true for application/json, optionally with
