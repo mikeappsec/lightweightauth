@@ -32,15 +32,15 @@ import (
 // The manager starts in its own goroutine so HTTP/gRPC remain the
 // authoritative lifecycle. If the manager exits with an error, errCh
 // surfaces it so the main Run loop can shut everything down.
-func startCRDController(ctx context.Context, log *slog.Logger, opts Options, holder *server.EngineHolder, errCh chan<- error) error {
+func startCRDController(ctx context.Context, log *slog.Logger, opts Options, holder *server.EngineHolder, errCh chan<- error) (*configstream.Broker, error) {
 	scheme := runtime.NewScheme()
 	if err := controller.AddToScheme(scheme); err != nil {
-		return fmt.Errorf("scheme: %w", err)
+		return nil, fmt.Errorf("scheme: %w", err)
 	}
 
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
-		return fmt.Errorf("get kubeconfig: %w (is KUBECONFIG / in-cluster config available?)", err)
+		return nil, fmt.Errorf("get kubeconfig: %w (is KUBECONFIG / in-cluster config available?)", err)
 	}
 
 	cacheOpts := cache.Options{}
@@ -80,7 +80,7 @@ func startCRDController(ctx context.Context, log *slog.Logger, opts Options, hol
 
 	mgr, err := ctrl.NewManager(cfg, mgrOpts)
 	if err != nil {
-		return fmt.Errorf("new manager: %w", err)
+		return nil, fmt.Errorf("new manager: %w", err)
 	}
 
 	// The Broker lets the leader push compiled config to followers via
@@ -98,17 +98,20 @@ func startCRDController(ctx context.Context, log *slog.Logger, opts Options, hol
 		Broker: broker,
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("setup reconciler: %w", err)
+		return nil, fmt.Errorf("setup reconciler: %w", err)
 	}
 
 	// ENT-HA-1: when leader election is on and a configstream address
 	// is provided, start a follower subscription loop. This goroutine
 	// receives config from the leader and swaps it into the holder,
-	// enabling active/active serving. The loop runs continuously — when
-	// this pod IS the leader, the gRPC call will self-connect (or fail
-	// benignly) but the reconciler swap already keeps the engine current.
+	// enabling active/active serving. The loop terminates if this pod
+	// wins the leader election (preventing self-connect).
 	if opts.LeaderElection && opts.ConfigStreamAddr != "" {
-		go startFollowerSubscription(ctx, log, opts, holder)
+		var leaderCh <-chan struct{}
+		if le, ok := mgr.(interface{ Elected() <-chan struct{} }); ok {
+			leaderCh = le.Elected()
+		}
+		go startFollowerSubscription(ctx, log, opts, holder, leaderCh)
 	}
 
 	go func() {
@@ -121,7 +124,7 @@ func startCRDController(ctx context.Context, log *slog.Logger, opts Options, hol
 			errCh <- fmt.Errorf("manager: %w", err)
 		}
 	}()
-	return nil
+	return broker, nil
 }
 
 // startFileWatcher watches opts.ConfigPath with fsnotify and atomically
@@ -199,3 +202,20 @@ func StartFileWatcherForTest(ctx context.Context, path string, holder *server.En
 type stderrSink struct{}
 
 func (stderrSink) Write(p []byte) (int, error) { return len(p), nil }
+
+// validateLeaseTimings checks that the operator's lease timing knobs
+// satisfy controller-runtime's invariants: leaseDuration > renewDeadline
+// > retryPeriod. Invalid timing can cause split-brain or panic.
+func validateLeaseTimings(opts Options) error {
+	if opts.LeaseDuration > 0 && opts.RenewDeadline > 0 {
+		if opts.LeaseDuration <= opts.RenewDeadline {
+			return errors.New("lwauthd: leaseDuration must be greater than renewDeadline")
+		}
+	}
+	if opts.RenewDeadline > 0 && opts.RetryPeriod > 0 {
+		if opts.RenewDeadline <= opts.RetryPeriod {
+			return errors.New("lwauthd: renewDeadline must be greater than retryPeriod")
+		}
+	}
+	return nil
+}

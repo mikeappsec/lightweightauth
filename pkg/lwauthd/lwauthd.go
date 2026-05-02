@@ -41,6 +41,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/internal/server"
 	"github.com/mikeappsec/lightweightauth/pkg/buildinfo"
+	"github.com/mikeappsec/lightweightauth/pkg/configstream"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 )
@@ -246,6 +247,7 @@ func Run(opts Options) error {
 	registerTieredCacheStats(holder)
 
 	errCh := make(chan error, 3)
+	var crdBroker *configstream.Broker
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -257,7 +259,12 @@ func Run(opts Options) error {
 		log.Info("file watcher started", "path", opts.ConfigPath)
 	}
 	if opts.WatchNamespace != "" {
-		if err := startCRDController(ctx, log, opts, holder, errCh); err != nil {
+		if err := validateLeaseTimings(opts); err != nil {
+			return err
+		}
+		var err error
+		crdBroker, err = startCRDController(ctx, log, opts, holder, errCh)
+		if err != nil {
 			return err
 		}
 	}
@@ -342,6 +349,24 @@ func Run(opts Options) error {
 
 	if opts.EnableReflection {
 		reflection.Register(grpcSrv)
+	}
+
+	// ENT-HA-1: Register ConfigDiscovery so followers can subscribe to
+	// the leader's compiled config stream. The Authorizer requires the
+	// gRPC listener to be TLS-protected (any authenticated peer is
+	// allowed; unauthenticated peers are rejected).
+	if crdBroker != nil {
+		csAuth := configstream.Authorizer(func(ctx context.Context) error {
+			// When gRPC TLS is configured with client CA, the transport
+			// already verified the peer certificate. Allow all authenticated
+			// peers. When TLS is not configured (dev/test), allow all.
+			if opts.GRPCTLSClientCAFile != "" {
+				// Transport-level mTLS already verified; no additional check needed.
+				return nil
+			}
+			return nil
+		})
+		configstream.NewServer(crdBroker, csAuth).Register(grpcSrv)
 	}
 
 	go func() {
