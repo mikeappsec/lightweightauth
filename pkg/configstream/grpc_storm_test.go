@@ -59,8 +59,10 @@ var grpcGoleakIgnores = []goleak.Option{
 // scheduled out" race is masked.
 func verifyNoBrokerLeaks(t *testing.T) {
 	t.Helper()
-	// 50ms is well over the worst observed unwind on CI under -race.
-	time.Sleep(50 * time.Millisecond)
+	// 200ms allows gRPC transport goroutines to unwind even under heavy
+	// CPU contention (go test ./... parallelism). Prior 50ms was tight
+	// and caused goleak false-positives on loaded CI runners.
+	time.Sleep(200 * time.Millisecond)
 	goleak.VerifyNone(t, grpcGoleakIgnores...)
 }
 
@@ -82,6 +84,11 @@ func TestGRPC_MultiClientReconnectStorm(t *testing.T) {
 		reconnectsEach  = 3
 		totalPublishes  = 100
 		publishInterval = 2 * time.Millisecond
+		// convergenceTimeout bounds how long a "final" stream waits
+		// to observe the latest published version. Under heavy CPU
+		// contention (e.g. go test ./... running 30+ packages), gRPC
+		// stream setup latency can spike, so this must be generous.
+		convergenceTimeout = 10 * time.Second
 	)
 
 	b := NewBroker()
@@ -206,7 +213,7 @@ func TestGRPC_MultiClientReconnectStorm(t *testing.T) {
 
 			<-publisherDone
 			final := lastPublished.Load()
-			deadline := time.Now().Add(3 * time.Second)
+			deadline := time.Now().Add(convergenceTimeout)
 			for time.Now().Before(deadline) && finalSeen.Load() < final {
 				time.Sleep(5 * time.Millisecond)
 			}
