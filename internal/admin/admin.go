@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package admin implements the admin-plane authentication and
 // authorization model for lwauth operator endpoints.
 //

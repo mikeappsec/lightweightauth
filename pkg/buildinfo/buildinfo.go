@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package buildinfo exposes compile-time and runtime build attributes
 // the rest of lwauth needs for observability and operator-facing
 // surfaces (startup log line, Prometheus gauge, /healthz banner).

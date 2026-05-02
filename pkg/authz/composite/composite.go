@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package composite is the all-of / any-of authorizer that lets operators
 // mix RBAC, OPA, CEL, and ReBAC in a single AuthConfig (DESIGN.md §5).
 //

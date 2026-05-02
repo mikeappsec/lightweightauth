@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package openfga is the OpenFGA / Zanzibar-style ReBAC authorizer
 // (DESIGN.md §5, §7).
 //

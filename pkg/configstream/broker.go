@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package configstream is the controller→pod fan-out primitive that
 // replaces SIGHUP+ConfigMap as the way compiled AuthConfigs reach a
 // running lwauth process. It is transport-agnostic: a Broker simply

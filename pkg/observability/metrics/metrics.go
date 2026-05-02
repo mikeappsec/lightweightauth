@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package metrics is the lwauth Prometheus metrics surface (DESIGN.md M9).
 //
 // The package exposes a Recorder bundling every metric the pipeline,

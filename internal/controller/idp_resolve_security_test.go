@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 package controller
 
 // Security regressions for IdP-ref trust-material handling.

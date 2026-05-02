@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command lwauth is the default LightweightAuth daemon. It bundles only
 // the core builtins (jwt, apikey, rbac). To extend it with extra plugins,
 // build your own binary that blank-imports your plugin packages — see

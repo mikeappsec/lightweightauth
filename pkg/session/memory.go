@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package session — in-memory server-side store. Useful when sessions
 // outgrow the 4 KiB cookie ceiling but you don't want a Redis dependency
 // (Redis ships in M7 in lightweightauth-plugins).

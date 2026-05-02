@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package session defines the cross-module abstraction for browser sessions
 // established by interactive identifiers (OAuth2 auth-code, SAML, ...).
 //

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 package server
 
 // OpenAPI 3.1 handler. The spec lives at

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package mtls is the mTLS identifier. It supports two ingestion paths
 // (DESIGN.md §4):
 //

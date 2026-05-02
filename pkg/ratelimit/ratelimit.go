@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package ratelimit provides a goroutine-safe token-bucket rate limiter
 // keyed by tenant. It is consumed by internal/pipeline at the entry of
 // Evaluate so a misbehaving tenant cannot exhaust shared module

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 package golden
 
 // Plugin proto wire-compatibility lock for v1.x.

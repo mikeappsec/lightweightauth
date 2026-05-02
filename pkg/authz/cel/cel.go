@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package cel is the lighter ABAC authorizer based on Google's Common
 // Expression Language (DESIGN.md §5). Use it when full Rego is overkill.
 //

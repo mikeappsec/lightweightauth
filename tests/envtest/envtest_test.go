@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //go:build envtest
 
 // Package envtest is the controller-runtime envtest end-to-end suite

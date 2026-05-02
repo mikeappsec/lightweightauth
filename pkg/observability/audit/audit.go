@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package audit emits one JSON record per terminal authorization
 // decision (DESIGN.md M9). Sinks consume Events; the default Sink is a
 // thin slog wrapper writing JSON lines to a *slog.Logger of the

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package dpop implements RFC 9449 — OAuth 2.0 Demonstrating Proof of
 // Possession (DPoP). It is a wrapper-style identifier: it does not
 // produce identities itself, but binds an inner bearer-token identifier

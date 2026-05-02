@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package ratelimitvalkey implements the K-DOS-1 distributed rate-limit
 // aggregator backed by Valkey (or Redis 7.x). It registers under the
 // type name "valkey" via [pkg/ratelimit.RegisterBackend], so an

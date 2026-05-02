@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Code generation note (M0):
 //
 // The .proto files under api/proto/lightweightauth/ are *design artifacts*

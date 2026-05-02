@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package sign implements the F-PLUGIN-2 plugin-response signature
 // scheme: a plugin can attach an HMAC-SHA256 signature to its
 // IdentifyResponse, AuthorizePluginResponse, or MutateResponse, and

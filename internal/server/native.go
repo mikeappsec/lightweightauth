@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // This file implements Door B (DESIGN.md §1, M8): the native
 // `lightweightauth.v1.Auth` gRPC service. It mirrors the ext_authz
 // adapter (grpc.go) but uses our own, smaller proto so non-Envoy

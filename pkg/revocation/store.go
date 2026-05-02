@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package revocation provides a shared credential revocation store
 // used by the LightweightAuth pipeline to reject previously-valid
 // credentials that have been explicitly revoked by an operator.

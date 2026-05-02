@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package introspection implements the RFC 7662 OAuth 2.0 token-
 // introspection identifier. It validates opaque tokens by POSTing them to
 // the IdP's introspection endpoint and caches the response keyed by

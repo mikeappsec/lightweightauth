@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package builtins imports the built-in identifier, authorizer, and
 // mutator packages purely for their init() side-effects, so that
 // `import _ "github.com/mikeappsec/lightweightauth/pkg/builtins"` registers

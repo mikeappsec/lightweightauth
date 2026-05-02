@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package server hosts the transport adapters that translate between an
 // inbound transport (HTTP, native gRPC, Envoy ext_authz) and the internal
 // pipeline.Engine. See docs/ARCHITECTURE.md.

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package cachevalkey implements the shared decision-cache backend
 // described in DESIGN.md §5: a Valkey-backed cache.Backend that lets
 // multiple lwauth replicas share decisions, JWKS responses, and

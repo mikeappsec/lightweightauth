@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package config defines the on-disk YAML / CRD-derived shape of an
 // AuthConfig and provides the Compiler that turns it into a *pipeline.Engine.
 //

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package rbac is the built-in role-based authorizer. Zero-dependency,
 // hash-lookup decision path. See DESIGN.md §5.
 //

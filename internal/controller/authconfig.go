@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package controller hosts the controller-runtime Reconcilers that turn
 // LightweightAuth CRDs into a live *pipeline.Engine. The package is
 // internal/ so external embedders go through pkg/lwauthd, which decides

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // refresh_tracker.go provides a JWKS refresh wrapper that instruments
 // kid-miss-triggered refreshes with keyrotation metrics.
 package jwt

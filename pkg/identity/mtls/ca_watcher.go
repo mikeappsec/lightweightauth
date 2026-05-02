@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // ca_watcher.go provides hot-reload support for mTLS CA bundles.
 // It watches a CA bundle file and reloads the x509.CertPool when the
 // content changes, with no pod restart. See D1 (ENT-KEYROT-1).

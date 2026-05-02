@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 //go:build soak
 
 // Package soak is the M12 sustained-load test promised by DESIGN.md §M12

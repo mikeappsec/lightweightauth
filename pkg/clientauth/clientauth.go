@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package clientauth is a tiny outbound helper for service-to-service
 // callers of lwauth-protected upstreams. It implements the OAuth 2.0
 // Client Credentials Grant (RFC 6749 §4.4): a service exchanges its

@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package oauth2 is the OIDC / OAuth 2.0 authorization-code identifier
 // (the oauth2-proxy-equivalent feature set).
 //

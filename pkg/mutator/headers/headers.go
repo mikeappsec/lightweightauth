@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package headers is the trio of header response mutators (DESIGN.md §4).
 //
 // Three modules register here:

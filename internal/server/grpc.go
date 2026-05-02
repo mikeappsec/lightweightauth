@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package server's gRPC adapter implements the Envoy External
 // Authorization API (envoy.service.auth.v3) so Envoy / Istio / Gloo /
 // AWS App Mesh can call lwauth as their `ext_authz` provider.

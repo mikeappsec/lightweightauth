@@ -1,3 +1,6 @@
+// Copyright 2026 LightweightAuth Contributors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package lwauthd is the public embedding surface for downstream binaries
 // that want to bundle lightweightauth with extra plugins. It re-exports
 // just enough of the internal config + server packages so external code
