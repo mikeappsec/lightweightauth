@@ -53,6 +53,11 @@ type Decision struct {
 	// entries from prior instances (safe — they're a cache, not a store).
 	hmacKey []byte
 
+	// sharedHMACKey is set when distributed singleflight (E4) is enabled.
+	// Used to sign L2 writes so other replicas can verify entries written
+	// by the singleflight winner. Reads accept either key.
+	sharedHMACKey []byte
+
 	// tagIndex tracks key→tags associations for tag-based invalidation (E3).
 	tagIndex *TagIndex
 
@@ -64,6 +69,10 @@ type Decision struct {
 	// maxStaleness caps how old a stale entry can be and still be served.
 	// Always positive when serveStaleOnError is true (enforced at construction).
 	maxStaleness time.Duration
+
+	// distSF is the cross-replica singleflight coordinator (E4). nil means
+	// disabled — falls back to in-process singleflight only.
+	distSF *DistSF
 }
 
 // DecisionOptions parameterises a decision cache. A nil DecisionOptions or
@@ -105,6 +114,15 @@ type DecisionOptions struct {
 	// be served. When ServeStaleOnError is true and MaxStaleness is zero,
 	// defaults to 5 minutes. Recommended: 5m–30m depending on security posture.
 	MaxStaleness time.Duration
+
+	// DistSF is the cross-replica singleflight coordinator (E4). nil means
+	// disabled — uses in-process singleflight only.
+	DistSF *DistSF
+
+	// SharedHMACKey is a secret shared across all replicas, used to sign
+	// L2 cache entries when distributed singleflight is enabled (E4).
+	// Required when DistSF is non-nil. 32 bytes recommended (HMAC-SHA256).
+	SharedHMACKey []byte
 }
 
 // defaultMaxStaleness is the default cap on how far past expiry a stale
@@ -154,9 +172,11 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 		keyFields:         keys,
 		stats:             stats,
 		hmacKey:           hk,
+		sharedHMACKey:     o.SharedHMACKey,
 		tagIndex:          NewTagIndex(),
 		serveStaleOnError: o.ServeStaleOnError,
 		maxStaleness:      o.MaxStaleness,
+		distSF:            o.DistSF,
 	}
 	// Hook LRU eviction to clean tag mappings (TC2: prevent memory leak).
 	if lruBackend, ok := backend.(*LRU); ok {
@@ -212,9 +232,11 @@ func NewDecisionWithTiered(o DecisionOptions, tiered *Tiered, tieredStats *Tiere
 		keyFields:         keys,
 		stats:             aggStats,
 		hmacKey:           hk,
+		sharedHMACKey:     o.SharedHMACKey,
 		tagIndex:          NewTagIndex(),
 		serveStaleOnError: o.ServeStaleOnError,
 		maxStaleness:      o.MaxStaleness,
+		distSF:            o.DistSF,
 	}
 	// Hook L1 eviction to clean tag mappings (TC2: prevent memory leak).
 	if lruL1, ok := tiered.l1.(*LRU); ok {
@@ -283,6 +305,28 @@ func (d *Decision) Do(ctx context.Context, key string, tags []string, fn func() 
 		}
 	}
 
+	// E4: Cross-replica singleflight. If we lose the distributed lock,
+	// another replica is evaluating — use its L2 result directly.
+	if d.distSF != nil {
+		won, raw, err := d.distSF.Do(ctx, key)
+		if err == nil && !won && raw != nil {
+			// Another replica wrote the result. Verify and return.
+			payload, valid := d.verifyHMAC(raw)
+			if valid {
+				var entry decisionEntry
+				if err2 := json.Unmarshal(payload, &entry); err2 == nil {
+					d.stats.DistSFWaited.Add(1)
+					return &entry.Decision, true, nil
+				}
+			}
+			// HMAC mismatch or unmarshal error: fall through to local evaluation.
+		}
+		if won {
+			d.stats.DistSFWon.Add(1)
+		}
+		// If won==true or err!=nil, proceed with local singleflight.
+	}
+
 	// Singleflight: coalesce concurrent misses/revalidations.
 	type doResult struct {
 		dec      *module.Decision
@@ -306,6 +350,8 @@ func (d *Decision) Do(ctx context.Context, key string, tags []string, fn func() 
 			ttl = d.negativeTTL
 		}
 		d.storeEntry(ctx, key, dec, ttl, tags)
+		// E4: release distributed lock after writing result to L2.
+		d.distSF.Release(ctx, key)
 		return &doResult{dec: dec}, nil
 	})
 	if err != nil {
@@ -421,8 +467,14 @@ func (d *Decision) TagIndex() *TagIndex {
 
 // signHMAC appends a 32-byte HMAC-SHA256 tag to the payload.
 // Wire format: [payload...][32-byte MAC]
+// When sharedHMACKey is set (E4), signs with the shared key so other
+// replicas can verify entries in L2.
 func (d *Decision) signHMAC(payload []byte) []byte {
-	mac := hmac.New(sha256.New, d.hmacKey)
+	key := d.hmacKey
+	if len(d.sharedHMACKey) > 0 {
+		key = d.sharedHMACKey
+	}
+	mac := hmac.New(sha256.New, key)
 	mac.Write(payload)
 	tag := mac.Sum(nil)
 	out := make([]byte, len(payload)+len(tag))
@@ -433,19 +485,31 @@ func (d *Decision) signHMAC(payload []byte) []byte {
 
 // verifyHMAC splits payload and tag, verifies the HMAC, and returns the
 // payload if valid. Returns (nil, false) on tampered/short data.
+// When sharedHMACKey is set (E4), tries the shared key first (for cross-
+// replica entries), then falls back to the instance key (for L1 entries
+// from before E4 was enabled, or during migration).
 func (d *Decision) verifyHMAC(data []byte) ([]byte, bool) {
 	if len(data) <= sha256.Size {
 		return nil, false
 	}
 	payload := data[:len(data)-sha256.Size]
 	tag := data[len(data)-sha256.Size:]
+
+	// Try shared key first (common case when E4 enabled).
+	if len(d.sharedHMACKey) > 0 {
+		mac := hmac.New(sha256.New, d.sharedHMACKey)
+		mac.Write(payload)
+		if hmac.Equal(tag, mac.Sum(nil)) {
+			return payload, true
+		}
+	}
+	// Fall back to instance key.
 	mac := hmac.New(sha256.New, d.hmacKey)
 	mac.Write(payload)
-	expected := mac.Sum(nil)
-	if !hmac.Equal(tag, expected) {
-		return nil, false
+	if hmac.Equal(tag, mac.Sum(nil)) {
+		return payload, true
 	}
-	return payload, true
+	return nil, false
 }
 
 // isValidKeyField mirrors the switch in resolveField. Anything not listed

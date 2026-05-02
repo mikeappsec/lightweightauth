@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
+	cachevalkey "github.com/mikeappsec/lightweightauth/internal/cache/valkey"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
@@ -233,12 +235,25 @@ func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		// E4: build distributed singleflight if enabled.
+		var distSF *cache.DistSF
+		var sharedKey []byte
+		if spec.DistributedSingleflight {
+			distSF, sharedKey, err = buildDistSF(spec, tieredBackend)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		return cache.NewDecisionWithTiered(cache.DecisionOptions{
 			PositiveTTL:       pos,
 			NegativeTTL:       neg,
 			KeyFields:         spec.Key,
 			ServeStaleOnError: spec.ServeStaleOnError,
 			MaxStaleness:      maxStale,
+			DistSF:            distSF,
+			SharedHMACKey:     sharedKey,
 		}, tieredBackend, tieredStats, aggStats)
 	}
 
@@ -290,6 +305,50 @@ func buildTieredBackend(l1Size int, spec *CacheSpec) (*cache.Tiered, *cache.Tier
 		return nil, nil, nil, fmt.Errorf("%w: cache.tiered: %v", module.ErrConfig, err)
 	}
 	return tiered, tieredStats, aggStats, nil
+}
+
+// buildDistSF constructs the distributed singleflight coordinator (E4).
+// Returns (nil, nil, nil) if configuration is invalid (logged as warning).
+func buildDistSF(spec *CacheSpec, tiered *cache.Tiered) (*cache.DistSF, []byte, error) {
+	// Parse hold duration.
+	var holdDuration time.Duration
+	if spec.SFHoldDuration != "" {
+		var err error
+		holdDuration, err = time.ParseDuration(spec.SFHoldDuration)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: cache.sfHoldDuration: %v", module.ErrConfig, err)
+		}
+	}
+
+	// Decode shared HMAC key (base64). If absent, generate one per-instance
+	// (cross-replica HMAC verification will fail gracefully but each replica
+	// still benefits from local dedup via the distributed lock).
+	var sharedKey []byte
+	if spec.SharedHMACKey != "" {
+		var err error
+		sharedKey, err = base64.StdEncoding.DecodeString(spec.SharedHMACKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: cache.sharedHmacKey: invalid base64: %v", module.ErrConfig, err)
+		}
+		if len(sharedKey) < 16 {
+			return nil, nil, fmt.Errorf("%w: cache.sharedHmacKey: must be at least 16 bytes (128-bit)", module.ErrConfig)
+		}
+	}
+
+	// The SFLocker needs the Valkey client from the L2 backend.
+	l2 := tiered.L2()
+	locker := cachevalkey.NewSFLockerFromBackend(l2, spec.KeyPrefix)
+	if locker == nil {
+		slog.Warn("distributedSingleflight enabled but L2 is not Valkey; falling back to per-pod singleflight")
+		return nil, nil, nil
+	}
+
+	distSF := cache.NewDistSF(cache.DistSFOptions{
+		Locker:       locker,
+		L2:           l2,
+		HoldDuration: holdDuration,
+	})
+	return distSF, sharedKey, nil
 }
 
 // buildRevocationStore constructs the revocation store from the spec (E2).

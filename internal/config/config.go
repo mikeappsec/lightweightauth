@@ -143,6 +143,24 @@ type CacheSpec struct {
 	// MaxStaleness caps how far past expiry a stale entry can be and still
 	// be served. Zero means unlimited. Example: "5m", "30m".
 	MaxStaleness string `json:"maxStaleness,omitempty" yaml:"maxStaleness,omitempty"`
+
+	// DistributedSingleflight enables cross-replica singleflight (E4).
+	// When true and backend is "tiered", cache misses acquire a short
+	// distributed lock via Valkey SETNX so only one replica evaluates
+	// the authorizer for a given key. Others poll L2 for the result.
+	// Requires backend "tiered" (ignored otherwise).
+	DistributedSingleflight bool `json:"distributedSingleflight,omitempty" yaml:"distributedSingleflight,omitempty"`
+
+	// SFHoldDuration is how long the distributed singleflight lock lives.
+	// Should exceed p99 evaluation latency. Default "200ms". Example: "500ms".
+	SFHoldDuration string `json:"sfHoldDuration,omitempty" yaml:"sfHoldDuration,omitempty"`
+
+	// SharedHMACKey is a base64-encoded secret shared across all replicas
+	// for signing L2 cache entries when distributed singleflight is enabled.
+	// 32 bytes (256-bit) recommended. If empty when distributedSingleflight
+	// is true, a random key is generated (cross-replica verification will
+	// fail gracefully — each replica evaluates independently).
+	SharedHMACKey string `json:"sharedHmacKey,omitempty" yaml:"sharedHmacKey,omitempty"`
 }
 
 // RevocationSpec configures the opt-in credential revocation store (E2).

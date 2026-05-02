@@ -1837,11 +1837,86 @@ E3. **ENT-CACHE-2 — Tag-based invalidation and stale-while-revalidate.**
   outages degrade predictably instead of turning every TTL expiry into
   a hard 503.
 
-E4. **ENT-CACHE-3 — Cross-replica singleflight.**
+E4. **ENT-CACHE-3 — Cross-replica singleflight + peer broadcast.**
   Add Valkey `SETNX`-style short locks around hot cache misses so N
   replicas do not stampede the IdP, OpenFGA, or OPA sidecar on the
   same key. Fallback to in-process singleflight when Valkey is down;
   never block longer than the caller's request context.
+
+  Additionally, harden revocation and invalidation propagation via
+  direct HTTP peer broadcast so that safety-critical events reach all
+  replicas even when Valkey Pub/Sub is partitioned.
+
+  **Implementation:**
+
+  1. *Distributed singleflight* — `internal/cache/distsf.go` provides a
+     `DistSF` coordinator backed by `DistSFLocker` (Valkey `SET NX PX`).
+     On cache miss: try distributed lock → winner evaluates, stores to L2,
+     releases lock. Losers poll L2 every 5ms for the winner's result
+     (bounded by holdDuration, default 200ms). On Valkey error or context
+     cancellation, each replica falls back to per-pod singleflight (zero
+     correctness impact, only N× authorizer load).
+
+  2. *Shared HMAC key* — When `distributedSingleflight` is enabled,
+     operators provide a `sharedHmacKey` (base64, ≥16 bytes). All replicas
+     sign L2 entries with this shared secret so winners' results are
+     verifiable by losers. The per-instance ephemeral key remains as
+     fallback for L1 entries.
+
+  3. *Peer broadcast* (`internal/admin/peerbroadcast.go`) — On revocation
+     or cache invalidation, the admin handler fans out the request body to
+     all discovered peers via HTTP POST. Peers are discovered via a
+     `PeerResolver` interface (DNS headless Service by default, static list
+     for non-Kubernetes). A sentinel header `X-Peer-Broadcast: true`
+     prevents infinite re-fan-out. Fire-and-forget: failures are logged but
+     never block the admin caller. Pub/Sub remains the primary propagation
+     channel; peer broadcast is belt-and-suspenders.
+
+  **Revocation safety during Valkey outage:**
+
+  The pipeline already checks the revocation store *before* the decision
+  cache (E2: `checkRevocation` → `runAuthorize`), so a cached "allow"
+  can never bypass a known revocation. The remaining gap was *propagation*:
+  if replica A issues a revocation but Pub/Sub is down, replicas B–N don't
+  learn about it until Pub/Sub recovers.
+
+  Peer broadcast closes this gap: the revoking replica sends the
+  revocation directly to all peers. Each peer writes to its local store
+  and the next request for that credential hits the revocation gate.
+  Worst-case latency: one HTTP round-trip per peer (typically <2ms
+  in-cluster).
+
+  **Trade-off analysis (why #2 + #4 over alternatives):**
+
+  | Approach | Per-request cost | Complexity | Failure coverage |
+  |----------|-----------------|------------|------------------|
+  | 1. Disable stale on CB open | 0 | Config-only | Loses E3 value during combined failures |
+  | 2. Revocation before cache | ~30ns (map lookup) | Already done (E2) | Enforces known revocations regardless of cache |
+  | 3. Peer gossip (CRDT mesh) | Background O(n²) | High (protocol, convergence) | Strongest, but operational burden |
+  | **4. Admin peer broadcast** | **0 per request; O(n) per revocation** | **~50 lines** | **Covers Pub/Sub outage; only gap is full network partition** |
+
+  We chose **#2 + #4** because:
+  - #2 is already free (pipeline ordering from E2 ensures revocation
+    gate runs unconditionally before cache lookup — zero new cost).
+  - #4 adds negligible complexity (one file, DNS resolution + HTTP POST)
+    and covers 99% of real-world Valkey outage scenarios.
+  - #3 (gossip) would add operational burden disproportionate to the
+    marginal coverage gain (only helps if replicas can't reach each other
+    *at all*, which implies broader service degradation).
+
+  **Config:**
+  ```yaml
+  cache:
+    backend: tiered
+    distributedSingleflight: true
+    sfHoldDuration: "200ms"
+    sharedHmacKey: "<base64-32-bytes>"
+  admin:
+    peerBroadcast:
+      enabled: true
+      headlessService: "lwauth-headless.ns.svc.cluster.local"
+      port: "8080"
+  ```
 
 E5. **ENT-HA-1 — Controller leader election and active/active safety.**
   Enable `controller-runtime` leader election by default when
@@ -1866,10 +1941,10 @@ the interactions identified during E2 planning:
 |--------|-------------|------------|
 | E2↔E3  | Both use Valkey Pub/Sub for cross-replica fan-out. E3 invalidates cache entries by tag; E2 invalidates the revocation negative cache. | **Single unified event bus** (`pkg/revocation/eventbus`) with typed messages (`{"type":"revoke",...}` / `{"type":"invalidate",...}`). One subscriber goroutine per replica dispatches to the appropriate handler. E3 extends the existing bus rather than adding a second channel. |
 | E2↔E3  | Both need to purge decision-cache entries by pattern — E2 by `(tenant, sub)` on subject revocation, E3 by tag on policy update. | **Tag-aware cache eviction** is built generically in E2. E3 adds more tag types (policy_version, AuthConfig digest) to the same mechanism. |
-| E2↔E4  | After a subject is revoked and cache entries purged, many replicas may concurrently discover "cache miss" and hit the authorizer (thundering herd). | **No action in E2.** E4's distributed singleflight naturally prevents post-revocation stampedes. |
+| E2↔E4  | After a subject is revoked and cache entries purged, many replicas may concurrently discover "cache miss" and hit the authorizer (thundering herd). | E4's distributed singleflight prevents post-revocation stampedes. E4's peer broadcast also ensures the revocation itself propagates without Pub/Sub dependency. |
 | E2↔E5  | The Pub/Sub subscriber and negative cache run on **all** replicas, not just the leader. | **No conflict.** E5 leader election applies only to the config reconciler, not to the hot-path or revocation infra. |
 | E2↔E6  | Revocation metrics must follow the same labeling scheme so SLO templates can reference them. | Revocation counters use `{tenant, result}` labels consistent with `lwauth_decisions_total`. |
-| E3↔E4  | E3 invalidation may trigger a burst of cache misses; E4 dampens that burst. | E4 is complementary and naturally follows E3. |
+| E3↔E4  | E3 invalidation may trigger a burst of cache misses; E4 dampens that burst. E3 invalidation also needs to reach peers when Pub/Sub is down. | E4's distributed singleflight dampens the burst. Peer broadcast propagates invalidation requests directly. |
 | E3↔E5  | Cache invalidation Pub/Sub messages must reach non-leader pods. | Same resolution as E2↔E5 — all pods subscribe. |
 
 **Implementation order constraint:** E2 → E3 → E4 → (E5, E6 are independent
@@ -2450,7 +2525,7 @@ that:
 | Failure mode | Today's behaviour | Proposed mitigation |
 |---|---|---|
 | **Cold pod starts cold** — replica added by HPA serves p99 misses for the first ~minute | Each pod's LRU fills independently | Two-tier read-through: L1 = in-process LRU (already in `internal/cache/lru.go`), L2 = Valkey (already in `internal/cache/valkey`). On L1 miss, read L2 before evaluating; on evaluate, write through both. New replicas warm L1 from L2 in O(p99 latency). |
-| **Stampede on hot key after revoke** | TTL expiry → all replicas evaluate at once → singleflight is per-pod, so N replicas = N concurrent evaluations | Promote `singleflight` to a *cross-replica* primitive via Valkey `SETNX` lock with a short hold (ex. 100 ms); whichever replica wins writes the answer and the rest read it from L2. Falls back gracefully to per-pod singleflight if Valkey is unreachable. |
+| **Stampede on hot key after revoke** | TTL expiry → all replicas evaluate at once → singleflight is per-pod, so N replicas = N concurrent evaluations | Promote `singleflight` to a *cross-replica* primitive via Valkey `SETNX` lock with a short hold (200 ms default); whichever replica wins writes the answer and the rest read it from L2. Falls back gracefully to per-pod singleflight if Valkey is unreachable. Additionally, peer broadcast ensures revocations propagate without Valkey Pub/Sub dependency. |
 | **Manual revocation can't beat TTL** | Operators wait for TTL to elapse, or restart pods | Tag-based invalidation. Cache writes carry tags `{tenant=…, sub=…, policy_version=…}`; revocation publishes a `cache.invalidate` event over Valkey pub/sub, every replica drops L1 entries matching the tags. New `lwauth_cache_invalidations_total{scope}` counter. |
 | **Stale-while-revalidate** for upstream lookups (introspection / OpenFGA `Check`) goes silent on upstream outage | TTL hits → entry evicted → next request hits ErrUpstream | Add `staleTtl` per layer: on `ErrUpstream` and `now > expiresAt && now < expiresAt + staleTtl`, serve the stale value and fire a background refresh. Behaviour is opt-in per `AuthConfig.cache.serveStaleOnUpstreamError: true`. |
 

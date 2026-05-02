@@ -156,6 +156,10 @@ func (t *Tiered) TieredLayerStats() *TieredStats { return t.stats }
 // AggStats returns the aggregate Stats (compatible with RegisterCacheStats).
 func (t *Tiered) AggStats() *Stats { return t.aggStats }
 
+// L2 returns the L2 (shared) backend. Used by the config layer to build
+// the distributed singleflight locker (E4) using the same Valkey client.
+func (t *Tiered) L2() Backend { return t.l2 }
+
 // Warm preloads L1 from L2 for the given keys. This is called on pod
 // startup so new replicas avoid a cold L1 causing p99 misses. Keys that
 // are missing or expired in L2 are silently skipped. Entries are stored

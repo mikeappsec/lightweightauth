@@ -41,6 +41,7 @@ type Recorder struct {
 	canaryAgreements     *prometheus.CounterVec
 	revocationChecks     *prometheus.CounterVec
 	cacheStaleServed     *prometheus.CounterVec
+	cacheDistSF          *prometheus.CounterVec
 }
 
 // New constructs a Recorder against a fresh Registry. Pass the result to
@@ -80,8 +81,12 @@ func New() *Recorder {
 			Name: "lwauth_cache_stale_served_total",
 			Help: "Stale cache entries served during upstream outages (E3).",
 		}, []string{"tenant", "decision"}),
+		cacheDistSF: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_cache_distsf_total",
+			Help: "Cross-replica singleflight outcomes (E4).",
+		}, []string{"outcome"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed, r.cacheDistSF)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -195,6 +200,21 @@ func (r *Recorder) ObserveCacheStaleServed(tenant, decision string) {
 // Default().ObserveCacheStaleServed.
 func RecordCacheStaleServed(tenant, decision string) {
 	Default().ObserveCacheStaleServed(tenant, decision)
+}
+
+// ObserveCacheDistSF records a distributed singleflight outcome (E4).
+// outcome is "won" or "waited".
+func (r *Recorder) ObserveCacheDistSF(outcome string) {
+	if r == nil {
+		return
+	}
+	r.cacheDistSF.WithLabelValues(outcome).Inc()
+}
+
+// RecordCacheDistSF is a package-level convenience that delegates to
+// Default().ObserveCacheDistSF.
+func RecordCacheDistSF(outcome string) {
+	Default().ObserveCacheDistSF(outcome)
 }
 
 // RecordRevocation is a package-level convenience that delegates to

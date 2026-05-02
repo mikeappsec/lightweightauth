@@ -51,6 +51,10 @@ type AdminDeps struct {
 	// InvalidateFunc is called for local cache invalidation (E3).
 	// Receives context and tags (nil = flush all). Returns evicted count.
 	InvalidateFunc func(ctx context.Context, tags []string) int
+
+	// PeerBroadcaster fans out revocations/invalidations to peer replicas
+	// via direct HTTP (E4 hardening). Nil if peer discovery is not configured.
+	PeerBroadcaster *PeerBroadcaster
 }
 
 // NewAdminMux returns an http.Handler that serves all /v1/admin/ endpoints,
@@ -210,6 +214,12 @@ func makeInvalidateHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Requ
 			}
 		}
 
+		// E4 hardening: peer broadcast for invalidation.
+		if deps.PeerBroadcaster != nil && r.Header.Get("X-Peer-Broadcast") == "" {
+			body, _ := json.Marshal(req)
+			go deps.PeerBroadcaster.BroadcastInvalidation(r.Context(), body)
+		}
+
 		// TC3: Formal audit event for cache invalidation (consistent with revoke).
 		adminID := IdentityFromContext(r.Context())
 		audit.Default().Record(r.Context(), &audit.Event{
@@ -334,6 +344,14 @@ func makeRevokeHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Request)
 					Key:  key,
 				})
 			}
+		}
+
+		// E4 hardening: peer broadcast. Fan out to all replicas directly
+		// so revocations propagate even when Pub/Sub is unavailable.
+		// Skip if this request is itself a peer broadcast (prevent loops).
+		if deps.PeerBroadcaster != nil && r.Header.Get("X-Peer-Broadcast") == "" {
+			body, _ := json.Marshal(req)
+			go deps.PeerBroadcaster.BroadcastRevocation(r.Context(), body)
 		}
 
 		// REV6: Emit audit event for every revocation action.
