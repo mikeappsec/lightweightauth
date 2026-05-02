@@ -36,6 +36,7 @@ jobs:
       id-token: write   # Cosign keyless signing (Sigstore OIDC)
     outputs:
       version: ${{ steps.version.outputs.version }}
+      hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,6 +61,13 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Expose checksums as base64-encoded subjects for the SLSA
+      # provenance generator (job: provenance).
+      - name: Generate SLSA subjects
+        id: hash
+        run: |
+          echo "hashes=$(base64 -w0 dist/checksums.txt)" >> "$GITHUB_OUTPUT"
 
       # Generate an SBOM for each archive using syft. These are
       # uploaded alongside the release archives so consumers can
@@ -98,7 +106,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ------------------------------------------------------------------
-  # Job 2: Package and push Helm chart as OCI artifact
+  # Job 2: SLSA provenance for Go binaries (level 3)
+  # ------------------------------------------------------------------
+  provenance:
+    needs: goreleaser
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.goreleaser.outputs.hashes }}
+      upload-assets: true
+
+  # ------------------------------------------------------------------
+  # Job 3: Package and push Helm chart as OCI artifact
   # ------------------------------------------------------------------
   helm:
     runs-on: ubuntu-24.04
