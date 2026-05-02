@@ -186,6 +186,26 @@ func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
 			return nil, fmt.Errorf("%w: cache.negativeTtl: %v", module.ErrConfig, err)
 		}
 	}
+
+	backend := spec.Backend
+	// "tiered" is handled specially: we build L1 + L2 ourselves and
+	// pass a pre-built tiered.Backend into the Decision cache.
+	if backend == "tiered" {
+		l1Size := spec.L1Size
+		if l1Size <= 0 {
+			l1Size = 10_000
+		}
+		tieredBackend, tieredStats, aggStats, err := buildTieredBackend(l1Size, spec)
+		if err != nil {
+			return nil, err
+		}
+		return cache.NewDecisionWithTiered(cache.DecisionOptions{
+			PositiveTTL: pos,
+			NegativeTTL: neg,
+			KeyFields:   spec.Key,
+		}, tieredBackend, tieredStats, aggStats)
+	}
+
 	return cache.NewDecision(cache.DecisionOptions{
 		PositiveTTL: pos,
 		NegativeTTL: neg,
@@ -199,4 +219,37 @@ func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
 			TLS:       spec.TLS,
 		},
 	})
+}
+
+// buildTieredBackend constructs the L1+L2 tiered backend.
+func buildTieredBackend(l1Size int, spec *CacheSpec) (*cache.Tiered, *cache.TieredStats, *cache.Stats, error) {
+	l1Stats := &cache.Stats{}
+	l1, err := cache.NewLRU(l1Size, 0, l1Stats)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: cache.tiered.l1: %v", module.ErrConfig, err)
+	}
+	l2Stats := &cache.Stats{}
+	l2, err := cache.BuildBackend(cache.BackendSpec{
+		Type:      "valkey",
+		Addr:      spec.Addr,
+		Username:  spec.Username,
+		Password:  spec.Password,
+		KeyPrefix: spec.KeyPrefix,
+		TLS:       spec.TLS,
+	}, l2Stats)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: cache.tiered.l2: %v", module.ErrConfig, err)
+	}
+	tieredStats := &cache.TieredStats{}
+	aggStats := &cache.Stats{}
+	tiered, err := cache.NewTiered(cache.TieredOptions{
+		L1:       l1,
+		L2:       l2,
+		Stats:    tieredStats,
+		AggStats: aggStats,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: cache.tiered: %v", module.ErrConfig, err)
+	}
+	return tiered, tieredStats, aggStats, nil
 }

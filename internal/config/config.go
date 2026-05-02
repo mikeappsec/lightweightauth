@@ -121,12 +121,16 @@ type CacheSpec struct {
 
 	// Backend selects the storage layer. Empty / "memory" uses the
 	// in-process LRU (default). "valkey" turns on the shared backend
-	// described in DESIGN.md §5; the additional fields below are
-	// forwarded to that backend's factory.
+	// described in DESIGN.md §5. "tiered" enables the two-tier
+	// read-through cache (E1): L1 in-process LRU + L2 Valkey.
 	Backend   string `json:"backend,omitempty" yaml:"backend,omitempty"`
 	Addr      string `json:"addr,omitempty" yaml:"addr,omitempty"`
 	Username  string `json:"username,omitempty" yaml:"username,omitempty"`
 	Password  string `json:"password,omitempty" yaml:"password,omitempty"`
 	KeyPrefix string `json:"keyPrefix,omitempty" yaml:"keyPrefix,omitempty"`
 	TLS       bool   `json:"tls,omitempty" yaml:"tls,omitempty"`
+
+	// L1Size is the maximum number of entries in the in-process LRU tier
+	// when backend is "tiered". Default 10 000. Ignored for other backends.
+	L1Size int `json:"l1Size,omitempty" yaml:"l1Size,omitempty"`
 }

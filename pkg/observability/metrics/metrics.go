@@ -199,6 +199,43 @@ func (r *Recorder) RegisterCacheStats(name string, hits, misses, evictions func(
 	)
 }
 
+// RegisterTieredCacheStats wires a two-tier cache's per-layer counters into
+// the recorder. Emits:
+//
+//	lwauth_cache_layer_hits_total{cache=<name>, layer="l1"|"l2"}
+//	lwauth_cache_layer_misses_total{cache=<name>, layer="l1"|"l2"}
+//
+// These complement the aggregate lwauth_cache_hits_total / misses_total
+// registered via RegisterCacheStats and let operators distinguish in-process
+// hits from shared-store hits for capacity planning.
+func (r *Recorder) RegisterTieredCacheStats(name string, l1Hits, l1Misses, l2Hits, l2Misses func() uint64) {
+	if r == nil {
+		return
+	}
+	r.registry.MustRegister(
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_hits_total",
+			Help:        "Cache hits by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l1"},
+		}, func() float64 { return float64(l1Hits()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_hits_total",
+			Help:        "Cache hits by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l2"},
+		}, func() float64 { return float64(l2Hits()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_misses_total",
+			Help:        "Cache misses by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l1"},
+		}, func() float64 { return float64(l1Misses()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name:        "lwauth_cache_layer_misses_total",
+			Help:        "Cache misses by named cache and layer.",
+			ConstLabels: prometheus.Labels{"cache": name, "layer": "l2"},
+		}, func() float64 { return float64(l2Misses()) }),
+	)
+}
+
 // --- process-wide default --------------------------------------------------
 
 var (

@@ -96,6 +96,42 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 // Decision cache emits a singleflight coalesce as a hit.
 func (d *Decision) Stats() *Stats { return d.stats }
 
+// TieredBackend returns the underlying Tiered backend if this Decision
+// cache was built with NewDecisionWithTiered. Returns nil otherwise.
+func (d *Decision) TieredBackend() *Tiered {
+	if d == nil {
+		return nil
+	}
+	t, _ := d.backend.(*Tiered)
+	return t
+}
+
+// NewDecisionWithTiered constructs a Decision cache using a pre-built
+// Tiered backend. This allows the config layer to supply the two-tier
+// backend (E1) and its per-layer stats.
+func NewDecisionWithTiered(o DecisionOptions, tiered *Tiered, tieredStats *TieredStats, aggStats *Stats) (*Decision, error) {
+	if o.PositiveTTL <= 0 {
+		return nil, nil
+	}
+	if o.NegativeTTL <= 0 {
+		o.NegativeTTL = 5 * time.Second
+	}
+	keys := append([]string(nil), o.KeyFields...)
+	for _, k := range keys {
+		if !isValidKeyField(k) {
+			return nil, fmt.Errorf("%w: cache.key: unknown field %q (recognised: sub, tenant, method, host, path, header:<Name>, claim:<Name>)", module.ErrConfig, k)
+		}
+	}
+	sort.Strings(keys)
+	return &Decision{
+		backend:     tiered,
+		positiveTTL: o.PositiveTTL,
+		negativeTTL: o.NegativeTTL,
+		keyFields:   keys,
+		stats:       aggStats,
+	}, nil
+}
+
 // Key computes the cache key for this request+identity, returning ""
 // when the cache should be skipped (e.g. no identity yet, or the configured
 // fields produced an empty payload).

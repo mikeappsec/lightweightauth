@@ -149,6 +149,19 @@ func (e *Engine) DecisionCacheStats() *cache.Stats {
 	return e.decisionCache.Stats()
 }
 
+// DecisionCacheTieredStats returns the per-layer stats of a two-tier
+// decision cache, or nil if the cache is disabled or not tiered (E1).
+func (e *Engine) DecisionCacheTieredStats() *cache.TieredStats {
+	if e == nil || e.decisionCache == nil {
+		return nil
+	}
+	t := e.decisionCache.TieredBackend()
+	if t == nil {
+		return nil
+	}
+	return t.TieredLayerStats()
+}
+
 // Evaluate runs the full identify → authorize → mutate pipeline.
 //
 // On allow, the returned Decision has Allow=true and any headers the

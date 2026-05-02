@@ -216,6 +216,7 @@ func Run(opts Options) error {
 	// previously observed values because we register CounterFuncs that
 	// remember nothing themselves.
 	registerDecisionCacheStats(holder)
+	registerTieredCacheStats(holder)
 
 	errCh := make(chan error, 3)
 
@@ -447,6 +448,54 @@ func registerDecisionCacheStats(h *server.EngineHolder) {
 				return 0
 			}
 			return s.Evictions.Load()
+		}),
+	)
+}
+
+// registerTieredCacheStats wires the E1 per-layer (L1/L2) counters into
+// Prometheus. When the decision cache is not tiered, the closures return
+// 0 and the series are dormant.
+func registerTieredCacheStats(h *server.EngineHolder) {
+	read := func(get func(*pipeline.Engine) uint64) func() uint64 {
+		return func() uint64 {
+			eng := h.Load()
+			if eng == nil {
+				return 0
+			}
+			return get(eng)
+		}
+	}
+	defer func() {
+		_ = recover() // duplicate registration across tests
+	}()
+	metrics.Default().RegisterTieredCacheStats("decision",
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L1Hits.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L1Misses.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L2Hits.Load()
+		}),
+		read(func(e *pipeline.Engine) uint64 {
+			s := e.DecisionCacheTieredStats()
+			if s == nil {
+				return 0
+			}
+			return s.L2Misses.Load()
 		}),
 	)
 }
