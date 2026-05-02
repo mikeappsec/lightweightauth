@@ -33,7 +33,11 @@ type DistSF struct {
 	locker       DistSFLocker
 	l2           Backend
 	holdDuration time.Duration
-	pollInterval time.Duration
+	pollInterval time.Duration // initial poll interval (doubles each iteration)
+
+	// FallbackCount tracks how many times TryLock errors forced fallback
+	// to local singleflight. Exposed for metrics/observability.
+	FallbackCount func()
 }
 
 // DistSFOptions configures cross-replica singleflight.
@@ -46,9 +50,11 @@ type DistSFOptions struct {
 	// evaluation latency but short enough that a crash doesn't block
 	// all replicas for long. Default 200ms.
 	HoldDuration time.Duration
-	// PollInterval is how often losing replicas check L2 for the winner's
-	// result. Default 5ms.
+	// PollInterval is the initial poll interval for losing replicas.
+	// Doubles each iteration (exponential backoff). Default 5ms.
 	PollInterval time.Duration
+	// OnFallback is called each time a TryLock error forces fallback.
+	OnFallback func()
 }
 
 const (
@@ -71,10 +77,11 @@ func NewDistSF(opts DistSFOptions) *DistSF {
 		poll = defaultPollInterval
 	}
 	return &DistSF{
-		locker:       opts.Locker,
-		l2:          opts.L2,
-		holdDuration: hold,
-		pollInterval: poll,
+		locker:        opts.Locker,
+		l2:            opts.L2,
+		holdDuration:  hold,
+		pollInterval:  poll,
+		FallbackCount: opts.OnFallback,
 	}
 }
 
@@ -98,7 +105,10 @@ func (d *DistSF) Do(ctx context.Context, key string) (won bool, raw []byte, err 
 	lockKey := "sf:" + key
 	won, err = d.locker.TryLock(ctx, lockKey, d.holdDuration)
 	if err != nil {
-		// Valkey unreachable → fall back to local.
+		// Valkey unreachable → fall back to local. Track for observability.
+		if d.FallbackCount != nil {
+			d.FallbackCount()
+		}
 		return true, nil, nil
 	}
 	if won {
@@ -122,28 +132,37 @@ func (d *DistSF) Release(ctx context.Context, key string) {
 	_ = d.locker.Unlock(ctx, "sf:"+key)
 }
 
-// pollL2 polls the L2 backend until the key appears or the context/hold
-// window expires.
+// pollL2 polls the L2 backend with exponential backoff until the key
+// appears or the context/hold window expires.
 func (d *DistSF) pollL2(ctx context.Context, key string) ([]byte, error) {
 	deadline := time.Now().Add(d.holdDuration)
-	ticker := time.NewTicker(d.pollInterval)
-	defer ticker.Stop()
+	interval := d.pollInterval
 
 	for {
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil, ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 			if time.Now().After(deadline) {
 				return nil, ErrDistSFLost
 			}
 			raw, ok, err := d.l2.Get(ctx, key)
 			if err != nil {
-				// L2 error during poll — give up, fall back.
 				return nil, err
 			}
 			if ok {
 				return raw, nil
+			}
+			// Exponential backoff: double interval, cap at holdDuration/4.
+			interval *= 2
+			maxInterval := d.holdDuration / 4
+			if maxInterval < d.pollInterval {
+				maxInterval = d.pollInterval
+			}
+			if interval > maxInterval {
+				interval = maxInterval
 			}
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	cachevalkey "github.com/mikeappsec/lightweightauth/internal/cache/valkey"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
 	"github.com/mikeappsec/lightweightauth/pkg/revocation"
 )
@@ -347,6 +348,9 @@ func buildDistSF(spec *CacheSpec, tiered *cache.Tiered) (*cache.DistSF, []byte, 
 		Locker:       locker,
 		L2:           l2,
 		HoldDuration: holdDuration,
+		OnFallback: func() {
+			metrics.RecordCacheDistSF("fallback")
+		},
 	})
 	return distSF, sharedKey, nil
 }

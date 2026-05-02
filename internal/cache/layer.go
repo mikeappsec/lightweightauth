@@ -33,6 +33,7 @@ type Stats struct {
 	StaleServed   atomic.Uint64 // E3: stale entries served during upstream outages
 	DistSFWon     atomic.Uint64 // E4: this replica won the distributed lock
 	DistSFWaited  atomic.Uint64 // E4: this replica waited for another replica's result
+	DistSFFallback atomic.Uint64 // E4: TryLock errors forced fallback to local singleflight
 }
 
 // Layer bundles the three caches the pipeline shares. Construct via New

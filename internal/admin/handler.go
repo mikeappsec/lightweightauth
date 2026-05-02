@@ -55,6 +55,20 @@ type AdminDeps struct {
 	// PeerBroadcaster fans out revocations/invalidations to peer replicas
 	// via direct HTTP (E4 hardening). Nil if peer discovery is not configured.
 	PeerBroadcaster *PeerBroadcaster
+
+	// PeerSecret is the shared HMAC secret used to authenticate incoming
+	// peer broadcast requests. Must match the secret in PeerBroadcasterOptions.
+	PeerSecret []byte
+}
+
+// isPeerRequest returns true if the request carries a valid peer token,
+// indicating it was sent by another replica's PeerBroadcaster.
+func isPeerRequest(r *http.Request, secret []byte) bool {
+	token := r.Header.Get("X-Peer-Token")
+	if token == "" {
+		return false
+	}
+	return VerifyPeerToken(token, secret)
 }
 
 // NewAdminMux returns an http.Handler that serves all /v1/admin/ endpoints,
@@ -215,9 +229,9 @@ func makeInvalidateHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Requ
 		}
 
 		// E4 hardening: peer broadcast for invalidation.
-		if deps.PeerBroadcaster != nil && r.Header.Get("X-Peer-Broadcast") == "" {
+		if deps.PeerBroadcaster != nil && !isPeerRequest(r, deps.PeerSecret) {
 			body, _ := json.Marshal(req)
-			go deps.PeerBroadcaster.BroadcastInvalidation(r.Context(), body)
+			go deps.PeerBroadcaster.BroadcastInvalidation(body)
 		}
 
 		// TC3: Formal audit event for cache invalidation (consistent with revoke).
@@ -348,10 +362,10 @@ func makeRevokeHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Request)
 
 		// E4 hardening: peer broadcast. Fan out to all replicas directly
 		// so revocations propagate even when Pub/Sub is unavailable.
-		// Skip if this request is itself a peer broadcast (prevent loops).
-		if deps.PeerBroadcaster != nil && r.Header.Get("X-Peer-Broadcast") == "" {
+		// Skip if this request carries a valid peer token (prevent loops).
+		if deps.PeerBroadcaster != nil && !isPeerRequest(r, deps.PeerSecret) {
 			body, _ := json.Marshal(req)
-			go deps.PeerBroadcaster.BroadcastRevocation(r.Context(), body)
+			go deps.PeerBroadcaster.BroadcastRevocation(body)
 		}
 
 		// REV6: Emit audit event for every revocation action.

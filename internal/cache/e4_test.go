@@ -168,6 +168,30 @@ func TestDistSF_LockErrorFallsBack(t *testing.T) {
 	}
 }
 
+func TestDistSF_FallbackCallbackInvoked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	locker := newMockLocker()
+	locker.lockErr = errors.New("valkey down")
+	l2, _ := NewLRU(100, 0, &Stats{})
+
+	var fallbackCt atomic.Int64
+	dsf := NewDistSF(DistSFOptions{
+		Locker:       locker,
+		L2:           l2,
+		HoldDuration: 100 * time.Millisecond,
+		OnFallback:   func() { fallbackCt.Add(1) },
+	})
+
+	_, _, _ = dsf.Do(ctx, "fb-key-1")
+	_, _, _ = dsf.Do(ctx, "fb-key-2")
+
+	if got := fallbackCt.Load(); got != 2 {
+		t.Fatalf("expected OnFallback called 2 times, got %d", got)
+	}
+}
+
 func TestDecision_DistSFIntegration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
