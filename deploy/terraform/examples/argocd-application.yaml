@@ -1,0 +1,73 @@
+# Argo CD Application — LightweightAuth
+#
+# This example deploys LightweightAuth via Argo CD using the OCI Helm
+# chart from ghcr.io. Adjust `spec.source.targetRevision` to pin the
+# chart version and `spec.destination` to match your cluster/namespace.
+#
+# For air-gapped clusters, change `repoURL` to your internal OCI mirror
+# and set `image.repository` / `image.tag` in the helm values below.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lwauth
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: lightweightauth
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    # OCI Helm chart from the LightweightAuth release pipeline (F2).
+    repoURL: ghcr.io/mikeappsec/charts
+    chart: lightweightauth
+    targetRevision: "1.2.0"     # pin to your desired version
+
+    helm:
+      releaseName: lwauth
+      valuesObject:
+        replicaCount: 3
+
+        controller:
+          enabled: true
+          watchNamespace: lwauth
+
+        networkPolicy:
+          enabled: true
+          allowedFrom:
+            namespaceSelectors:
+              - kubernetes.io/metadata.name: istio-system
+
+        podDisruptionBudget:
+          enabled: true
+          minAvailable: 1
+
+        autoscaling:
+          enabled: true
+          minReplicas: 2
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 70
+
+        metrics:
+          enabled: true
+          serviceMonitor: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lwauth
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

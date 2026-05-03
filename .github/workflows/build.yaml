@@ -120,6 +120,9 @@ jobs:
   build-fips:
     runs-on: ubuntu-24.04
     needs: fips-test
+    # Hardened-image builds require dhi.io credentials which are only
+    # available on push events (never on PRs from forks).
+    if: github.event_name != 'pull_request'
     permissions:
       contents: read
       packages: write
@@ -127,8 +130,19 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
+
+      # Authenticate to dhi.io to pull hardened base images (golang, alpine).
+      # Credentials are stored as GitHub encrypted secrets. The docker/login-action
+      # masks the token from workflow logs automatically. This step ONLY runs on
+      # push events (job-level `if:` guard) so fork PRs never access the secret.
+      - name: Log in to dhi.io (hardened base images)
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
       - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
-        if: github.event_name != 'pull_request'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
