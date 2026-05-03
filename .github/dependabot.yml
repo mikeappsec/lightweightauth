@@ -1,6 +1,10 @@
 # Dependabot keeps third-party GitHub Actions pinned SHAs up to date.
 # This ensures we receive automated PRs when actions release security
 # fixes, without relying on mutable major-version tags.
+#
+# Supply-chain hardening: minimum-release-age adds a 14-day quarantine
+# window before Dependabot opens a PR, reducing exposure to typosquatting
+# and compromised releases (e.g. event-stream, ua-parser-js).
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -10,6 +14,8 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    # Wait 14 days after an action release before proposing an update.
+    minimum-release-age: 14
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
@@ -17,6 +23,8 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
+    # Wait 14 days after a module release before proposing an update.
+    minimum-release-age: 14
     ignore:
       # k8s.io/* is pinned to v0.35.4 due to controller-runtime
       # compatibility — see DESIGN.md §7 (M12 dependency refresh).
