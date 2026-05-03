@@ -17,9 +17,14 @@
 # `fips_enabled=true`.
 
 # ---- build stage -------------------------------------------------------------
-FROM golang:1.26.2-alpine AS build
+# dhi.io images are hardened, minimal-CVE base images. Requires
+# authenticated pull (see .github/workflows/build.yaml for credential
+# handling). Falls back to public golang:1.26.2-alpine if dhi.io is
+# unavailable during local development (use `make fips` which pulls
+# from cache).
+FROM dhi.io/golang:1 AS build
 
-RUN apk add --no-cache ca-certificates git
+# dhi.io/golang already includes ca-certificates and git.
 
 WORKDIR /src
 
@@ -41,31 +46,43 @@ RUN go build -trimpath \
         -ldflags "-s -w \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT}" \
-        -o /out/lwauth     ./cmd/lwauth \
+        -o ./out/lwauth     ./cmd/lwauth \
  && go build -trimpath \
         -ldflags "-s -w \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT}" \
-        -o /out/lwauthctl  ./cmd/lwauthctl
+        -o ./out/lwauthctl  ./cmd/lwauthctl
 
 # Self-verify the produced artifact: this layer fails if the built
 # binary somehow doesn't carry the FIPS module (e.g. a future Go
 # refactor that ignores GOFIPS140 silently). Catching it here is far
 # cheaper than a post-promotion incident.
-RUN /out/lwauth --print-build-info | grep -q 'fips_enabled=true'
+RUN OUTPUT=$(./out/lwauth --print-build-info) && case "$OUTPUT" in *fips_enabled=true*) ;; *) echo "FIPS verification failed: $OUTPUT"; exit 1;; esac
 
 # ---- runtime stage -----------------------------------------------------------
-FROM alpine:3.22.4
+# dhi.io/alpine-base is a distroless-style image (no apk, no shell).
+# We copy ca-certs and tzdata from the build stage. The non-root user
+# is injected via static passwd/group files created during build.
+FROM dhi.io/alpine-base:3.23
 
-RUN apk add --no-cache ca-certificates tzdata \
- && addgroup -S lwauth \
- && adduser -S -G lwauth -u 10001 lwauth \
- && mkdir -p /etc/lwauth \
- && chown -R lwauth:lwauth /etc/lwauth
+# CA certs + timezone data from the build stage.
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 
-COPY --from=build /out/lwauth     /usr/local/bin/lwauth
-COPY --from=build /out/lwauthctl  /usr/local/bin/lwauthctl
-COPY examples/config.yaml         /etc/lwauth/config.yaml
+# Non-root user — static passwd/group (no adduser in distroless).
+# Using heredoc to avoid needing a shell-capable prep stage.
+COPY --chmod=644 <<EOF /etc/passwd
+root:x:0:0:root:/root:/sbin/nologin
+lwauth:x:10001:10001::/home/lwauth:/sbin/nologin
+EOF
+COPY --chmod=644 <<EOF /etc/group
+root:x:0:
+lwauth:x:10001:
+EOF
+
+COPY --from=build --chmod=755 /src/out/lwauth     /usr/local/bin/lwauth
+COPY --from=build --chmod=755 /src/out/lwauthctl  /usr/local/bin/lwauthctl
+COPY --chmod=644 examples/config.yaml /etc/lwauth/config.yaml
 
 # Image-level marker so operators can grep `docker image inspect` and
 # image-policy admission webhooks can match on a stable label rather

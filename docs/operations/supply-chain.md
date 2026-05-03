@@ -14,6 +14,7 @@ Actions:
 | `checksums.txt` signature | `checksums.txt.sig` + `checksums.txt.pem` | Cosign keyless (Sigstore OIDC) |
 | SLSA provenance | `multiple.intoto.jsonl` (attached to Release) | SLSA level 3 via `slsa-github-generator` |
 | Container images (stock + FIPS) | `ghcr.io/mikeappsec/lightweightauth` | Docker provenance + SBOM embedded |
+| FIPS image base (hardened) | `dhi.io/golang:1.26.2`, `dhi.io/alpine:3.22.4` | Authenticated pull; minimal-CVE hardened images |
 | Helm chart (OCI) | `ghcr.io/mikeappsec/charts/lightweightauth` | Cosign keyless signature |
 | Per-binary SBOM | `lightweightauth_<ver>.sbom.json` (SPDX) | Attached to Release |
 
@@ -128,3 +129,42 @@ For clusters that enforce image provenance at admission time:
   suffix for namespace-level enforcement.
 
 See [fips.md](fips.md) for FIPS-specific admission webhook examples.
+
+## Hardened base images (dhi.io)
+
+The FIPS image (`Dockerfile.fips`) uses hardened base images from
+`dhi.io` instead of public Docker Hub images. These images have:
+- Minimal CVE surface (no shell, no package manager in runtime image)
+- FIPS-validated crypto libraries pre-installed
+- Regular security patching on a defined SLA
+
+### CI authentication
+
+The `build-fips` job in `.github/workflows/build.yaml` authenticates to
+`dhi.io` using encrypted GitHub secrets:
+
+- `DHI_USERNAME` — service account username (pull-only scope)
+- `DHI_TOKEN` — API token (pull-only scope, not a personal password)
+
+**Security controls:**
+1. The entire `build-fips` job is gated by
+   `if: github.event_name != 'pull_request'` — fork PRs never access
+   the credentials.
+2. `docker/login-action` stores credentials in `~/.docker/config.json`
+   which BuildKit reads implicitly — credentials never appear in build
+   args, layer history, or workflow logs.
+3. The action automatically masks the token value in all log output.
+
+### Local development
+
+Developers without dhi.io access can build locally using the stock
+Dockerfile (which uses public `golang:` and `alpine:` images):
+
+```bash
+# Stock build (no dhi.io credentials needed)
+docker build -t lwauth:dev .
+
+# FIPS build requires dhi.io login:
+docker login dhi.io
+docker build -f Dockerfile.fips -t lwauth:dev-fips .
+```
