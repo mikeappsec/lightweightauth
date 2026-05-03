@@ -30,7 +30,7 @@ the tag-based invalidation coming in Tier E.
 | Policy updated via AuthConfig | **No** — automatic | Engine hot-swap compiles new policy; decision cache keys include policy version |
 | JWKS key rotated at IdP | **No** — automatic | JWKS cache refreshes on interval; see [rotate-jwks](rotate-jwks.md) |
 | Wrong policy shipped, need immediate rollback | **Maybe** | Rollback the AuthConfig first (engine swap is atomic); invalidate the decision cache only if stale cached verdicts from the bad policy are still being served |
-| Compromised token needs kill-switch | **Yes** — introspection + decision cache | Short-TTL usually suffices; for guaranteed kill use revocation (Tier E — M14) |
+| Compromised token needs kill-switch | **Yes** — introspection + decision cache | Short-TTL usually suffices; for guaranteed kill use [revocation](../modules/revocation.md) |
 
 ## 1. Invalidate via TTL tuning (no Valkey access needed)
 
@@ -39,12 +39,12 @@ expire faster. This works for both `memory` and `valkey` backends:
 
 ```yaml
 # Tighten decision cache to 5 seconds during an incident.
-# Normal: decisionTtl: 30s
+# Normal: ttl: 30s
 cache:
   backend: valkey
   addr: valkey-master.cache.svc:6379
-  decisionTtl: 5s          # ← temporary tightening
-  introspectionTtl: 30s    # ← tighten if introspection is the problem
+  ttl: 5s              # ← temporary tightening (was 30s)
+  negativeTtl: 2s      # ← tighten if introspection/deny cache is the problem
 ```
 
 ```bash

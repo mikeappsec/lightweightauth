@@ -168,3 +168,27 @@ docker build -t lwauth:dev .
 docker login dhi.io
 docker build -f Dockerfile.fips -t lwauth:dev-fips .
 ```
+
+## Dependabot quarantine (14-day hold)
+
+Automated dependency update PRs from Dependabot are **not merged
+immediately**. A companion workflow
+([`.github/workflows/dependabot-quarantine.yml`](https://github.com/mikeappsec/lightweightauth/blob/main/.github/workflows/dependabot-quarantine.yml))
+enforces a 14-day quarantine window:
+
+1. When Dependabot opens a PR, the workflow labels it `quarantine:14d`.
+2. A daily cron job checks all open Dependabot PRs. Once a PR is older
+   than 14 days, the workflow approves it and removes the label.
+3. Branch protection rules require at least one approval before merge,
+   so the quarantine label effectively blocks the PR until the window
+   passes.
+
+**Why 14 days?** Most supply-chain compromises (typosquatting,
+account takeovers, malicious releases) are detected and yanked within
+the first few days of publication. Waiting two weeks dramatically
+reduces exposure without sacrificing patch velocity for genuine
+security fixes.
+
+**Override for critical CVEs:** If a Dependabot PR addresses a
+known-exploited vulnerability (e.g., CISA KEV entry), a maintainer can
+manually approve the PR to bypass the quarantine window.
