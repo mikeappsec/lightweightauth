@@ -1,6 +1,10 @@
 # Dependabot keeps third-party GitHub Actions pinned SHAs up to date.
 # This ensures we receive automated PRs when actions release security
 # fixes, without relying on mutable major-version tags.
+#
+# Supply-chain hardening: a companion workflow (.github/workflows/dependabot-quarantine.yml)
+# holds Dependabot PRs for 14 days before approving, reducing exposure to
+# compromised releases (e.g. event-stream, ua-parser-js).
 version: 2
 updates:
   - package-ecosystem: "github-actions"
