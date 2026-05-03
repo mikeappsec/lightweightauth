@@ -1,0 +1,60 @@
+# Flux HelmRelease — LightweightAuth
+#
+# This example deploys LightweightAuth via Flux CD using the OCI Helm
+# chart. Requires a matching HelmRepository (OCIRepository) resource
+# pointing at ghcr.io/mikeappsec/charts.
+
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: lwauth-charts
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: oci://ghcr.io/mikeappsec/charts/lightweightauth
+  ref:
+    semver: ">=1.2.0"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: lwauth
+  namespace: lwauth
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: lwauth-charts
+    namespace: flux-system
+
+  releaseName: lwauth
+  targetNamespace: lwauth
+  install:
+    createNamespace: true
+
+  values:
+    replicaCount: 3
+
+    controller:
+      enabled: true
+      watchNamespace: lwauth
+
+    networkPolicy:
+      enabled: true
+      allowedFrom:
+        namespaceSelectors:
+          - kubernetes.io/metadata.name: istio-system
+
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+
+    metrics:
+      enabled: true
+      serviceMonitor: true

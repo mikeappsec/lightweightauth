@@ -1999,13 +1999,15 @@ F4. **LICENSE-HEADERS-1 — Apache 2.0 license headers on all Go source.** ✅
   `scripts/check-license-headers.sh`). Generated `.pb.go` files
   excluded. `scripts/add-license-headers.sh` available for future use.
 
-F5. **INSTALL-TF-1 — Terraform and GitOps deployment modules.**
-  New recommended feature. Many platform teams standardize on Terraform,
-  OpenTofu, Argo CD, or Flux rather than hand-running Helm. Ship a small
-  Terraform/OpenTofu module that installs the Helm chart, wires common
-  ServiceMonitor / NetworkPolicy / values defaults, and emits a matching
-  Argo CD Application example. Promotion trigger: Helm OCI publishing
-  (F2) is stable and at least one reference cloud deployment is tested.
+F5. **INSTALL-TF-1 — Terraform and GitOps deployment modules.** ✅
+  shipped on `v1.2-tier-f`. `deploy/terraform/` contains an OpenTofu /
+  Terraform module (`main.tf`, `variables.tf`, `outputs.tf`,
+  `versions.tf`) that installs the Helm chart from the OCI registry
+  with production-safe defaults: NetworkPolicy, PDB, HPA, CRD-mode
+  controller, ServiceMonitor, and air-gap image overrides. Escape-hatch
+  `values_override` variable for advanced config.
+  `deploy/terraform/examples/` ships Argo CD Application and Flux
+  HelmRelease manifests ready to copy-paste.
 
 F6. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
   Customer benefit is strongest for teams already invested in Authzed or
@@ -2048,6 +2050,51 @@ F10. **WASM plugins (was 17) — sandboxed in-process extension runtime.**
   Promotion trigger: auth-library support in WASM is mature enough that
   users can implement real identifiers/authorizers without
   reimplementing crypto badly.
+
+F11. **DOC-README-1 — Per-package README documentation for all modules.**
+  Add a `README.md` to every public package under `pkg/` documenting
+  purpose, default configuration, usage examples (with Go code blocks),
+  feature list, and how-it-works explanation. Format follows the
+  valkeylock convention: title → one-line description → minimal working
+  example → default configuration table → features list → internals
+  explanation. Packages to document:
+
+  - `pkg/identity/jwt` — JWT/OIDC bearer token identifier.
+  - `pkg/identity/oauth2` — Authorization-code + PKCE flow with session.
+  - `pkg/identity/apikey` — API-key identifier (argon2id hashing).
+  - `pkg/identity/mtls` — mTLS/SPIFFE client certificate identifier.
+  - `pkg/identity/hmac` — AWS-SigV4-style HMAC request signatures.
+  - `pkg/identity/introspection` — RFC 7662 token introspection.
+  - `pkg/identity/dpop` — RFC 9449 DPoP sender-constrained tokens.
+  - `pkg/authz/rbac` — Role-based access control authorizer.
+  - `pkg/authz/opa` — Embedded OPA/Rego policy engine authorizer.
+  - `pkg/authz/openfga` — OpenFGA Zanzibar-style ReBAC authorizer.
+  - `pkg/authz/cel` — CEL expression authorizer.
+  - `pkg/authz/composite` — Combine authorizers (allOf/anyOf).
+  - `pkg/mutator/headers` — Response header stamping mutator.
+  - `pkg/mutator/jwtissue` — Internal JWT minting mutator.
+  - `pkg/session` — Browser session management (cookie store).
+  - `pkg/revocation` — Credential revocation store (memory/valkey).
+  - `pkg/ratelimit` — Per-tenant token-bucket rate limiter.
+  - `pkg/keyrotation` — Verifier-side key rotation (JWKS/HMAC/CA).
+  - `pkg/upstream` — Circuit breaker and retry budget for network modules.
+  - `pkg/plugin/grpc` — Out-of-process gRPC plugin runtime.
+  - `pkg/configstream` — xDS-style config snapshot streaming.
+  - `pkg/cache` (internal) — Two-tier L1/L2 cache with Valkey backend.
+  - `pkg/client/go` — Go SDK for callers of lwauth-protected services.
+  - `pkg/observability/audit` — Structured audit logging (Kafka/Loki sinks).
+  - `pkg/observability/metrics` — Prometheus metrics.
+  - `pkg/observability/tracing` — OpenTelemetry tracing.
+  - `pkg/buildinfo` — Build metadata and FIPS status reporting.
+  - `pkg/lwauthd` — Public embedding surface for custom plugin bundles.
+
+  Each README must include: (1) package title as H1, (2) one-sentence
+  purpose, (3) minimal Go code example showing import + instantiation +
+  usage, (4) default configuration with field descriptions, (5) feature
+  bullet list, (6) how-it-works section explaining internals. Benchmark
+  section optional where meaningful (cache, ratelimit, upstream).
+  Promotion trigger: F4 shipped (license headers ensure file hygiene is
+  already enforced); docs can land any time without code changes.
 
 #### Tier G — enterprise customer requests (v1.3+, customer-benefit ordered)
 
