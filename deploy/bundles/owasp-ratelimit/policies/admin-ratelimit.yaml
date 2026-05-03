@@ -1,0 +1,43 @@
+# Admin endpoint rate limiting — strict limits on sensitive operations.
+#
+# Protects administrative APIs against insider abuse and compromised
+# admin credentials being used for bulk data exfiltration.
+hosts:
+  - "*.example.com"
+
+identifiers:
+  - name: admin-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["admin.example.com"]
+      header: Authorization
+      scheme: Bearer
+
+authorizers:
+  - name: require-admin
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow: ["admin"]
+
+rateLimit:
+  enabled: true
+  keyFrom: subject
+  rules:
+    - match:
+        path: /admin/
+        methods: [GET, POST, PUT, PATCH, DELETE]
+      rps: 30
+      burst: 50
+    - match:
+        path: /admin/users
+        methods: [DELETE]
+      rps: 5
+      burst: 10
+    - match:
+        path: /admin/config
+        methods: [PUT, PATCH]
+      rps: 2
+      burst: 5

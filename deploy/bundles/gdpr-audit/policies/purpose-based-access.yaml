@@ -1,0 +1,68 @@
+# GDPR Art. 5 & 25: Purpose-based access control.
+#
+# Enforces that access to personal data APIs requires a declared
+# processing purpose in the JWT claims. The purpose must match one
+# of the registered lawful bases.
+hosts:
+  - data.example.com
+  - users.example.com
+
+identifiers:
+  - name: purpose-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["data.example.com"]
+      header: Authorization
+      scheme: Bearer
+      requiredClaims:
+        - sub
+        - purpose          # GDPR processing purpose
+        - data_categories  # categories of personal data accessed
+
+authorizers:
+  - name: purpose-check
+    type: opa
+    config:
+      policy: |
+        package lwauth.gdpr
+
+        import rego.v1
+
+        default allow := false
+
+        # Lawful bases for processing (Art. 6).
+        lawful_purposes := {
+          "contract_performance",
+          "legal_obligation",
+          "legitimate_interest",
+          "consent",
+          "vital_interest",
+          "public_task"
+        }
+
+        allow if {
+          input.identity.claims.purpose
+          input.identity.claims.purpose in lawful_purposes
+        }
+
+        reason := sprintf("purpose '%s' is not a registered lawful basis", [input.identity.claims.purpose]) if {
+          not input.identity.claims.purpose in lawful_purposes
+        }
+
+rateLimit:
+  enabled: true
+  keyFrom: subject
+  rules:
+    # Rate limit bulk personal data access (data minimization).
+    - match:
+        path: /api/users
+        methods: [GET]
+      rps: 20
+      burst: 40
+    - match:
+        path: /api/users/export
+        methods: [POST]
+      rps: 1
+      burst: 2

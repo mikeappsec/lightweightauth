@@ -1,0 +1,43 @@
+# Login endpoint rate limiting — protection against credential stuffing (A07).
+#
+# Applies aggressive limits to authentication endpoints to slow down
+# brute-force attacks without impacting legitimate users.
+hosts:
+  - "*.example.com"
+
+identifiers:
+  - name: any-request
+    type: jwt
+    config:
+      optional: true
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["api.example.com"]
+      header: Authorization
+      scheme: Bearer
+
+authorizers:
+  - name: allow-all
+    type: rbac
+    config:
+      defaultAllow: true
+
+rateLimit:
+  enabled: true
+  keyFrom: peer-ip
+  rules:
+    - match:
+        path: /auth/login
+        methods: [POST]
+      rps: 5
+      burst: 10
+    - match:
+        path: /auth/token
+        methods: [POST]
+      rps: 10
+      burst: 20
+    - match:
+        path: /auth/reset-password
+        methods: [POST]
+      rps: 2
+      burst: 5

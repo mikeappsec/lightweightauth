@@ -2009,7 +2009,7 @@ F5. **INSTALL-TF-1 — Terraform and GitOps deployment modules.** ✅
   `deploy/terraform/examples/` ships Argo CD Application and Flux
   HelmRelease manifests ready to copy-paste.
 
-F6. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
+F6. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.** ✅ Shipped.
   Customer benefit is strongest for teams already invested in Authzed or
   Zanzibar-style permissions. Land `pkg/authz/spicedb` registered as
   `spicedb`, composing under `composite` exactly like `openfga` does.
@@ -2017,7 +2017,14 @@ F6. **M7-SPICEDB (was C1 / 26) — SpiceDB authorizer adapter.**
   Promotion trigger: at least one operator needs SpiceDB specifically
   rather than the already-shipped OpenFGA adapter.
 
-F7. **POL-MARKET-1 — Policy bundle registry.**
+  Implementation:
+  - `pkg/authz/spicedb/` — SpiceDB authorizer with CheckPermission RPC,
+    template-based resource/permission mapping, CONDITIONAL handling
+  - Hardened: recover() for panics, missingkey=error templates, 1024-char
+    input cap, generic deny messages, MaxCallRecvMsgSize, consistency
+    config, timeout validation, insecure-mode warning logging
+
+F7. **POL-MARKET-1 — Policy bundle registry.** ✅ Shipped.
   Moved up from the enterprise request list because its strongest value
   is ecosystem acceleration: reusable, signed policy bundles reduce
   time-to-first-policy for every customer. Publish reusable `AuthConfig`
@@ -2025,6 +2032,18 @@ F7. **POL-MARKET-1 — Policy bundle registry.**
   rate-limit bundle", "GDPR audit profile") as OCI artifacts pulled by
   `lwauthctl`. Promotion trigger: F1 + F2 shipped, plus at least three
   reference policies authored and maintained by the project.
+
+  Implementation:
+  - `pkg/bundle/` — Pack/Unpack/Push/Pull with OCI artifact support
+    (ORAS v2, media type `application/vnd.lwauth.bundle.v1.tar+gzip`)
+  - `cmd/lwauthctl bundle` — CLI subcommands: push, pull, pack, inspect
+  - Security: 10 MiB size limit, path traversal rejection, tar bomb
+    protection (uncompressed byte counter)
+  - Three reference bundles shipped:
+    `deploy/bundles/owasp-ratelimit/` (login + API + admin rate limits)
+    `deploy/bundles/pci-dss-baseline/` (strong auth, sessions, audit)
+    `deploy/bundles/gdpr-audit/` (purpose-based access, data subject
+    rights, audit trail)
 
 F8. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.**
   High value for global edge deployments, but gated by the correctness

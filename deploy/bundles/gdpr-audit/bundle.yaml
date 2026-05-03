@@ -1,0 +1,19 @@
+name: gdpr-audit-profile
+version: "1.0.0"
+description: >
+  GDPR data access audit profile — enforces purpose-based authorization
+  and comprehensive audit logging for personal data access. Maps to GDPR
+  Articles 5 (lawfulness), 25 (data protection by design), and 30
+  (records of processing activities).
+keywords:
+  - gdpr
+  - privacy
+  - audit
+  - data-protection
+  - personal-data
+author: LightweightAuth Contributors
+license: Apache-2.0
+policies:
+  - policies/purpose-based-access.yaml
+  - policies/data-subject-rights.yaml
+  - policies/audit-trail.yaml

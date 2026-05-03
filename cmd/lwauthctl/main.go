@@ -54,6 +54,8 @@ func main() {
 		restore(os.Args[2:])
 	case "revoke":
 		revoke(os.Args[2:])
+	case "bundle":
+		bundleCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -76,6 +78,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "                                           restore config from backup (verifies HMAC)")
 	fmt.Fprintln(os.Stderr, "  revoke --admin-url URL --token TOKEN [--jti JTI] [--token-hash HASH] [--subject SUB] [--tenant T] [--reason R] [--ttl D]")
 	fmt.Fprintln(os.Stderr, "                                           revoke a credential via the admin endpoint (E2)")
+	fmt.Fprintln(os.Stderr, "  bundle <push|pull|pack|inspect>          manage policy bundles (OCI artifacts)")
 	os.Exit(2)
 }
 

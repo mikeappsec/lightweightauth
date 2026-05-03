@@ -11,6 +11,8 @@ require (
 	github.com/google/cel-go v0.28.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/open-policy-agent/opa v1.15.2
+	github.com/opencontainers/go-digest v1.0.0
+	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/valkey-io/valkey-go v1.0.74
 	go.opentelemetry.io/otel v1.43.0
@@ -27,6 +29,7 @@ require (
 	k8s.io/apimachinery v0.35.4
 	k8s.io/client-go v0.35.4
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
+	oras.land/oras-go/v2 v2.6.0
 	sigs.k8s.io/controller-runtime v0.23.3
 )
 
