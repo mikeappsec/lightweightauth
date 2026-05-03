@@ -43,6 +43,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"strings"
 	"text/template"
@@ -60,6 +61,10 @@ import (
 
 const defaultTimeout = 2 * time.Second
 
+// maxRenderedLen caps template output to SpiceDB's ObjectId limit.
+// Prevents unnecessary gRPC serialization of oversized values.
+const maxRenderedLen = 1024
+
 type authorizer struct {
 	name    string
 	timeout time.Duration
@@ -69,6 +74,8 @@ type authorizer struct {
 	permissionTpl   *template.Template
 	subjectTypeTpl  *template.Template
 	subjectIDTpl    *template.Template
+
+	consistency string // "minimize_latency", "fully_consistent", or "at_least_as_fresh"
 
 	client *authzed.Client
 	guard  *upstream.Guard
@@ -97,23 +104,23 @@ func (a *authorizer) Authorize(ctx context.Context, r *module.Request, id *modul
 		Request:  buildTemplateRequest(r),
 	}
 
-	resourceType, err := render(a.resourceTypeTpl, in)
+	resourceType, err := renderSafe(a.resourceTypeTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: spicedb %q: render resourceType: %v", module.ErrConfig, a.name, err)
 	}
-	resourceID, err := render(a.resourceIDTpl, in)
+	resourceID, err := renderSafe(a.resourceIDTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: spicedb %q: render resourceId: %v", module.ErrConfig, a.name, err)
 	}
-	permission, err := render(a.permissionTpl, in)
+	permission, err := renderSafe(a.permissionTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: spicedb %q: render permission: %v", module.ErrConfig, a.name, err)
 	}
-	subjectType, err := render(a.subjectTypeTpl, in)
+	subjectType, err := renderSafe(a.subjectTypeTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: spicedb %q: render subjectType: %v", module.ErrConfig, a.name, err)
 	}
-	subjectID, err := render(a.subjectIDTpl, in)
+	subjectID, err := renderSafe(a.subjectIDTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: spicedb %q: render subjectId: %v", module.ErrConfig, a.name, err)
 	}
@@ -122,8 +129,7 @@ func (a *authorizer) Authorize(ctx context.Context, r *module.Request, id *modul
 		return &module.Decision{
 			Allow:  false,
 			Status: 403,
-			Reason: fmt.Sprintf("spicedb: empty check fields (resource=%s:%s, permission=%s, subject=%s:%s)",
-				resourceType, resourceID, permission, subjectType, subjectID),
+			Reason: "spicedb: permission denied",
 		}, nil
 	}
 
@@ -132,17 +138,20 @@ func (a *authorizer) Authorize(ctx context.Context, r *module.Request, id *modul
 		return nil, err
 	}
 	if !allowed {
+		slog.Debug("spicedb deny",
+			"authorizer", a.name,
+			"subject", subjectType+":"+subjectID,
+			"permission", permission,
+			"resource", resourceType+":"+resourceID)
 		return &module.Decision{
 			Allow:  false,
 			Status: 403,
-			Reason: fmt.Sprintf("spicedb: %s:%s does not have %s on %s:%s",
-				subjectType, subjectID, permission, resourceType, resourceID),
+			Reason: "spicedb: permission denied",
 		}, nil
 	}
 	return &module.Decision{
-		Allow: true,
-		Reason: fmt.Sprintf("spicedb: %s:%s has %s on %s:%s",
-			subjectType, subjectID, permission, resourceType, resourceID),
+		Allow:  true,
+		Reason: "spicedb: permission granted",
 	}, nil
 }
 
@@ -165,9 +174,7 @@ func (a *authorizer) checkPermission(ctx context.Context, resourceType, resource
 				ObjectId:   subjectID,
 			},
 		},
-		Consistency: &v1.Consistency{
-			Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
-		},
+		Consistency: a.buildConsistency(),
 	}
 
 	var allowed bool
@@ -176,7 +183,16 @@ func (a *authorizer) checkPermission(ctx context.Context, resourceType, resource
 		if err != nil {
 			return fmt.Errorf("%w: spicedb check: %v", module.ErrUpstream, err)
 		}
-		allowed = resp.Permissionship == v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION
+		switch resp.Permissionship {
+		case v1.CheckPermissionResponse_PERMISSIONSHIP_HAS_PERMISSION:
+			allowed = true
+		case v1.CheckPermissionResponse_PERMISSIONSHIP_CONDITIONAL_PERMISSION:
+			// Caveated permission — required context not supplied.
+			// Treat as upstream error so composite authorizer can fall through.
+			return fmt.Errorf("%w: spicedb: conditional permission requires caveat context", module.ErrUpstream)
+		default:
+			allowed = false
+		}
 		return nil
 	})
 	if err != nil {
@@ -186,6 +202,19 @@ func (a *authorizer) checkPermission(ctx context.Context, resourceType, resource
 		return false, err
 	}
 	return allowed, nil
+}
+
+func (a *authorizer) buildConsistency() *v1.Consistency {
+	switch a.consistency {
+	case "fully_consistent":
+		return &v1.Consistency{
+			Requirement: &v1.Consistency_FullyConsistent{FullyConsistent: true},
+		}
+	default: // "minimize_latency" or empty
+		return &v1.Consistency{
+			Requirement: &v1.Consistency_MinimizeLatency{MinimizeLatency: true},
+		}
+	}
 }
 
 func buildTemplateRequest(r *module.Request) *templateRequest {
@@ -225,6 +254,23 @@ func render(t *template.Template, in templateInput) (string, error) {
 	return strings.TrimSpace(buf.String()), nil
 }
 
+// renderSafe wraps render with panic recovery and a length cap.
+func renderSafe(t *template.Template, in templateInput) (result string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: template panic: %v", module.ErrConfig, r)
+		}
+	}()
+	s, e := render(t, in)
+	if e != nil {
+		return "", e
+	}
+	if len(s) > maxRenderedLen {
+		return "", fmt.Errorf("%w: rendered value exceeds %d chars", module.ErrConfig, maxRenderedLen)
+	}
+	return s, nil
+}
+
 var templateFuncs = template.FuncMap{
 	"lower": strings.ToLower,
 	"upper": strings.ToUpper,
@@ -247,7 +293,19 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: spicedb %q: timeout: %v", module.ErrConfig, name, err)
 		}
+		if d <= 0 {
+			return nil, fmt.Errorf("%w: spicedb %q: timeout must be positive", module.ErrConfig, name)
+		}
 		timeout = d
+	}
+
+	// Consistency mode: "minimize_latency" (default) or "fully_consistent".
+	consistency, _ := raw["consistency"].(string)
+	switch consistency {
+	case "", "minimize_latency", "fully_consistent":
+		// valid
+	default:
+		return nil, fmt.Errorf("%w: spicedb %q: consistency must be 'minimize_latency' or 'fully_consistent'", module.ErrConfig, name)
 	}
 
 	check, _ := raw["check"].(map[string]any)
@@ -264,7 +322,7 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 	}
 
 	parse := func(field, src string) (*template.Template, error) {
-		t, err := template.New(name + "." + field).Funcs(templateFuncs).Parse(src)
+		t, err := template.New(name + "." + field).Funcs(templateFuncs).Option("missingkey=error").Parse(src)
 		if err != nil {
 			return nil, fmt.Errorf("%w: spicedb %q: parse %s: %v", module.ErrConfig, name, field, err)
 		}
@@ -298,7 +356,12 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 
 	// Build gRPC dial options.
 	var dialOpts []grpc.DialOption
+	dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(
+		grpc.MaxCallRecvMsgSize(256<<10), // 256 KiB — generous for CheckPermission
+	))
 	if useInsecure {
+		slog.Warn("spicedb: insecure mode — token transmitted in plaintext; do NOT use in production",
+			"authorizer", name, "endpoint", endpoint)
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		dialOpts = append(dialOpts, grpcutil.WithInsecureBearerToken(token))
 	} else {
@@ -318,6 +381,7 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 	return &authorizer{
 		name:            name,
 		timeout:         timeout,
+		consistency:     consistency,
 		resourceTypeTpl: resourceTypeTpl,
 		resourceIDTpl:   resourceIDTpl,
 		permissionTpl:   permissionTpl,
