@@ -2067,13 +2067,16 @@ F8. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.** ✅ S
   - Trust model: HMAC-SHA256 pre-shared key (≥32 bytes), stale-snapshot
     rejection, 16 MiB snapshot cap, revocation key length cap
 
-F9. **eBPF data plane (was 16) — experimental Mode C.**
-  Customer benefit is meaningful for high-density or non-HTTP east-west
-  enforcement, but the operational risk is high. Continue in the
-  separate `lightweightauth-ebpf` repo. Linux-only, privileged,
-  kernel-sensitive, and not a v1.x stability promise. Promotion
-  trigger: at least three production reference deployments report stable
-  operation and a maintainer signs up for kernel-version support.
+F9. **eBPF data plane (was 16) — experimental Mode C.** ✅ Shipped.
+  Implemented in `lightweightauth-ebpf` repo (`c20680f`).
+  BPF programs: sockops (connection intercept), sk_msg (verdict
+  enforcement), cgroup_skb/egress (CIDR deny). Userspace agent with
+  config loading, eBPF loader, UDS bridge to lwauth. DaemonSet
+  manifest with CAP_BPF, hostPID, volume mounts. Fail-open by default.
+  Linux-only, privileged, kernel ≥ 5.10 + BTF required.
+  Promotion trigger: at least three production reference deployments
+  report stable operation and a maintainer signs up for kernel-version
+  support.
 
 F10. **WASM plugins (was 17) — sandboxed in-process extension runtime.**
   Useful for policy snippets and lightweight custom logic, but lower
