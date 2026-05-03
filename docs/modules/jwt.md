@@ -35,9 +35,9 @@ identifiers:
       scheme: Bearer              # default; "" to accept raw token
 
       # JWKS rotation: the keyset is fetched lazily on first kid miss,
-      # but never more often than minRefreshInterval (default 5m). The
+      # but never more often than minRefreshInterval (default 15m). The
       # cache itself never expires — keys disappear when the IdP rotates.
-      minRefreshInterval: 5m
+      minRefreshInterval: 15m
 ```
 
 Verifies (in order): signature against JWKS → `aud` (if configured) →

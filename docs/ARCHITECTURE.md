@@ -34,18 +34,25 @@ client ─► Envoy ─(CheckRequest)─► lwauth.extauthz
                                        ▼
                               pipeline.Evaluate(req)
                                        │
-                       ┌───────────────┼────────────────┐
-                       ▼               ▼                ▼
-                   Identify        Authorize         Mutate
-                  (try each      (run configured   (add headers,
-                   in order)      authorizer(s))    mint JWT)
-                       │
-                       ▼
-                  cache lookups
-                       │
-                       ▼
+                         ┌───────────────┼────────────────┐
+                         ▼               ▼                ▼
+                    Rate Limit     Revocation        Identify
+                   (per-tenant     Check            (try each
+                    bucket)        (deny-list)       in order)
+                         │               │                │
+                         ▼               ▼                ▼
+                   if exceeded:    if revoked:       Authorize
+                   → 429            → 401            (run configured
+                                                     authorizer(s))
+                                                         │
+                                                         ▼
+                                                      Mutate
+                                                    (add headers,
+                                                     mint JWT)
+                                                         │
+                                                         ▼
                  CheckResponse ─► Envoy ─(allow + headers)─► upstream
-                                         (or 401/403 to client)
+                                         (or 401/403/429 to client)
 ```
 
 ## Pipeline contract
@@ -117,6 +124,8 @@ gRPC plugin behind the same `Identifier` interface.
 
 The pipeline distinguishes:
 
+- **RateLimited** — per-tenant rate limit exceeded. 429.
+- **Revoked** — credential found in revocation store. 401.
 - **NoIdentity** — no identifier matched. Maps to 401.
 - **InvalidCredential** — identifier matched but verification failed. 401.
 - **Forbidden** — authorizer denied. 403.

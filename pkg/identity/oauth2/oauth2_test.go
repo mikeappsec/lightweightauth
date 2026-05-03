@@ -280,9 +280,10 @@ func TestOAuth2_FullFlow(t *testing.T) {
 	}
 
 	// 4. Logout clears the cookie. /oauth2/userinfo should now 401.
-	resp3, err := httpcli.Get(lw.URL + "/oauth2/logout")
+	logoutReq, _ := http.NewRequest(http.MethodPost, lw.URL+"/oauth2/logout", nil)
+	resp3, err := httpcli.Do(logoutReq)
 	if err != nil {
-		t.Fatalf("GET logout: %v", err)
+		t.Fatalf("POST logout: %v", err)
 	}
 	_ = resp3.Body.Close()
 

@@ -52,7 +52,7 @@ func TestConfig_CustomValues(t *testing.T) {
 
 func TestNewRuntime(t *testing.T) {
 	ctx := context.Background()
-	rt, err := NewRuntime(ctx)
+	rt, err := NewRuntime(ctx, t.TempDir())
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
@@ -61,13 +61,14 @@ func TestNewRuntime(t *testing.T) {
 
 func TestLoad_MissingFile(t *testing.T) {
 	ctx := context.Background()
-	rt, err := NewRuntime(ctx)
+	dir := t.TempDir()
+	rt, err := NewRuntime(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Close(ctx)
 
-	_, err = rt.Load(ctx, "missing", Config{Path: "/nonexistent/module.wasm"})
+	_, err = rt.Load(ctx, "missing", Config{Path: filepath.Join(dir, "nonexistent", "module.wasm")})
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -75,13 +76,13 @@ func TestLoad_MissingFile(t *testing.T) {
 
 func TestLoad_InvalidWasm(t *testing.T) {
 	ctx := context.Background()
-	rt, err := NewRuntime(ctx)
+	dir := t.TempDir()
+	rt, err := NewRuntime(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Close(ctx)
 
-	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.wasm")
 	os.WriteFile(bad, []byte("not a wasm module"), 0644)
 
@@ -140,7 +141,8 @@ func TestParseConfig_InvalidTimeout(t *testing.T) {
 // TestCall_NoAllocExport verifies error when module lacks alloc export.
 func TestCall_NoAllocExport(t *testing.T) {
 	ctx := context.Background()
-	rt, err := NewRuntime(ctx)
+	dir := t.TempDir()
+	rt, err := NewRuntime(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +154,6 @@ func TestCall_NoAllocExport(t *testing.T) {
 		0x00, 0x61, 0x73, 0x6d, // magic
 		0x01, 0x00, 0x00, 0x00, // version 1
 	}
-	dir := t.TempDir()
 	p := filepath.Join(dir, "empty.wasm")
 	os.WriteFile(p, minWasm, 0644)
 

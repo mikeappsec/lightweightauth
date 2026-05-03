@@ -244,7 +244,8 @@ func TestOAuth2_RPInitiatedLogout(t *testing.T) {
 	}
 
 	// Hit /oauth2/logout — should 302 to endSessionURL.
-	resp, err := cli.Get(lw.URL + "/oauth2/logout")
+	req, _ := http.NewRequest(http.MethodPost, lw.URL+"/oauth2/logout", nil)
+	resp, err := cli.Do(req)
 	if err != nil {
 		t.Fatalf("logout: %v", err)
 	}

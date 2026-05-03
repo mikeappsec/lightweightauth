@@ -301,3 +301,134 @@ If any of those fail, check:
   boundaries, the M0–M12 milestone log, and the post-v1 roadmap.
 - **Security posture:** [security/v1.0-review.md](security/v1.0-review.md)
   — the v1.0 self-review and the tracked post-v1 follow-ups.
+
+---
+
+## Beyond the basics — production features
+
+The `quickstart.yaml` above is the minimum viable config. Below are
+the production features you'll likely want. Each block is opt-in —
+add only what you need.
+
+### Rate limiting (per-tenant)
+
+Protect shared resources from a misbehaving tenant. Runs before
+identification (no wasted JWKS fetches on rate-limited requests):
+
+```yaml
+# Append to quickstart.yaml
+rateLimit:
+  perTenant:
+    rps: 200        # tokens/second per tenant
+    burst: 400      # max instant burst
+  default:
+    rps: 50         # fallback when tenantId is empty
+    burst: 100
+  overrides:
+    premium-tenant:
+      rps: 1000
+      burst: 2000
+```
+
+Denied requests return HTTP 429. Monitor with
+`lwauth_decisions_total{outcome="deny",authorizer="ratelimit"}`.
+
+### Credential revocation (immediate logout)
+
+Block compromised or revoked credentials instantly — even if the JWT
+hasn't expired yet:
+
+```yaml
+# Append to quickstart.yaml
+revocation:
+  backend: memory       # or "valkey" for multi-replica
+  defaultTTL: "24h"
+```
+
+Revoke via the admin API:
+
+```bash
+curl -X POST http://localhost:8080/v1/admin/revoke \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  -d '{"key":"jti:compromised-token","reason":"credential-leak","ttl":"1h"}'
+```
+
+See [modules/revocation.md](modules/revocation.md) for Valkey setup
+and pipeline integration details.
+
+### Shadow mode (test policies safely)
+
+Evaluate a new policy in parallel without affecting production
+decisions. Shadow disagreements are logged and metricked:
+
+```yaml
+# quickstart.yaml with shadow mode
+mode: shadow
+shadowConfig:
+  identifiers:
+    - name: key
+      type: apikey
+      config:
+        headerName: X-Api-Key
+        static:
+          demo-key-alice: { subject: alice, roles: [viewer] }  # ← changed role
+  authorizers:
+    - name: stricter-gate
+      type: rbac
+      config:
+        rolesFrom: claim:roles
+        allow: [admin]      # "viewer" would be denied here
+```
+
+Monitor disagreements: `lwauth_shadow_disagreement_total{policy_version}`.
+See [cookbook/policy-shadow-mode.md](cookbook/policy-shadow-mode.md) for
+the full rollout workflow.
+
+### Canary evaluation (gradual rollout)
+
+Route a percentage of traffic to a new policy version:
+
+```yaml
+canary:
+  weight: 10           # 10% of requests use canary policy
+  config:
+    authorizers:
+      - name: new-gate
+        type: cel
+        config:
+          expression: 'identity.claims.tier == "enterprise"'
+```
+
+Monitor: `lwauth_canary_agreement_total{policy_version,agreement}`.
+
+### Decision caching
+
+Cache allow/deny verdicts to avoid repeated IdP calls:
+
+```yaml
+cache:
+  backend: valkey          # or "memory" for single-replica
+  addr: valkey:6379
+  ttl: "30s"               # positive cache TTL
+  negativeTtl: "5s"        # deny cache TTL
+  key: [sub, method, path] # cache key dimensions
+```
+
+See [cookbook/cache-invalidation.md](cookbook/cache-invalidation.md) for
+operational invalidation recipes.
+
+### Federation (multi-cluster)
+
+Replicate config and revocations across clusters:
+
+```yaml
+federation:
+  enabled: true
+  clusterID: "us-east-1"
+  federationKey: "${FEDERATION_PSK}"
+  peers:
+    - endpoint: "eu-west-1.lwauth:9443"
+```
+
+See [modules/federation.md](modules/federation.md) for the full
+multi-cluster setup guide.

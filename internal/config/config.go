@@ -130,7 +130,7 @@ type CacheSpec struct {
 	Backend   string `json:"backend,omitempty" yaml:"backend,omitempty"`
 	Addr      string `json:"addr,omitempty" yaml:"addr,omitempty"`
 	Username  string `json:"username,omitempty" yaml:"username,omitempty"`
-	Password  string `json:"password,omitempty" yaml:"password,omitempty"`
+	Password  string `json:"-" yaml:"password,omitempty"`
 	KeyPrefix string `json:"keyPrefix,omitempty" yaml:"keyPrefix,omitempty"`
 	TLS       bool   `json:"tls,omitempty" yaml:"tls,omitempty"`
 
@@ -163,7 +163,7 @@ type CacheSpec struct {
 	// 32 bytes (256-bit) recommended. If empty when distributedSingleflight
 	// is true, a random key is generated (cross-replica verification will
 	// fail gracefully — each replica evaluates independently).
-	SharedHMACKey string `json:"sharedHmacKey,omitempty" yaml:"sharedHmacKey,omitempty"`
+	SharedHMACKey string `json:"-" yaml:"sharedHmacKey,omitempty"`
 }
 
 // RevocationSpec configures the opt-in credential revocation store (E2).
@@ -185,7 +185,7 @@ type RevocationSpec struct {
 	Username string `json:"username,omitempty" yaml:"username,omitempty"`
 
 	// Password for Valkey auth (optional).
-	Password string `json:"password,omitempty" yaml:"password,omitempty"`
+	Password string `json:"-" yaml:"password,omitempty"`
 
 	// TLS enables TLS connections to Valkey.
 	TLS bool `json:"tls,omitempty" yaml:"tls,omitempty"`

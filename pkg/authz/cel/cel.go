@@ -110,8 +110,12 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 	if !ast.OutputType().IsAssignableType(cel.BoolType) {
 		return nil, fmt.Errorf("%w: cel %q: expression must yield bool, got %s", module.ErrConfig, name, ast.OutputType())
 	}
+	// Security hardening: bound CEL evaluation cost to prevent CPU exhaustion
+	// from complex list comprehensions over large claim arrays.
+	const celCostBudget = 100_000
 	prog, err := env.Program(ast,
 		cel.EvalOptions(cel.OptOptimize),
+		cel.CostLimit(celCostBudget),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: cel %q: program: %v", module.ErrConfig, name, err)

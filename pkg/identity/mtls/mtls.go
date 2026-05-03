@@ -75,9 +75,12 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	// back to the (legacy) Subject-DN allow-list, but that is a weak
 	// check by itself — see docs/modules/mtls.md.
 	if fromXFCC && i.trustedRoots != nil {
+		// Security hardening: enforce ClientAuth EKU only. ExtKeyUsageAny
+		// short-circuits Go's x509 EKU check and would accept server certs,
+		// code-signing certs, etc. as valid client identities.
 		opts := x509.VerifyOptions{
 			Roots:     i.trustedRoots,
-			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageAny},
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		}
 		if _, err := cert.Verify(opts); err != nil {
 			return nil, fmt.Errorf("%w: mtls: xfcc chain verify: %v", module.ErrInvalidCredential, err)

@@ -183,10 +183,24 @@ func toHeaderValueOptions(h map[string]string) []*corev3.HeaderValueOption {
 	out := make([]*corev3.HeaderValueOption, 0, len(h))
 	for k, v := range h {
 		out = append(out, &corev3.HeaderValueOption{
-			Header: &corev3.HeaderValue{Key: k, Value: v},
+			Header: &corev3.HeaderValue{Key: k, Value: sanitizeHeaderValue(v)},
 		})
 	}
 	return out
+}
+
+// sanitizeHeaderValue strips CR, LF, and NUL to prevent HTTP header injection.
+// Security hardening: defense-in-depth at the transport boundary.
+func sanitizeHeaderValue(s string) string {
+	if !strings.ContainsAny(s, "\r\n\x00") {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' || r == 0 {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // statusToGRPC maps the HTTP statuses the Engine emits back to gRPC codes
