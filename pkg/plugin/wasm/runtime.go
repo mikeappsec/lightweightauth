@@ -28,6 +28,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,24 +76,40 @@ func (c *Config) defaults() {
 // Runtime manages compiled WASM modules and instantiates sandboxed plugin
 // instances.
 type Runtime struct {
-	mu      sync.Mutex
-	engine  wazero.Runtime
-	modules map[string]*Module
+	mu           sync.Mutex
+	engine       wazero.Runtime
+	modules      map[string]*Module
+	sem          chan struct{} // concurrency limiter for WASM instances
+	pluginBaseDir string      // mandatory base directory for .wasm files
 }
 
 // Module is a compiled WASM plugin ready to be invoked.
 type Module struct {
-	name    string
-	cfg     Config
-	runtime wazero.Runtime
+	name     string
+	cfg      Config
+	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
+	sem      chan struct{} // shared concurrency limiter
 }
 
 // NewRuntime creates the WASM execution engine.
-func NewRuntime(ctx context.Context) (*Runtime, error) {
+// pluginBaseDir restricts module loading to an allowed directory (security hardening).
+func NewRuntime(ctx context.Context, pluginBaseDir string) (*Runtime, error) {
+	if pluginBaseDir == "" {
+		return nil, fmt.Errorf("wasm: pluginBaseDir is required")
+	}
+	absBase, err := filepath.Abs(pluginBaseDir)
+	if err != nil {
+		return nil, fmt.Errorf("wasm: resolve pluginBaseDir: %w", err)
+	}
+
+	// Security hardening: enforce a global memory page limit per instance.
+	// Each WASM page is 64 KiB; 16 pages = 1 MiB. Default cap: 16 MiB (256 pages).
+	const defaultMaxPages = 256
 	engine := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
 		WithCoreFeatures(api.CoreFeaturesV2).
-		WithCloseOnContextDone(true))
+		WithCloseOnContextDone(true).
+		WithMemoryLimitPages(defaultMaxPages))
 
 	// Instantiate WASI for modules that import it (stdio, random, clocks).
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, engine); err != nil {
@@ -98,9 +117,18 @@ func NewRuntime(ctx context.Context) (*Runtime, error) {
 		return nil, fmt.Errorf("wasm: wasi init: %w", err)
 	}
 
+	// Security hardening: limit concurrent WASM instances to prevent
+	// resource exhaustion under high request load.
+	maxConcurrent := runtime.NumCPU() * 2
+	if maxConcurrent < 4 {
+		maxConcurrent = 4
+	}
+
 	return &Runtime{
-		engine:  engine,
-		modules: make(map[string]*Module),
+		engine:        engine,
+		modules:       make(map[string]*Module),
+		sem:           make(chan struct{}, maxConcurrent),
+		pluginBaseDir: absBase,
 	}, nil
 }
 
@@ -108,7 +136,21 @@ func NewRuntime(ctx context.Context) (*Runtime, error) {
 func (r *Runtime) Load(ctx context.Context, name string, cfg Config) (*Module, error) {
 	cfg.defaults()
 
-	wasmBytes, err := os.ReadFile(cfg.Path)
+	// Security hardening: resolve the real path and verify it is under
+	// the configured plugin base directory to prevent path traversal.
+	resolved, err := filepath.EvalSymlinks(cfg.Path)
+	if err != nil {
+		return nil, fmt.Errorf("wasm: resolve path %q: %w", cfg.Path, err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("wasm: abs path %q: %w", cfg.Path, err)
+	}
+	if !strings.HasPrefix(resolved, r.pluginBaseDir+string(filepath.Separator)) && resolved != r.pluginBaseDir {
+		return nil, fmt.Errorf("wasm: path %q is outside allowed plugin directory %q", cfg.Path, r.pluginBaseDir)
+	}
+
+	wasmBytes, err := os.ReadFile(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("wasm: read %q: %w", cfg.Path, err)
 	}
@@ -123,6 +165,7 @@ func (r *Runtime) Load(ctx context.Context, name string, cfg Config) (*Module, e
 		cfg:      cfg,
 		runtime:  r.engine,
 		compiled: compiled,
+		sem:      r.sem,
 	}
 
 	r.mu.Lock()
@@ -140,11 +183,21 @@ func (r *Runtime) Close(ctx context.Context) error {
 // Call invokes a named export function with JSON input and returns JSON output.
 // It enforces CPU fuel, memory, and wall-clock limits.
 func (m *Module) Call(ctx context.Context, fnName string, input []byte) ([]byte, error) {
+	// Security hardening: acquire concurrency semaphore to prevent resource
+	// exhaustion from unbounded parallel WASM instantiation.
+	select {
+	case m.sem <- struct{}{}:
+		defer func() { <-m.sem }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wasm: %q: context cancelled waiting for instance slot", m.name)
+	}
+
 	// Wall-clock deadline.
 	ctx, cancel := context.WithTimeout(ctx, m.cfg.Timeout)
 	defer cancel()
 
-	// Instantiate with memory and fuel limits.
+	// Security hardening: enforce memory page limit per instance.
+	// Each WASM page is 64 KiB; 16 pages = 1 MiB.
 	modCfg := wazero.NewModuleConfig().
 		WithName("").
 		WithStartFunctions("_start", "_initialize")

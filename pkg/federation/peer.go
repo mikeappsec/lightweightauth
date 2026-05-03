@@ -59,6 +59,12 @@ func (p *Peer) Version() uint64 {
 // AcceptSnapshot validates and records a snapshot from this peer.
 // Returns an error if the HMAC is invalid or the snapshot is stale.
 func (p *Peer) AcceptSnapshot(snap *Snapshot, signature []byte) error {
+	// Security hardening: reject oversized payloads before expensive HMAC
+	// computation to prevent CPU exhaustion attacks.
+	if len(snap.SpecJSON) > MaxSnapshotSize {
+		return ErrSnapshotTooLarge
+	}
+
 	// Verify HMAC over full payload (version + source + timestamp + spec).
 	if !p.fedCfg.Verify(snapshotPayload(snap), signature) {
 		slog.Warn("federation: peer snapshot HMAC mismatch",
@@ -66,16 +72,18 @@ func (p *Peer) AcceptSnapshot(snap *Snapshot, signature []byte) error {
 		return ErrInvalidHMAC
 	}
 
-	if len(snap.SpecJSON) > MaxSnapshotSize {
-		return ErrSnapshotTooLarge
-	}
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Accept if version is higher, OR if version is lower but timestamp
-	// is newer (handles source restart with version counter reset).
-	if snap.Version <= p.version && !snap.Timestamp.After(p.lastSeen) {
+	// Security hardening: reject any snapshot with a version lower than
+	// what we have already accepted, regardless of timestamp, to prevent
+	// policy rollback via version downgrade.
+	if snap.Version < p.version {
+		return ErrStaleSnapshot
+	}
+
+	// Accept if version is higher, OR same version with newer timestamp.
+	if snap.Version == p.version && !snap.Timestamp.After(p.lastSeen) {
 		return ErrStaleSnapshot
 	}
 
