@@ -59,8 +59,8 @@ func (p *Peer) Version() uint64 {
 // AcceptSnapshot validates and records a snapshot from this peer.
 // Returns an error if the HMAC is invalid or the snapshot is stale.
 func (p *Peer) AcceptSnapshot(snap *Snapshot, signature []byte) error {
-	// Verify HMAC.
-	if !p.fedCfg.Verify(snap.SpecJSON, signature) {
+	// Verify HMAC over full payload (version + source + timestamp + spec).
+	if !p.fedCfg.Verify(snapshotPayload(snap), signature) {
 		slog.Warn("federation: peer snapshot HMAC mismatch",
 			"peer", p.config.ClusterID, "version", snap.Version)
 		return ErrInvalidHMAC
@@ -73,7 +73,9 @@ func (p *Peer) AcceptSnapshot(snap *Snapshot, signature []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if snap.Version <= p.version {
+	// Accept if version is higher, OR if version is lower but timestamp
+	// is newer (handles source restart with version counter reset).
+	if snap.Version <= p.version && !snap.Timestamp.After(p.lastSeen) {
 		return ErrStaleSnapshot
 	}
 

@@ -239,14 +239,13 @@ func TestPeer_AcceptSnapshot(t *testing.T) {
 	peer := NewPeer(cfg.Peers[0], cfg)
 
 	spec := []byte(`[{"hosts":["peer.example.com"]}]`)
-	sig := cfg.Sign(spec)
-
 	snap := &Snapshot{
 		Version:         1,
 		SourceClusterID: "cluster-b",
 		SpecJSON:        spec,
 		Timestamp:       time.Now(),
 	}
+	sig := cfg.Sign(snapshotPayload(snap))
 
 	if err := peer.AcceptSnapshot(snap, sig); err != nil {
 		t.Fatalf("AcceptSnapshot: %v", err)
@@ -280,17 +279,18 @@ func TestPeer_AcceptSnapshot_StaleVersion(t *testing.T) {
 	peer := NewPeer(cfg.Peers[0], cfg)
 
 	spec := []byte(`{}`)
-	sig := cfg.Sign(spec)
 
 	// Accept version 5.
 	snap := &Snapshot{Version: 5, SourceClusterID: "cluster-b", SpecJSON: spec, Timestamp: time.Now()}
+	sig := cfg.Sign(snapshotPayload(snap))
 	if err := peer.AcceptSnapshot(snap, sig); err != nil {
 		t.Fatal(err)
 	}
 
-	// Reject version 3 (stale).
-	stale := &Snapshot{Version: 3, SourceClusterID: "cluster-b", SpecJSON: spec, Timestamp: time.Now()}
-	if err := peer.AcceptSnapshot(stale, sig); err != ErrStaleSnapshot {
+	// Reject version 3 with older timestamp (stale).
+	stale := &Snapshot{Version: 3, SourceClusterID: "cluster-b", SpecJSON: spec, Timestamp: time.Now().Add(-time.Minute)}
+	staleSig := cfg.Sign(snapshotPayload(stale))
+	if err := peer.AcceptSnapshot(stale, staleSig); err != ErrStaleSnapshot {
 		t.Fatalf("expected ErrStaleSnapshot, got: %v", err)
 	}
 }
@@ -338,5 +338,113 @@ func TestRevocationPayload_Deterministic(t *testing.T) {
 	var m map[string]any
 	if err := json.Unmarshal(p1, &m); err != nil {
 		t.Fatalf("payload not valid JSON: %v", err)
+	}
+}
+
+func TestServer_SubscribeUnknownPeerRejected(t *testing.T) {
+	cfg := testConfig(t)
+	srv, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = srv.Subscribe("unknown-cluster")
+	if err == nil {
+		t.Fatal("expected error for unknown peer")
+	}
+}
+
+func TestConfig_Validate_KeyTooLong(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.FederationKey = make([]byte, MaxFederationKeyLen+1)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for oversized key")
+	}
+}
+
+func TestPeer_AcceptSnapshot_VersionResetWithNewerTimestamp(t *testing.T) {
+	cfg := testConfig(t)
+	peer := NewPeer(cfg.Peers[0], cfg)
+
+	spec := []byte(`{"v":1}`)
+
+	// Accept version 10.
+	snap1 := &Snapshot{Version: 10, SourceClusterID: "cluster-b", SpecJSON: spec, Timestamp: time.Now()}
+	sig1 := cfg.Sign(snapshotPayload(snap1))
+	if err := peer.AcceptSnapshot(snap1, sig1); err != nil {
+		t.Fatal(err)
+	}
+
+	// After source restart, version resets to 1 but timestamp is newer.
+	// This should be ACCEPTED (version reset recovery).
+	time.Sleep(10 * time.Millisecond) // ensure timestamp is newer
+	snap2 := &Snapshot{Version: 1, SourceClusterID: "cluster-b", SpecJSON: spec, Timestamp: time.Now().Add(time.Second)}
+	sig2 := cfg.Sign(snapshotPayload(snap2))
+	if err := peer.AcceptSnapshot(snap2, sig2); err != nil {
+		t.Fatalf("expected acceptance after version reset: %v", err)
+	}
+	if peer.Version() != 1 {
+		t.Fatalf("version = %d, want 1", peer.Version())
+	}
+}
+
+func TestServer_SignVerifySnapshot_FullPayload(t *testing.T) {
+	cfg := testConfig(t)
+	srv, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap := &Snapshot{
+		Version:         42,
+		SourceClusterID: "cluster-a",
+		SpecJSON:        []byte(`[{"hosts":["example.com"]}]`),
+		Timestamp:       time.Now(),
+	}
+
+	sig := srv.SignSnapshot(snap)
+	if !srv.VerifySnapshot(snap, sig) {
+		t.Fatal("valid snapshot should verify")
+	}
+
+	// Tamper version — HMAC should fail.
+	tampered := *snap
+	tampered.Version = 999
+	if srv.VerifySnapshot(&tampered, sig) {
+		t.Fatal("tampered version should not verify")
+	}
+
+	// Tamper source — HMAC should fail.
+	tampered2 := *snap
+	tampered2.SourceClusterID = "evil-cluster"
+	if srv.VerifySnapshot(&tampered2, sig) {
+		t.Fatal("tampered source should not verify")
+	}
+}
+
+func TestServer_HandleRevocation_KeyTooLong(t *testing.T) {
+	cfg := testConfig(t)
+	srv, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	longKey := string(make([]byte, MaxRevocationKeyLen+1))
+	entry := &RevocationEntry{
+		SourceClusterID: "cluster-b",
+		Key:             longKey,
+		Reason:          "test",
+		TTL:             time.Hour,
+		Timestamp:       time.Now(),
+	}
+
+	// Should fail on key length BEFORE HMAC check.
+	err = srv.HandleRevocation(context.Background(), entry, []byte("anything"))
+	if err == nil {
+		t.Fatal("expected error for oversized key")
+	}
+	// Should NOT be ErrInvalidHMAC (that would mean HMAC ran first).
+	if err == ErrInvalidHMAC {
+		t.Fatal("key length check should fire before HMAC")
 	}
 }

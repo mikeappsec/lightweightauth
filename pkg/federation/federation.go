@@ -106,6 +106,10 @@ type Config struct {
 	RevocationTTL time.Duration `json:"revocationTtl,omitempty" yaml:"revocationTtl,omitempty"`
 }
 
+// MaxFederationKeyLen caps the federation key size to prevent
+// excessive memory/CPU usage in HMAC operations.
+const MaxFederationKeyLen = 256
+
 // Validate checks the federation config for correctness.
 func (c *Config) Validate() error {
 	if !c.Enabled {
@@ -116,6 +120,9 @@ func (c *Config) Validate() error {
 	}
 	if len(c.FederationKey) < 32 {
 		return fmt.Errorf("federation: key must be at least 32 bytes")
+	}
+	if len(c.FederationKey) > MaxFederationKeyLen {
+		return fmt.Errorf("federation: key must be at most %d bytes", MaxFederationKeyLen)
 	}
 	for i, p := range c.Peers {
 		if err := p.ClusterID.Validate(); err != nil {
