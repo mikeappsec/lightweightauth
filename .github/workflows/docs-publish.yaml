@@ -51,7 +51,7 @@ jobs:
       # once Pages is bootstrapped if you want the smaller scope.
       pages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
