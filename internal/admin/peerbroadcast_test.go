@@ -221,7 +221,7 @@ func TestIsAllowedPeerIP(t *testing.T) {
 }
 
 func TestDNSPeerResolver_CachesResults(t *testing.T) {
-	t.Parallel()
+	// Not parallel: mutates package-level lookupHostFn.
 	var calls atomic.Int64
 
 	oldFn := lookupHostFn
@@ -255,7 +255,7 @@ func TestDNSPeerResolver_CachesResults(t *testing.T) {
 }
 
 func TestDNSPeerResolver_FiltersUnsafeIPs(t *testing.T) {
-	t.Parallel()
+	// Not parallel: mutates package-level lookupHostFn.
 
 	oldFn := lookupHostFn
 	lookupHostFn = func(_ context.Context, host string) ([]string, error) {
