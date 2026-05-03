@@ -272,8 +272,25 @@ func renderSafe(t *template.Template, in templateInput) (result string, err erro
 }
 
 var templateFuncs = template.FuncMap{
-	"lower": strings.ToLower,
-	"upper": strings.ToUpper,
+	"lower":    strings.ToLower,
+	"upper":    strings.ToUpper,
+	"sanitize": sanitizeObjectID,
+}
+
+// sanitizeObjectID restricts a string to SpiceDB-safe characters
+// [a-zA-Z0-9/_|@.-] and truncates to maxRenderedLen.
+func sanitizeObjectID(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '/' || r == '_' || r == '|' || r == '@' || r == '.' || r == '-' {
+			b.WriteRune(r)
+		}
+		if b.Len() >= maxRenderedLen {
+			break
+		}
+	}
+	return b.String()
 }
 
 func factory(name string, raw map[string]any) (module.Authorizer, error) {

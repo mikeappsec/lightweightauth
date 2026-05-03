@@ -24,6 +24,10 @@ authorizers:
 
 rateLimit:
   enabled: true
+  # NOTE: keyFrom: peer-ip only works when lwauth terminates client
+  # connections directly. Behind a reverse proxy, use:
+  #   keyFrom: header:X-Forwarded-For
+  # and ensure the proxy is trusted (sets XFF from the real client).
   keyFrom: peer-ip
   rules:
     - match:

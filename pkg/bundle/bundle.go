@@ -140,6 +140,9 @@ func Pack(dir string) ([]byte, *Metadata, error) {
 	return buf.Bytes(), meta, nil
 }
 
+// maxEntries is the maximum number of tar entries allowed in a bundle.
+const maxEntries = 1000
+
 // Unpack extracts a bundle tar.gz into the destination directory.
 func Unpack(data []byte, destDir string) (*Metadata, error) {
 	if len(data) > MaxBundleSize {
@@ -152,8 +155,17 @@ func Unpack(data []byte, destDir string) (*Metadata, error) {
 	}
 	defer gr.Close()
 
-	tr := tar.NewReader(gr)
+	// BN5: Wrap gzip reader with a limit to prevent decompression bombs.
+	lr := io.LimitReader(gr, MaxBundleSize+1)
+	tr := tar.NewReader(lr)
+
 	var totalBytes int64
+	var entryCount int
+	absDir, err := filepath.Abs(destDir)
+	if err != nil {
+		return nil, fmt.Errorf("bundle: abs destDir: %w", err)
+	}
+
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -161,6 +173,17 @@ func Unpack(data []byte, destDir string) (*Metadata, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("bundle: tar: %w", err)
+		}
+
+		// BN6: Limit number of entries to prevent inode exhaustion.
+		entryCount++
+		if entryCount > maxEntries {
+			return nil, fmt.Errorf("bundle: too many entries (%d > %d)", entryCount, maxEntries)
+		}
+
+		// BN1: Reject symlinks, hardlinks, and other non-regular entries.
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir {
+			return nil, fmt.Errorf("bundle: unsupported entry type %d for %q", hdr.Typeflag, hdr.Name)
 		}
 
 		// Security: reject absolute paths and traversal.
@@ -175,6 +198,23 @@ func Unpack(data []byte, destDir string) (*Metadata, error) {
 		}
 
 		dest := filepath.Join(destDir, clean)
+
+		// BN2: Validate containment — resolved path must be within destDir.
+		absDest, err := filepath.Abs(dest)
+		if err != nil {
+			return nil, fmt.Errorf("bundle: abs path: %w", err)
+		}
+		if !strings.HasPrefix(absDest, absDir+string(os.PathSeparator)) && absDest != absDir {
+			return nil, fmt.Errorf("bundle: path escapes destination: %q", hdr.Name)
+		}
+
+		if hdr.Typeflag == tar.TypeDir {
+			if err := os.MkdirAll(dest, 0o755); err != nil {
+				return nil, fmt.Errorf("bundle: mkdir %q: %w", dest, err)
+			}
+			continue
+		}
+
 		dir := filepath.Dir(dest)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("bundle: mkdir %q: %w", dir, err)

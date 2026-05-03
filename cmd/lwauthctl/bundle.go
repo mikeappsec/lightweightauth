@@ -57,6 +57,10 @@ func bundlePush(args []string) {
 		os.Exit(1)
 	}
 
+	if *password != "" {
+		fmt.Fprintln(os.Stderr, "WARNING: --password exposes credentials in process listing; prefer $LWAUTH_REGISTRY_PASSWORD")
+	}
+
 	user := envOr(*username, "LWAUTH_REGISTRY_USERNAME")
 	pass := envOr(*password, "LWAUTH_REGISTRY_PASSWORD")
 
@@ -85,6 +89,10 @@ func bundlePull(args []string) {
 	if *registry == "" || *tag == "" {
 		fmt.Fprintln(os.Stderr, "error: --registry and --tag are required")
 		os.Exit(1)
+	}
+
+	if *password != "" {
+		fmt.Fprintln(os.Stderr, "WARNING: --password exposes credentials in process listing; prefer $LWAUTH_REGISTRY_PASSWORD")
 	}
 
 	user := envOr(*username, "LWAUTH_REGISTRY_USERNAME")
