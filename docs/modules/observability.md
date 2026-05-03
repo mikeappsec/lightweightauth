@@ -20,9 +20,18 @@ port to expose.
 | `lwauth_decisions_total`              | counter         | `outcome`, `authorizer`, `tenant`   |
 | `lwauth_decision_latency_seconds`     | histogram (16 buckets, 100µs…3.3s) | same                |
 | `lwauth_identifier_total`             | counter         | `identifier`, `outcome` (`match`/`no_match`/`error`) |
+| `lwauth_shadow_disagreement_total`    | counter         | `policy_version`, `tenant`          |
+| `lwauth_canary_agreement_total`       | counter         | `policy_version`, `tenant`, `agreement` |
+| `lwauth_revocation_checks_total`      | counter         | `result` (`hit`/`miss`)             |
+| `lwauth_revocation_duration_seconds`  | histogram       | `result`                            |
+| `lwauth_ratelimit_denied_total`       | counter         | `tenant`                            |
 | `lwauth_cache_hits_total`             | CounterFunc     | `cache`                             |
 | `lwauth_cache_misses_total`           | CounterFunc     | `cache`                             |
 | `lwauth_cache_evictions_total`        | CounterFunc     | `cache`                             |
+| `lwauth_cache_stale_served_total`     | counter         | `cache`                             |
+| `lwauth_key_verify_total`             | counter         | `kid`, `result`                     |
+| `lwauth_key_state`                    | gauge           | `kid`, `state`                      |
+| `lwauth_config_reloads_total`         | counter         | `result` (`success`/`error`)        |
 
 Cache stats use `prometheus.CounterFunc` — the registry pulls live
 `atomic.Uint64` values from `cache.Stats` at scrape time, so a

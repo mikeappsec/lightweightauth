@@ -132,11 +132,13 @@ nav:
           - HMAC (SigV4-style): modules/hmac.md
           - DPoP wrapper: modules/dpop.md
           - gRPC plugin: modules/plugin-grpc.md
+          - WASM plugin: modules/wasm.md
       - Authorizers:
           - RBAC: modules/rbac.md
           - CEL: modules/cel.md
           - OPA: modules/opa.md
           - OpenFGA: modules/openfga.md
+          - SpiceDB (ReBAC): modules/spicedb.md
           - Composite: modules/composite.md
       - Response mutators:
           - Header add: modules/header-add.md
@@ -148,9 +150,12 @@ nav:
           - Valkey: modules/cache-valkey.md
       - Cross-cutting:
           - Rate limit: modules/ratelimit.md
+          - Revocation: modules/revocation.md
           - Session: modules/session.md
           - Upstream guard: modules/upstream.md
           - ConfigStream broker: modules/configstream.md
+          - Bundle registry: modules/bundle.md
+          - Federation: modules/federation.md
           - Observability: modules/observability.md
   - Architecture:
       - Design: DESIGN.md
