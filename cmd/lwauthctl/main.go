@@ -56,6 +56,8 @@ func main() {
 		revoke(os.Args[2:])
 	case "bundle":
 		bundleCmd(os.Args[2:])
+	case "federation":
+		federationCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -79,6 +81,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  revoke --admin-url URL --token TOKEN [--jti JTI] [--token-hash HASH] [--subject SUB] [--tenant T] [--reason R] [--ttl D]")
 	fmt.Fprintln(os.Stderr, "                                           revoke a credential via the admin endpoint (E2)")
 	fmt.Fprintln(os.Stderr, "  bundle <push|pull|pack|inspect>          manage policy bundles (OCI artifacts)")
+	fmt.Fprintln(os.Stderr, "  federation <generate-key|status>          multi-cluster federation management")
 	os.Exit(2)
 }
 

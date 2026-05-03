@@ -1,0 +1,102 @@
+// Federation — cross-cluster config replication and revocation sync.
+//
+// This service is the backbone of multi-cluster LightweightAuth
+// deployments (DESIGN.md §F8). Clusters peer with each other via
+// mTLS-authenticated gRPC streams and exchange:
+//
+//   1. Config snapshots — signed AuthConfig bundles pushed from a
+//      "source" cluster to "follower" clusters.
+//   2. Revocation events — revocations broadcast to all peers so
+//      token/session revocations are effective globally.
+//
+// Trust model: each cluster holds a pre-shared federation key used
+// for HMAC signing of all exchanged payloads. A cluster only accepts
+// snapshots/revocations from peers whose HMAC it can verify.
+syntax = "proto3";
+
+package lightweightauth.v1;
+
+option go_package = "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1;authv1";
+
+service Federation {
+  // SyncConfig is a server-streaming RPC where the source cluster
+  // pushes AuthConfig snapshots to a subscribing peer. The subscriber
+  // opens the stream and receives snapshots as they change.
+  rpc SyncConfig(SyncConfigRequest)
+      returns (stream FederatedSnapshot);
+
+  // PushRevocation is a unary RPC to broadcast a revocation entry
+  // to a peer cluster. The sender is responsible for fan-out to all
+  // known peers (fire-and-forget with retry).
+  rpc PushRevocation(FederatedRevocation)
+      returns (PushRevocationResponse);
+
+  // Ping is a lightweight health/connectivity check between peers.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message SyncConfigRequest {
+  // cluster_id identifies the subscribing cluster.
+  string cluster_id = 1;
+
+  // last_version is the highest snapshot version the subscriber has
+  // already applied. The server may skip versions <= this.
+  uint64 last_version = 2;
+
+  // namespaces optionally restricts which namespaces the subscriber
+  // wants configs for. Empty means "all".
+  repeated string namespaces = 3;
+}
+
+message FederatedSnapshot {
+  // version is monotonic per source cluster. Subscribers de-duplicate
+  // on reconnect by comparing to their local high-water mark.
+  uint64 version = 1;
+
+  // source_cluster_id identifies which cluster produced this snapshot.
+  string source_cluster_id = 2;
+
+  // spec_json is the canonical JSON-encoded AuthConfig array.
+  bytes spec_json = 3;
+
+  // hmac_sha256 is the HMAC-SHA256 of spec_json keyed on the shared
+  // federation secret. Receivers MUST verify before applying.
+  bytes hmac_sha256 = 4;
+
+  // timestamp_unix is when the source produced this snapshot.
+  int64 timestamp_unix = 5;
+}
+
+message FederatedRevocation {
+  // source_cluster_id identifies the originator.
+  string source_cluster_id = 1;
+
+  // key is the revocation key (e.g., "jti:<token-id>" or "sub:<user>").
+  string key = 2;
+
+  // reason is a short human-readable reason.
+  string reason = 3;
+
+  // ttl_seconds is the remaining TTL for the entry.
+  int64 ttl_seconds = 4;
+
+  // hmac_sha256 authenticates the payload with the federation secret.
+  bytes hmac_sha256 = 5;
+
+  // timestamp_unix is when the revocation was created.
+  int64 timestamp_unix = 6;
+}
+
+message PushRevocationResponse {
+  bool accepted = 1;
+}
+
+message PingRequest {
+  string cluster_id = 1;
+}
+
+message PingResponse {
+  string cluster_id = 1;
+  int64  timestamp_unix = 2;
+  uint64 config_version = 3;  // highest config version held locally
+}

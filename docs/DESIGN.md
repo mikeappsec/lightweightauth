@@ -2045,13 +2045,27 @@ F7. **POL-MARKET-1 — Policy bundle registry.** ✅ Shipped.
     `deploy/bundles/gdpr-audit/` (purpose-based access, data subject
     rights, audit trail)
 
-F8. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.**
+F8. **ENT-FEDERATION-1 — Multi-cluster config and decision federation.** ✅ Shipped.
   High value for global edge deployments, but gated by the correctness
   and audit work in tiers C/D/E. Define how multiple clusters share
   signed config snapshots, tenant policy versions, and revocation events
   without trusting a single Kubernetes API server. Promotion trigger:
   admin-plane auth (C3), policy versioning (D2), audit retention (D4),
   and cache invalidation (E3) are shipped.
+
+  Implementation:
+  - `api/proto/lightweightauth/v1/federation.proto` — gRPC service with
+    SyncConfig (server-streaming), PushRevocation (unary), Ping (health)
+  - `pkg/federation/` — Config, ClusterID, Server (pub/sub snapshots,
+    HMAC-signed payloads), Peer (accept/reject snapshots with version
+    monotonicity), PeerSet (fan-out revocations to all peers)
+  - `api/crd/v1alpha1/ClusterPeer` — cluster-scoped CRD for declaring
+    remote peers (endpoint, TLS secret ref, namespace filtering, paused)
+  - `internal/controller/clusterpeer.go` — reconciler that watches
+    ClusterPeer CRDs and updates status (Connected, LastSyncTime, etc.)
+  - `cmd/lwauthctl federation` — CLI: generate-key, status
+  - Trust model: HMAC-SHA256 pre-shared key (≥32 bytes), stale-snapshot
+    rejection, 16 MiB snapshot cap, revocation key length cap
 
 F9. **eBPF data plane (was 16) — experimental Mode C.**
   Customer benefit is meaningful for high-density or non-HTTP east-west

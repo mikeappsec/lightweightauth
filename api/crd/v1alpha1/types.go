@@ -43,6 +43,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&AuthConfig{}, &AuthConfigList{},
 		&AuthPolicy{}, &AuthPolicyList{},
 		&IdentityProvider{}, &IdentityProviderList{},
+		&ClusterPeer{}, &ClusterPeerList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil
@@ -306,6 +307,119 @@ func (in *IdentityProviderList) DeepCopy() *IdentityProviderList {
 	out := &IdentityProviderList{TypeMeta: in.TypeMeta}
 	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	out.Items = make([]IdentityProvider, len(in.Items))
+	for i := range in.Items {
+		out.Items[i] = *in.Items[i].DeepCopy()
+	}
+	return out
+}
+
+// =====================================================================
+// ClusterPeer — declares a remote cluster for federation (F8).
+// Cluster-scoped: a platform admin declares which remote clusters to
+// peer with and provides mTLS + endpoint details.
+// =====================================================================
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Cluster
+// +kubebuilder:subresource:status
+
+// ClusterPeer declares a remote cluster for config federation.
+type ClusterPeer struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ClusterPeerSpec   `json:"spec"`
+	Status            ClusterPeerStatus `json:"status,omitempty"`
+}
+
+// ClusterPeerSpec configures the federation connection to a remote cluster.
+type ClusterPeerSpec struct {
+	// ClusterID is the unique identity of the remote cluster.
+	ClusterID string `json:"clusterId"`
+
+	// Endpoint is the gRPC address (host:port) of the remote federation server.
+	Endpoint string `json:"endpoint"`
+
+	// TLSSecretRef is the name of a Secret containing tls.crt, tls.key,
+	// and ca.crt for mTLS authentication to the remote peer.
+	TLSSecretRef string `json:"tlsSecretRef,omitempty"`
+
+	// FederationKeySecretRef is the name of a Secret containing the
+	// pre-shared HMAC key in a "key" field. If empty, uses the
+	// controller-level federation key.
+	FederationKeySecretRef string `json:"federationKeySecretRef,omitempty"`
+
+	// Namespaces restricts replication to specific namespaces.
+	// Empty means replicate all namespaces.
+	Namespaces []string `json:"namespaces,omitempty"`
+
+	// Paused halts federation with this peer without deleting the CR.
+	Paused bool `json:"paused,omitempty"`
+}
+
+// ClusterPeerStatus reflects the observed federation state with a peer.
+type ClusterPeerStatus struct {
+	// Conditions follows standard K8s condition patterns.
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+
+	// Connected is true when the gRPC stream to the peer is active.
+	Connected bool `json:"connected,omitempty"`
+
+	// LastSyncTime is the last time a config snapshot was received from this peer.
+	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
+
+	// LastSyncVersion is the snapshot version from the last sync.
+	LastSyncVersion uint64 `json:"lastSyncVersion,omitempty"`
+
+	// LastError is the last error encountered during federation.
+	LastError string `json:"lastError,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// ClusterPeerList is the list type for ClusterPeer.
+type ClusterPeerList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ClusterPeer `json:"items"`
+}
+
+// DeepCopyObject implements runtime.Object.
+func (in *ClusterPeer) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the receiver.
+func (in *ClusterPeer) DeepCopy() *ClusterPeer {
+	if in == nil {
+		return nil
+	}
+	out := &ClusterPeer{TypeMeta: in.TypeMeta}
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	out.Spec.ClusterID = in.Spec.ClusterID
+	out.Spec.Endpoint = in.Spec.Endpoint
+	out.Spec.TLSSecretRef = in.Spec.TLSSecretRef
+	out.Spec.FederationKeySecretRef = in.Spec.FederationKeySecretRef
+	out.Spec.Namespaces = append([]string(nil), in.Spec.Namespaces...)
+	out.Spec.Paused = in.Spec.Paused
+	out.Status = in.Status
+	if in.Status.LastSyncTime != nil {
+		t := *in.Status.LastSyncTime
+		out.Status.LastSyncTime = &t
+	}
+	out.Status.Conditions = make([]metav1.Condition, len(in.Status.Conditions))
+	copy(out.Status.Conditions, in.Status.Conditions)
+	return out
+}
+
+// DeepCopyObject implements runtime.Object.
+func (in *ClusterPeerList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
+// DeepCopy clones the list.
+func (in *ClusterPeerList) DeepCopy() *ClusterPeerList {
+	if in == nil {
+		return nil
+	}
+	out := &ClusterPeerList{TypeMeta: in.TypeMeta}
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	out.Items = make([]ClusterPeer, len(in.Items))
 	for i := range in.Items {
 		out.Items[i] = *in.Items[i].DeepCopy()
 	}
