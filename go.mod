@@ -10,7 +10,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.0
 	github.com/google/cel-go v0.28.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6
-	github.com/open-policy-agent/opa v1.15.2
+	github.com/open-policy-agent/opa v1.16.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2
@@ -108,7 +108,6 @@ require (
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.41.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
