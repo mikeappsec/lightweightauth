@@ -2078,14 +2078,27 @@ F9. **eBPF data plane (was 16) — experimental Mode C.** ✅ Shipped.
   report stable operation and a maintainer signs up for kernel-version
   support.
 
-F10. **WASM plugins (was 17) — sandboxed in-process extension runtime.**
-  Useful for policy snippets and lightweight custom logic, but lower
-  near-term customer value than out-of-process plugins because auth
-  libraries in WASM remain immature. Evaluate `wazero` for untrusted
-  policy/credential snippets with CPU, memory, and wall-clock budgets.
-  Promotion trigger: auth-library support in WASM is mature enough that
-  users can implement real identifiers/authorizers without
-  reimplementing crypto badly.
+F10. **WASM plugins (was 17) — sandboxed in-process extension runtime.** ✅ Shipped.
+  Implemented via `pkg/plugin/wasm/` using `wazero` (pure-Go WASM runtime).
+  Plugins compiled to `.wasm` register under type `"wasm"` for all three
+  module kinds (identifier, authorizer, mutator). Sandbox enforces:
+  - CPU budget via fuel metering (default 1M instructions/call)
+  - Memory cap (default 16 MiB per module instance)
+  - Wall-clock deadline (default 100ms per invocation)
+  - 1 MiB max response size
+  Guest ABI: JSON-in/JSON-out via `alloc`/`identify`/`authorize`/`mutate`
+  exports. WASI preview1 available for stdlib needs.
+  Config example:
+  ```yaml
+  identifiers:
+    - name: custom-header-check
+      type: wasm
+      config:
+        path: /opt/plugins/check.wasm
+        maxMemoryMB: 32
+        maxFuel: 2000000
+        timeout: 200ms
+  ```
 
 F11. **DOC-README-1 — Per-package README documentation for all modules.**
   Add a `README.md` to every public package under `pkg/` documenting

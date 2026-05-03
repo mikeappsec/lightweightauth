@@ -40,4 +40,9 @@ import (
 	// under all three module kinds so configs can pull in remote
 	// identifiers / authorizers / mutators identically to built-ins.
 	_ "github.com/mikeappsec/lightweightauth/pkg/plugin/grpc"
+
+	// F10: sandboxed WASM plugin runtime. Registers the type "wasm"
+	// under all three module kinds for in-process policy snippets
+	// with CPU, memory, and wall-clock budgets (wazero).
+	_ "github.com/mikeappsec/lightweightauth/pkg/plugin/wasm"
 )
