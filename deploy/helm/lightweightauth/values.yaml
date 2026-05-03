@@ -140,7 +140,10 @@ gateway:
 
   image:
     repository: envoyproxy/envoy
-    tag: v1.32-latest
+    # Pin to a specific patch version for reproducible deployments.
+    # Override with a digest (e.g. "v1.32.3@sha256:...") for maximum
+    # supply-chain assurance in production.
+    tag: v1.32.3
     pullPolicy: IfNotPresent
 
   replicaCount: 1

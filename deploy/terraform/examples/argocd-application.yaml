@@ -17,7 +17,9 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
+  # Use a dedicated, restricted AppProject — never 'default' in production.
+  # See argocd-project.yaml for the matching project definition.
+  project: lwauth
 
   source:
     # OCI Helm chart from the LightweightAuth release pipeline (F2).

@@ -1,0 +1,40 @@
+# Argo CD AppProject — LightweightAuth
+#
+# Restricts LightweightAuth deployments to the expected chart source and
+# target namespace. Apply this before the Application resource.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: lwauth
+  namespace: argocd
+spec:
+  description: "Restricted project for LightweightAuth deployments"
+
+  # Only allow charts from the official GHCR OCI repository.
+  sourceRepos:
+    - "ghcr.io/mikeappsec/charts"
+
+  # Only deploy to the lwauth namespace on the in-cluster API server.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: lwauth
+
+  # Deny cluster-scoped resources by default.
+  clusterResourceWhitelist: []
+
+  # Allow only namespaced resources that lwauth needs.
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: "*"
+    - group: apps
+      kind: Deployment
+    - group: apps
+      kind: ReplicaSet
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: monitoring.coreos.com
+      kind: ServiceMonitor
