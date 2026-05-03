@@ -1,0 +1,43 @@
+# PCI-DSS Req 8: Strong authentication for cardholder data access.
+#
+# Enforces JWT with verified issuer, audience, and short expiry.
+# mTLS required for service-to-service access to payment APIs.
+hosts:
+  - payments.example.com
+  - cards.example.com
+
+identifierMode: allOf
+
+identifiers:
+  - name: verified-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["payments.example.com"]
+      header: Authorization
+      scheme: Bearer
+      requiredClaims:
+        - sub
+        - exp
+        - iat
+        - jti
+      maxAge: 900  # 15-minute token lifetime (PCI-DSS 8.6.3)
+
+  - name: mtls-service
+    type: mtls
+    config:
+      caBundle: /etc/lwauth/pci-ca-bundle.pem
+      requiredSAN:
+        - "*.payments.internal"
+      verifyExpiry: true
+
+authorizers:
+  - name: pci-rbac
+    type: rbac
+    config:
+      rolesFrom: claim:pci_roles
+      allow:
+        - cardholder-data-reader
+        - cardholder-data-writer
+        - payment-processor

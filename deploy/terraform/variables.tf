@@ -164,7 +164,15 @@ variable "autoscaling_target_cpu" {
 # ---------------------------------------------------------------------------
 
 variable "values_override" {
-  description = "Raw YAML string merged last into Helm values (escape hatch for advanced config)."
+  # SECURITY WARNING: This value is merged last and can override any chart
+  # default, including security-critical pod/container security contexts.
+  # Never source this from untrusted or unreviewed input.
+  description = "Raw YAML string merged last into Helm values (escape hatch for advanced config). Must not override security-critical fields — use dedicated variables instead."
   type        = string
   default     = ""
+
+  validation {
+    condition     = !can(regex("(?i)(runAsUser|allowPrivilegeEscalation|capabilities|securityContext|hostNetwork|hostPID|hostIPC|privileged)", var.values_override))
+    error_message = "values_override must not override security-critical fields (securityContext, capabilities, allowPrivilegeEscalation, privileged, hostNetwork, hostPID, hostIPC). Use dedicated variables or set them in the chart directly."
+  }
 }

@@ -152,6 +152,11 @@ jobs:
 
   # ------------------------------------------------------------------
   # Job 3: SLSA provenance for Go binaries (level 3)
+  #
+  # NOTE: Pinned by tag (not SHA) because GitHub Actions does not yet
+  # support SHA-based refs for reusable workflow `uses:` in all runner
+  # versions. Track: https://github.com/actions/runner/issues/2417
+  # Expected commit for v2.1.0: 9e8fed3 (verify at each update).
   # ------------------------------------------------------------------
   provenance:
     needs: goreleaser
@@ -197,12 +202,17 @@ jobs:
         run: helm package deploy/helm/lightweightauth --destination dist/
 
       - name: Push Helm chart to OCI registry
-        run: helm push dist/lightweightauth-${{ needs.goreleaser.outputs.version }}.tgz oci://${{ env.CHART_REPO }}
+        id: helm-push
+        run: |
+          OUTPUT=$(helm push dist/lightweightauth-${{ needs.goreleaser.outputs.version }}.tgz oci://${{ env.CHART_REPO }} 2>&1)
+          echo "$OUTPUT"
+          DIGEST=$(echo "$OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       # Sign the Helm chart OCI artifact with Cosign so consumers can
       # verify the chart was published by this workflow.
       - name: Install Cosign
         uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb  # v3.8.0
 
-      - name: Sign Helm OCI artifact (keyless)
-        run: cosign sign --yes ${{ env.CHART_REPO }}/lightweightauth:${{ needs.goreleaser.outputs.version }}
+      - name: Sign Helm OCI artifact (keyless, by digest)
+        run: cosign sign --yes ${{ env.CHART_REPO }}/lightweightauth@${{ steps.helm-push.outputs.digest }}

@@ -1,0 +1,43 @@
+# General API rate limiting — resource exhaustion protection.
+#
+# Applies per-tenant limits to prevent noisy-neighbor issues and
+# protect against application-layer DoS.
+hosts:
+  - "*.example.com"
+
+identifiers:
+  - name: bearer-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["api.example.com"]
+      header: Authorization
+      scheme: Bearer
+
+authorizers:
+  - name: allow-authenticated
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow: ["*"]
+
+rateLimit:
+  enabled: true
+  keyFrom: tenant
+  rules:
+    - match:
+        path: /api/
+        methods: [GET, POST, PUT, PATCH, DELETE]
+      rps: 100
+      burst: 200
+    - match:
+        path: /api/bulk
+        methods: [POST]
+      rps: 10
+      burst: 20
+    - match:
+        path: /api/export
+        methods: [POST, GET]
+      rps: 5
+      burst: 10

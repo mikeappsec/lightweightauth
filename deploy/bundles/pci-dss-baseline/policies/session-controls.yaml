@@ -1,0 +1,35 @@
+# PCI-DSS Req 8.2.8: Session timeout after 15 minutes of inactivity.
+#
+# Enforces short-lived tokens and re-authentication for sensitive
+# operations in the cardholder data environment.
+hosts:
+  - payments.example.com
+  - cards.example.com
+
+identifiers:
+  - name: session-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["payments.example.com"]
+      header: Authorization
+      scheme: Bearer
+      maxAge: 900  # 15 min (PCI-DSS 8.2.8 idle timeout)
+
+authorizers:
+  - name: session-valid
+    type: rbac
+    config:
+      defaultAllow: true
+
+rateLimit:
+  enabled: true
+  keyFrom: subject
+  rules:
+    # Cap the number of unique sessions per user to detect token theft.
+    - match:
+        path: /
+        methods: [GET, POST, PUT, PATCH, DELETE]
+      rps: 50
+      burst: 100

@@ -1,0 +1,18 @@
+name: owasp-ratelimit-baseline
+version: "1.0.0"
+description: >
+  OWASP Top 10 rate-limit bundle — applies graduated rate limiting to
+  protect against brute-force (A07), credential stuffing, and resource
+  exhaustion attacks. Includes per-IP, per-tenant, and per-endpoint
+  rate limits with progressive penalties.
+keywords:
+  - owasp
+  - rate-limit
+  - brute-force
+  - dos
+author: LightweightAuth Contributors
+license: Apache-2.0
+policies:
+  - policies/login-ratelimit.yaml
+  - policies/api-ratelimit.yaml
+  - policies/admin-ratelimit.yaml

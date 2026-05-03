@@ -17,6 +17,7 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/opa"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/openfga"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/rbac"
+	_ "github.com/mikeappsec/lightweightauth/pkg/authz/spicedb"
 
 	// Register the shared cache backend(s) for their side-effect.
 	_ "github.com/mikeappsec/lightweightauth/internal/cache/valkey"
@@ -39,4 +40,9 @@ import (
 	// under all three module kinds so configs can pull in remote
 	// identifiers / authorizers / mutators identically to built-ins.
 	_ "github.com/mikeappsec/lightweightauth/pkg/plugin/grpc"
+
+	// F10: sandboxed WASM plugin runtime. Registers the type "wasm"
+	// under all three module kinds for in-process policy snippets
+	// with CPU, memory, and wall-clock budgets (wazero).
+	_ "github.com/mikeappsec/lightweightauth/pkg/plugin/wasm"
 )

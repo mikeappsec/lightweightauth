@@ -1,0 +1,54 @@
+# GDPR Art. 15-22: Data subject rights endpoints.
+#
+# Protects data subject rights APIs (access, rectification, erasure,
+# portability) with identity verification and rate limiting to prevent
+# abuse of these legally mandated endpoints.
+hosts:
+  - data.example.com
+
+identifiers:
+  - name: subject-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["data.example.com"]
+      header: Authorization
+      scheme: Bearer
+      requiredClaims:
+        - sub
+        - email_verified
+
+authorizers:
+  - name: self-service-only
+    type: opa
+    config:
+      policy: |
+        package lwauth.gdpr_rights
+
+        import rego.v1
+
+        default allow := false
+
+        # Data subjects can only access their own data.
+        allow if {
+          input.identity.claims.email_verified == true
+          # Subject in path must match authenticated subject.
+          input.request.path_parts[2] == input.identity.subject
+        }
+
+        # DPO / privacy team can access any subject's data.
+        allow if {
+          "data-protection-officer" in input.identity.claims.roles
+        }
+
+rateLimit:
+  enabled: true
+  keyFrom: subject
+  rules:
+    # Art. 12(5): prevent manifestly unfounded/excessive requests.
+    - match:
+        path: /api/subjects/
+        methods: [GET, POST, DELETE]
+      rps: 10
+      burst: 20

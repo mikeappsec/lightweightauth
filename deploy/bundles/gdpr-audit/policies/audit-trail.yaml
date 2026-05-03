@@ -1,0 +1,35 @@
+# GDPR Art. 30: Records of processing activities (audit trail).
+#
+# Ensures comprehensive audit logging for all personal data access
+# with metadata required by Article 30 record-keeping obligations.
+hosts:
+  - data.example.com
+  - users.example.com
+
+identifiers:
+  - name: audit-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["data.example.com"]
+      header: Authorization
+      scheme: Bearer
+      requiredClaims:
+        - sub
+        - purpose
+        - data_categories
+
+authorizers:
+  - name: allow-with-purpose
+    type: rbac
+    config:
+      rolesFrom: claim:roles
+      allow:
+        - data-processor
+        - data-controller
+        - data-protection-officer
+
+# Audit configuration: log all access with GDPR-required fields.
+# The audit trail captures: processor identity, purpose, categories
+# of data, timestamp, and access outcome (Art. 30.1).

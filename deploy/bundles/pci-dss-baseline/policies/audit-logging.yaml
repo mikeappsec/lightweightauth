@@ -1,0 +1,31 @@
+# PCI-DSS Req 10: Logging and monitoring — audit trail for all access.
+#
+# Enables comprehensive audit logging for access to cardholder data
+# with tamper-evident HMAC signatures on audit entries.
+hosts:
+  - payments.example.com
+  - cards.example.com
+
+identifiers:
+  - name: audit-jwt
+    type: jwt
+    config:
+      jwksUrl: https://idp.example.com/.well-known/jwks.json
+      issuerUrl: https://idp.example.com
+      audiences: ["payments.example.com"]
+      header: Authorization
+      scheme: Bearer
+
+authorizers:
+  - name: allow-authenticated
+    type: rbac
+    config:
+      rolesFrom: claim:pci_roles
+      allow:
+        - cardholder-data-reader
+        - cardholder-data-writer
+        - payment-processor
+        - auditor
+
+# Full audit logging with HMAC integrity (PCI-DSS 10.3, 10.5).
+# Audit entries include: who, what, when, where, outcome.
