@@ -22,22 +22,25 @@ cache:
   # username / password / TLS as needed:
   username: lwauth
   password: ${VALKEY_PASSWORD}
-  tls:
-    enabled: true
-    caFile:  /etc/valkey/ca.pem
+  tls: true
 
   keyPrefix: lwauth/                  # namespacing per-cluster
-  poolSize: 16                        # connections per replica
-  dialTimeout:  500ms
-  readTimeout:  150ms                 # tight; surfaces backend trouble fast
-  writeTimeout: 150ms
-
-  # Per-namespace TTLs (default cascade from defaultTtl).
-  defaultTtl:        5m
-  decisionTtl:       30s
-  introspectionTtl:  5m
-  dpopReplayTtl:     60s              # 2·dpop.skew
+  ttl: 30s                            # decision cache TTL
+  negativeTtl: 5s                     # deny-decision cache TTL
 ```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `backend` | string | `memory` | Set to `valkey` to enable shared cache |
+| `addr` | string | *required* | Valkey host:port |
+| `username` | string | `""` | Valkey ACL username |
+| `password` | string | `""` | Valkey ACL password |
+| `tls` | bool | `false` | Enable TLS (min 1.2) |
+| `keyPrefix` | string | `"lwauth/"` | Key namespace — lets multiple deployments share a Valkey |
+| `ttl` | duration | `30s` | Positive (allow) decision cache TTL |
+| `negativeTtl` | duration | `5s` | Negative (deny) decision cache TTL |
+| `key` | []string | `["sub","method","path"]` | Fields hashed into the cache key |
+| `l1Size` | int | `10000` | L1 LRU size (only for `backend: tiered`) |
 
 Failure mode is **fail-closed for security-critical reads** (DPoP
 replay) and **fail-open for performance reads** (decision cache, JWKS
@@ -54,8 +57,8 @@ config:
       backend: valkey
       addr: valkey-master.cache.svc:6379
       keyPrefix: lwauth/prod/
-      decisionTtl: 30s
-      introspectionTtl: 5m
+      ttl: 30s
+      negativeTtl: 5s
 extraEnv:
   - name: VALKEY_PASSWORD
     valueFrom: { secretKeyRef: { name: lwauth-secrets, key: valkey } }

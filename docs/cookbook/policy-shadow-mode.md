@@ -55,7 +55,7 @@ production policy continues to serve all traffic.
 
 ```yaml
 # authconfig-shadow.yaml
-apiVersion: auth.lwauth.io/v1alpha1
+apiVersion: lightweightauth.io/v1alpha1
 kind: AuthConfig
 metadata:
   name: payments-v2-shadow
@@ -157,7 +157,7 @@ default — but logs both:
 
 ```yaml
 # authconfig-canary.yaml
-apiVersion: auth.lwauth.io/v1alpha1
+apiVersion: lightweightauth.io/v1alpha1
 kind: AuthConfig
 metadata:
   name: payments
@@ -230,7 +230,7 @@ sustained period, promote:
 
 ```yaml
 # authconfig-promoted.yaml
-apiVersion: auth.lwauth.io/v1alpha1
+apiVersion: lightweightauth.io/v1alpha1
 kind: AuthConfig
 metadata:
   name: payments
