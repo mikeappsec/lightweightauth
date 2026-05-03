@@ -17,6 +17,7 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/opa"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/openfga"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/rbac"
+	_ "github.com/mikeappsec/lightweightauth/pkg/authz/spicedb"
 
 	// Register the shared cache backend(s) for their side-effect.
 	_ "github.com/mikeappsec/lightweightauth/internal/cache/valkey"
