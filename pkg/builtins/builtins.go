@@ -45,4 +45,8 @@ import (
 	// under all three module kinds for in-process policy snippets
 	// with CPU, memory, and wall-clock budgets (wazero).
 	_ "github.com/mikeappsec/lightweightauth/pkg/plugin/wasm"
+
+	// G1: external secret-backend resolver. Registers the "vault"
+	// scheme for secretRef resolution at config compile time.
+	_ "github.com/mikeappsec/lightweightauth/pkg/secrets/vault"
 )

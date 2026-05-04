@@ -46,14 +46,27 @@ type AuthConfig struct {
 	WithBody     bool `json:"withBody,omitempty" yaml:"withBody,omitempty"`
 	MaxBodyBytes int  `json:"maxBodyBytes,omitempty" yaml:"maxBodyBytes,omitempty"`
 
-	Identifiers []ModuleSpec      `json:"identifiers" yaml:"identifiers"`
-	Authorizers []ModuleSpec      `json:"authorizers" yaml:"authorizers"`
-	Response    []ModuleSpec      `json:"response,omitempty" yaml:"response,omitempty"`
-	Cache       *CacheSpec        `json:"cache,omitempty" yaml:"cache,omitempty"`
-	RateLimit   *ratelimit.Spec   `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
-	Identifier  IdentifierMode   `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
-	Canary      *CanarySpec      `json:"canary,omitempty" yaml:"canary,omitempty"`
-	Revocation  *RevocationSpec  `json:"revocation,omitempty" yaml:"revocation,omitempty"`
+	Identifiers []ModuleSpec    `json:"identifiers" yaml:"identifiers"`
+	Authorizers []ModuleSpec    `json:"authorizers" yaml:"authorizers"`
+	Response    []ModuleSpec    `json:"response,omitempty" yaml:"response,omitempty"`
+	Cache       *CacheSpec      `json:"cache,omitempty" yaml:"cache,omitempty"`
+	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
+	Identifier  IdentifierMode  `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
+	Canary      *CanarySpec     `json:"canary,omitempty" yaml:"canary,omitempty"`
+	Revocation  *RevocationSpec `json:"revocation,omitempty" yaml:"revocation,omitempty"`
+	Secrets     *SecretsSpec    `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+}
+
+// SecretsSpec configures the external secret-backend resolver (G1).
+// When present, any string value in a module's Config map that matches a
+// registered URI scheme (e.g. vault://...) is resolved before the module
+// factory is called. This removes plaintext secrets from manifests.
+type SecretsSpec struct {
+	// DefaultTTL is the cache duration for resolved secrets. Default "5m".
+	DefaultTTL string `json:"defaultTtl,omitempty" yaml:"defaultTtl,omitempty"`
+	// Backends maps scheme names to backend-specific configuration.
+	// Example: {"vault": {"addr": "https://vault.local:8200", "role": "lwauth"}}
+	Backends map[string]map[string]any `json:"backends,omitempty" yaml:"backends,omitempty"`
 }
 
 // CanarySpec configures canary policy evaluation (D3 — ENT-POLICY-2).
