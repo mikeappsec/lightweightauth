@@ -382,6 +382,9 @@ func (i *identifier) rewriteAuthForInner(r *module.Request) *module.Request {
 		cp.Headers[k] = vs
 	}
 	cp.Headers[hdr] = []string{"Bearer " + token}
+	// Strip the DPoP proof header so the inner identifier cannot
+	// accidentally re-parse or trust the already-consumed proof JWS.
+	delete(cp.Headers, strings.ToLower(i.cfg.ProofHeader))
 	return &cp
 }
 
@@ -414,6 +417,8 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	}
 	if v, ok := raw["replayCacheSize"].(int); ok && v > 0 {
 		cfg.ReplayCacheSize = v
+	} else if v, ok := raw["replayCacheSize"].(float64); ok && v > 0 {
+		cfg.ReplayCacheSize = int(v)
 	}
 	if v, ok := raw["proofHeader"].(string); ok && v != "" {
 		cfg.ProofHeader = v

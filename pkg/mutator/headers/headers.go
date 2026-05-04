@@ -179,7 +179,7 @@ func (m *passthroughMutator) Mutate(_ context.Context, r *module.Request, _ *mod
 	}
 	for _, k := range m.keys {
 		if v := r.Header(k); v != "" {
-			d.UpstreamHeaders[k] = v
+			d.UpstreamHeaders[k] = sanitizeHeaderValue(v)
 		}
 	}
 	return nil

@@ -67,7 +67,35 @@ secrets:
 - Auto-prunes retired keys when at capacity
 - Clock injection for deterministic testing
 - `ParseSecretsConfig` handles base64/UTF-8 decoding with min-length enforcement
+- **Background Reaper**: proactive worker goroutine that prunes retired keys and emits state transition callbacks
 - Prometheus metrics: `lwauth_key_verify_total`, `lwauth_key_refresh_total`, `lwauth_key_state`
+
+## Background Reaper
+
+The `Reaper[T]` is a background worker goroutine that periodically prunes retired keys
+from a `KeySet` and emits callbacks when keys transition lifecycle state. This replaces
+the passive lazy-prune-on-Get/Put approach with proactive maintenance.
+
+```go
+reaper := keyrotation.NewReaper(ctx, keyset, keyrotation.ReaperConfig{
+    Interval: 60 * time.Second,
+    Clock:    time.Now, // optional, defaults to time.Now
+    OnPrune: func(pruned []string) {
+        log.Info("pruned retired keys", "kids", pruned)
+    },
+    OnTransition: func(kid string, from, to keyrotation.KeyState) {
+        metrics.RecordKeyTransition(kid, from, to)
+    },
+})
+defer reaper.Stop()
+```
+
+| Config Field | Type | Default | Description |
+|--------------|------|---------|-------------|
+| `Interval` | duration | `60s` | How often the reaper ticks |
+| `Clock` | `func() time.Time` | `time.Now` | Clock source (must match KeySet's clock) |
+| `OnPrune` | callback | nil | Called with pruned KIDs |
+| `OnTransition` | callback | nil | Called on state change (e.g. active→retiring) |
 
 ## How It Works
 
