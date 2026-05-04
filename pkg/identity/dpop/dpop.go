@@ -63,6 +63,7 @@ import (
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
@@ -130,7 +131,13 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		return nil, err
 	}
 
-	id, err := i.inner.Identify(ctx, r)
+	// Rewrite the Authorization header from "DPoP <token>" to
+	// "Bearer <token>" so the inner identifier (e.g. oauth2-introspection)
+	// can extract it. The DPoP proof has already been validated above;
+	// the inner only needs to validate/introspect the access token.
+	innerReq := i.rewriteAuthForInner(r)
+
+	id, err := i.inner.Identify(ctx, innerReq)
 	if err != nil {
 		return nil, err
 	}
@@ -348,6 +355,36 @@ func sha256sum(s string) []byte {
 	return h[:]
 }
 
+// rewriteAuthForInner returns a shallow copy of r with the Authorization
+// header rewritten from "DPoP <token>" to "Bearer <token>". This allows
+// inner identifiers (like oauth2-introspection) that only recognize the
+// Bearer scheme to extract and validate the access token. The DPoP proof
+// header is stripped to prevent the inner from accidentally re-parsing it.
+func (i *identifier) rewriteAuthForInner(r *module.Request) *module.Request {
+	hdr := strings.ToLower(i.cfg.BearerHeader)
+	if hdr == "" {
+		hdr = "authorization"
+	}
+	v := r.Header(hdr)
+	if v == "" {
+		return r
+	}
+	const dpopPrefix = "dpop "
+	if len(v) <= len(dpopPrefix) || !strings.EqualFold(v[:len(dpopPrefix)], dpopPrefix) {
+		return r // already Bearer or something else; pass through
+	}
+	token := strings.TrimSpace(v[len(dpopPrefix):])
+
+	// Shallow-copy the request; deep-copy only the Headers map.
+	cp := *r
+	cp.Headers = make(map[string][]string, len(r.Headers))
+	for k, vs := range r.Headers {
+		cp.Headers[k] = vs
+	}
+	cp.Headers[hdr] = []string{"Bearer " + token}
+	return &cp
+}
+
 var knownKeys = map[string]struct{}{
 	"required":        {},
 	"skew":            {},
@@ -355,6 +392,7 @@ var knownKeys = map[string]struct{}{
 	"proofHeader":     {},
 	"bearerHeader":    {},
 	"inner":           {},
+	"pinnedKeys":      {},
 }
 
 func factory(name string, raw map[string]any) (module.Identifier, error) {
@@ -411,13 +449,61 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		return nil, fmt.Errorf("%w: dpop %q replay cache: %v", module.ErrConfig, name, err)
 	}
 
-	return &identifier{
+	id := &identifier{
 		name:   name,
 		cfg:    cfg,
 		inner:  inner,
 		replay: replay,
 		now:    time.Now,
-	}, nil
+	}
+
+	// If pinnedKeys is configured, wrap in rotatableIdentifier with a
+	// KeySet that enforces proof key pinning.
+	if pinned, ok := raw["pinnedKeys"].([]any); ok && len(pinned) > 0 {
+		ks := keyrotation.NewKeySet[string](nil)
+		for i, entry := range pinned {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d] must be a map", module.ErrConfig, name, i)
+			}
+			kid, _ := m["kid"].(string)
+			if kid == "" {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].kid is required", module.ErrConfig, name, i)
+			}
+			thumb, _ := m["thumbprint"].(string)
+			if thumb == "" {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].thumbprint is required", module.ErrConfig, name, i)
+			}
+			meta := keyrotation.KeyMeta{KID: kid}
+			if nb, ok := m["notBefore"].(string); ok && nb != "" {
+				if t, terr := time.Parse(time.RFC3339, nb); terr == nil {
+					meta.NotBefore = t
+				} else {
+					return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].notBefore: %v", module.ErrConfig, name, i, terr)
+				}
+			}
+			if na, ok := m["notAfter"].(string); ok && na != "" {
+				if t, terr := time.Parse(time.RFC3339, na); terr == nil {
+					meta.NotAfter = t
+				} else {
+					return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].notAfter: %v", module.ErrConfig, name, i, terr)
+				}
+			}
+			if gp, ok := m["gracePeriod"].(string); ok && gp != "" {
+				if d, derr := time.ParseDuration(gp); derr == nil {
+					meta.GracePeriod = d
+				} else {
+					return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].gracePeriod: %v", module.ErrConfig, name, i, derr)
+				}
+			}
+			if !ks.Put(meta, thumb) {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys set full at entry %d", module.ErrConfig, name, i)
+			}
+		}
+		return &rotatableIdentifier{identifier: *id, pinned: ks}, nil
+	}
+
+	return id, nil
 }
 
 func durationFrom(raw map[string]any, key string) (time.Duration, bool) {

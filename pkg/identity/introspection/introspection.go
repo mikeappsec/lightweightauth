@@ -204,6 +204,13 @@ func bearerFrom(r *module.Request, header string) string {
 	if len(v) > len(bearer) && strings.EqualFold(v[:len(bearer)], bearer) {
 		return strings.TrimSpace(v[len(bearer):])
 	}
+	// For the Authorization header, non-Bearer schemes (e.g. "DPoP",
+	// "Basic") are not ours to claim — return empty so the pipeline
+	// tries the next identifier. For custom headers (X-Token, etc.)
+	// the raw value IS the token.
+	if strings.EqualFold(header, "Authorization") {
+		return ""
+	}
 	return v
 }
 

@@ -212,14 +212,20 @@ func validateAuthorizeShape(in *authorizeRequest) error {
 	return nil
 }
 
+// identityResponse mirrors the proto Identity message for JSON responses.
+type identityResponse struct {
+	Subject string            `json:"subject,omitempty"`
+	Source  string            `json:"source,omitempty"`
+	Claims  map[string]string `json:"claims,omitempty"`
+}
+
 type authorizeResponse struct {
-	Allow            bool              `json:"allow"`
-	Status           int               `json:"status,omitempty"`
-	Reason           string            `json:"reason,omitempty"`
-	UpstreamHeaders  map[string]string `json:"upstreamHeaders,omitempty"`
-	ResponseHeaders  map[string]string `json:"responseHeaders,omitempty"`
-	IdentitySubject  string            `json:"subject,omitempty"`
-	IdentitySource   string            `json:"identitySource,omitempty"`
+	Allow           bool              `json:"allow"`
+	Status          int               `json:"status,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
+	UpstreamHeaders map[string]string `json:"upstreamHeaders,omitempty"`
+	ResponseHeaders map[string]string `json:"responseHeaders,omitempty"`
+	Identity        *identityResponse `json:"identity,omitempty"`
 }
 
 func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +331,7 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 	// the pipeline and rides on whatever the engine produces — it
 	// does not need an uncancellable context to land in the slog
 	// handler.
-	dec, _, _ := eng.Evaluate(r.Context(), req)
+	dec, id, _ := eng.Evaluate(r.Context(), req)
 	// Engine emits a verbose internal reason (e.g. "hmac: signature
 	// mismatch") that the audit log captures. Public callers see only
 	// a generic status-aligned string so policy and module internals
@@ -344,6 +350,13 @@ func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
 		Reason:          publicMsg,
 		UpstreamHeaders: dec.UpstreamHeaders,
 		ResponseHeaders: dec.ResponseHeaders,
+	}
+	if id != nil {
+		out.Identity = &identityResponse{
+			Subject: id.Subject,
+			Source:  id.Source,
+			Claims:  flattenClaims(id.Claims),
+		}
 	}
 	if dec.Allow {
 		writeSuccess(w, r, http.StatusOK, "authorized", out)

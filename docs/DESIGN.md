@@ -2305,6 +2305,25 @@ G18. **FED-CRDT-1 — Multi-region active/active policy sync.**
   trigger: F8 prototype + at least one customer with a global
   active/active deployment commitment.
 
+G19. **STATE-PERSIST-1 — Embedded persistent storage for identifiers
+  and authorizers.**
+  Solves a fundamental gap: any lwauth-managed state (API key
+  revocations, local client registrations, session blacklists,
+  abuse bans) is lost on pod restart because it lives only in volatile
+  cache. Without persistent storage lwauth cannot be the source of
+  truth for any credential lifecycle — it must always delegate to an
+  external IdP or third-party service. Add a `pkg/storage` interface
+  backed by an embedded key-value store (bbolt or Badger) at a
+  configurable `--data-dir` path, mounted as a PVC in Kubernetes.
+  On startup the store is replayed into the in-memory decision path;
+  writes are WAL-durable before acknowledgement. Identifiers (e.g.
+  API key, DPoP pinned keys) and authorizers (e.g. revocation lists,
+  ban tables) use the store to persist decisions that survive restarts
+  without depending on upstream availability. HA topologies can layer
+  Raft consensus or LiteFS replication over the same interface.
+  Promotion trigger: E2 (revocation) design finalised — the
+  revocation store is the first consumer of persistent state.
+
 ### Prioritization rationale
 
 The reorder follows a single rule: **never ship a new feature on top of
