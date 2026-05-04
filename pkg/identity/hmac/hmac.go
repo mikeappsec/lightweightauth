@@ -7,28 +7,28 @@
 //
 // The signed bytes are a newline-separated canonical string:
 //
-//	HMAC-SHA256-V1
-//	upper(method)
-//	lower(host)
-//	pathWithoutQuery
-//	canonicalQuery
-//	lower(name1) ":" joinedValues1
-//	lower(name2) ":" joinedValues2
-//	...
-//	signedHeadersList                       (e.g. "date,host")
-//	hex(sha256(body))
+//		HMAC-SHA256-V1
+//		upper(method)
+//		lower(host)
+//		pathWithoutQuery
+//		canonicalQuery
+//		lower(name1) ":" joinedValues1
+//		lower(name2) ":" joinedValues2
+//		...
+//		signedHeadersList                       (e.g. "date,host")
+//		hex(sha256(body))
 //
-//   - `canonicalQuery` is the request's raw query string split on `&`,
-//     each kv preserved verbatim, then sorted lexicographically and
-//     re-joined with `&`. Empty when no query is present.
-//   - The header lines reproduce, in the SAME order they appear in the
-//     `signedHeaders` list of the Authorization header, every header
-//     the signer wanted bound. Multi-value headers are joined with
-//     `,` (single comma, no spaces).
-//   - `signedHeadersList` itself MUST include `host` and the configured
-//     `dateHeader` (case-insensitive); the verifier rejects the
-//     signature otherwise. Operators can extend the required set via
-//     `requiredSignedHeaders` to bind extra inputs (e.g. `content-type`).
+//	  - `canonicalQuery` is the request's raw query string split on `&`,
+//	    each kv preserved verbatim, then sorted lexicographically and
+//	    re-joined with `&`. Empty when no query is present.
+//	  - The header lines reproduce, in the SAME order they appear in the
+//	    `signedHeaders` list of the Authorization header, every header
+//	    the signer wanted bound. Multi-value headers are joined with
+//	    `,` (single comma, no spaces).
+//	  - `signedHeadersList` itself MUST include `host` and the configured
+//	    `dateHeader` (case-insensitive); the verifier rejects the
+//	    signature otherwise. Operators can extend the required set via
+//	    `requiredSignedHeaders` to bind extra inputs (e.g. `content-type`).
 //
 // **Authorization header:**
 //
@@ -341,7 +341,19 @@ func parseSignedHeaders(v string) []string {
 	return out
 }
 
+var knownKeys = map[string]struct{}{
+	"header":                {},
+	"scheme":                {},
+	"dateHeader":            {},
+	"clockSkew":             {},
+	"requiredSignedHeaders": {},
+	"keys":                  {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("hmac", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	hdr := "Authorization"
 	if v, ok := raw["header"].(string); ok && v != "" {
 		hdr = v

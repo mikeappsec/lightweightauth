@@ -286,3 +286,17 @@ func TestCanonical_BodyHashHex(t *testing.T) {
 		t.Errorf("body hash line = %q, want %s", last, hex.EncodeToString(want[:]))
 	}
 }
+
+func TestHMAC_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("h", map[string]any{
+		"keys":    map[string]any{"k1": map[string]any{"secret": "dGVzdA=="}},
+		"timeout": "5s",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

@@ -139,7 +139,15 @@ func mergeAllow(a, b *module.Decision) *module.Decision {
 
 // factory builds a composite from a config map. The children are arrays
 // of {name, type, config} objects, which we forward to module.BuildAuthorizer.
+var knownKeys = map[string]struct{}{
+	"anyOf": {},
+	"allOf": {},
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
+	if err := module.CheckUnknownKeys("composite", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	anyOf, hasAny := raw["anyOf"].([]any)
 	allOf, hasAll := raw["allOf"].([]any)
 	if hasAny == hasAll {

@@ -231,7 +231,18 @@ func loadCAPool(files []string, inline string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
+var knownKeys = map[string]struct{}{
+	"header":                   {},
+	"trustForwardedClientCert": {},
+	"trustedCAFiles":           {},
+	"trustedCAs":               {},
+	"trustedIssuers":           {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("mtls", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	hdr := "X-Forwarded-Client-Cert"
 	if v, ok := raw["header"].(string); ok && v != "" {
 		hdr = v

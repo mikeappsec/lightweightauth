@@ -294,7 +294,20 @@ var templateFuncs = template.FuncMap{
 	"upper": strings.ToUpper,
 }
 
+var knownKeys = map[string]struct{}{
+	"apiUrl":               {},
+	"storeId":              {},
+	"authorizationModelId": {},
+	"apiToken":             {},
+	"timeout":              {},
+	"check":                {},
+	"resilience":           {},
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
+	if err := module.CheckUnknownKeys("openfga", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	apiURL, _ := raw["apiUrl"].(string)
 	if apiURL == "" {
 		return nil, fmt.Errorf("%w: openfga %q: apiUrl is required", module.ErrConfig, name)

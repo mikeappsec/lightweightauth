@@ -7,10 +7,10 @@
 //
 //   - "header-add"      — set headers from literals or claim values.
 //   - "header-remove"   — strip headers from the inbound request before
-//                         it reaches upstream (e.g. drop the IdP-issued
-//                         Authorization once we've minted our own).
+//     it reaches upstream (e.g. drop the IdP-issued
+//     Authorization once we've minted our own).
 //   - "header-passthrough" — copy a list of inbound headers verbatim onto
-//                         the upstream side.
+//     the upstream side.
 //
 // All three target Decision.UpstreamHeaders / Decision.ResponseHeaders.
 package headers
@@ -26,10 +26,10 @@ import (
 // ----- header-add ---------------------------------------------------------
 
 type addMutator struct {
-	name        string
-	upstream    map[string]string // literal headers; values may be ${claim:foo}
-	response    map[string]string
-	subjectHdr  string // optional: convenience to set X-Auth-Subject = identity.Subject
+	name       string
+	upstream   map[string]string // literal headers; values may be ${claim:foo}
+	response   map[string]string
+	subjectHdr string // optional: convenience to set X-Auth-Subject = identity.Subject
 }
 
 func (m *addMutator) Name() string { return m.name }
@@ -86,7 +86,16 @@ func sanitizeHeaderValue(s string) string {
 	}, s)
 }
 
+var addKnownKeys = map[string]struct{}{
+	"upstream":      {},
+	"response":      {},
+	"subjectHeader": {},
+}
+
 func addFactory(name string, raw map[string]any) (module.ResponseMutator, error) {
+	if err := module.CheckUnknownKeys("header-add", name, raw, addKnownKeys); err != nil {
+		return nil, err
+	}
 	m := &addMutator{name: name}
 	if v, ok := raw["upstream"].(map[string]any); ok {
 		m.upstream = stringMap(v)
@@ -130,7 +139,14 @@ func (m *removeMutator) Mutate(_ context.Context, _ *module.Request, _ *module.I
 	return nil
 }
 
+var removeKnownKeys = map[string]struct{}{
+	"upstream": {},
+}
+
 func removeFactory(name string, raw map[string]any) (module.ResponseMutator, error) {
+	if err := module.CheckUnknownKeys("header-remove", name, raw, removeKnownKeys); err != nil {
+		return nil, err
+	}
 	var hdrs []string
 	if v, ok := raw["upstream"].([]any); ok {
 		for _, x := range v {
@@ -169,7 +185,14 @@ func (m *passthroughMutator) Mutate(_ context.Context, r *module.Request, _ *mod
 	return nil
 }
 
+var passthroughKnownKeys = map[string]struct{}{
+	"headers": {},
+}
+
 func passthroughFactory(name string, raw map[string]any) (module.ResponseMutator, error) {
+	if err := module.CheckUnknownKeys("header-passthrough", name, raw, passthroughKnownKeys); err != nil {
+		return nil, err
+	}
 	var keys []string
 	if v, ok := raw["headers"].([]any); ok {
 		for _, x := range v {

@@ -5,6 +5,7 @@ package jwtissue
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -82,5 +83,21 @@ func TestJWTIssue_NoIdentityNoOp(t *testing.T) {
 	}
 	if len(d.UpstreamHeaders) != 0 {
 		t.Errorf("headers = %v, want empty", d.UpstreamHeaders)
+	}
+}
+
+func TestJwtIssue_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("ji", map[string]any{
+		"issuer":   "test",
+		"audience": "api",
+		"key":      "supersecretkeythatislong",
+		"rotate":   true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
 	}
 }

@@ -97,7 +97,22 @@ func (m *mutator) Mutate(_ context.Context, _ *module.Request, id *module.Identi
 	return nil
 }
 
+var knownKeys = map[string]struct{}{
+	"issuer":         {},
+	"audience":       {},
+	"ttl":            {},
+	"algorithm":      {},
+	"key":            {},
+	"privateKeyFile": {},
+	"header":         {},
+	"scheme":         {},
+	"copyClaims":     {},
+}
+
 func factory(name string, raw map[string]any) (module.ResponseMutator, error) {
+	if err := module.CheckUnknownKeys("jwt-issue", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	issuer, _ := raw["issuer"].(string)
 	audience, _ := raw["audience"].(string)
 	if issuer == "" || audience == "" {

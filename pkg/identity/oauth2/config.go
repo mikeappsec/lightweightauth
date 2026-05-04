@@ -16,7 +16,30 @@ import (
 // parseConfig converts a free-form YAML map into a typed Config. We do
 // our own walking so the same shape works whether the operator writes it
 // in YAML (yaml.v3 → map[string]any) or via the K8s CRD JSON schema.
+var knownKeys = map[string]struct{}{
+	"clientId":             {},
+	"clientSecret":         {},
+	"authUrl":              {},
+	"tokenUrl":             {},
+	"jwksUrl":              {},
+	"issuerUrl":            {},
+	"redirectUrl":          {},
+	"mountPrefix":          {},
+	"upstreamHeader":       {},
+	"postLoginPath":        {},
+	"postLogoutPath":       {},
+	"endSessionUrl":        {},
+	"refreshLeeway":        {},
+	"deviceAuthUrl":        {},
+	"scopes":               {},
+	"allowedRedirectHosts": {},
+	"cookie":               {},
+}
+
 func parseConfig(raw map[string]any) (Config, error) {
+	if err := module.CheckUnknownKeys("oauth2", "", raw, knownKeys); err != nil {
+		return Config{}, err
+	}
 	c := Config{}
 	getString := func(k string) string {
 		v, _ := raw[k].(string)

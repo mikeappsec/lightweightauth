@@ -71,3 +71,17 @@ func TestOPA_MissingRego(t *testing.T) {
 		t.Fatalf("err = %v, want ErrConfig", err)
 	}
 }
+
+func TestOPA_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("opa", map[string]any{
+		"rego":     "package authz\ndefault allow = true",
+		"regoFile": "/etc/opa/policy.rego",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

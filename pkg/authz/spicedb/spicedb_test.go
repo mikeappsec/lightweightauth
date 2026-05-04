@@ -342,3 +342,25 @@ func TestSpiceDB_FullyConsistentConfig(t *testing.T) {
 		t.Fatalf("expected allow, got deny: %s", d.Reason)
 	}
 }
+
+func TestSpiceDB_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("spice", map[string]any{
+		"endpoint": "localhost:50051",
+		"token":    "test",
+		"check": map[string]any{
+			"resourceType": "document",
+			"resourceId":   "1",
+			"permission":   "view",
+			"subjectType":  "user",
+			"subjectId":    "{{ .Identity.Subject }}",
+		},
+		"defaultAllow": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

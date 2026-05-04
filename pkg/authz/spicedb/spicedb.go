@@ -293,7 +293,20 @@ func sanitizeObjectID(s string) string {
 	return b.String()
 }
 
+var knownKeys = map[string]struct{}{
+	"endpoint":    {},
+	"token":       {},
+	"insecure":    {},
+	"timeout":     {},
+	"consistency": {},
+	"check":       {},
+	"resilience":  {},
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
+	if err := module.CheckUnknownKeys("spicedb", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	endpoint, _ := raw["endpoint"].(string)
 	if endpoint == "" {
 		return nil, fmt.Errorf("%w: spicedb %q: endpoint is required", module.ErrConfig, name)

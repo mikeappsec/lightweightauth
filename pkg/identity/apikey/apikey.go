@@ -87,9 +87,21 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 	}, nil
 }
 
+var knownKeys = map[string]struct{}{
+	"headerName": {},
+	"header":     {},
+	"static":     {},
+	"hashed":     {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("apikey", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	hdr := "X-Api-Key"
 	if v, ok := raw["headerName"].(string); ok && v != "" {
+		hdr = v
+	} else if v, ok := raw["header"].(string); ok && v != "" {
 		hdr = v
 	}
 	store, err := buildStore(name, raw)

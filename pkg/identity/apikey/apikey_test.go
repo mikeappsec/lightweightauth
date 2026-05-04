@@ -51,3 +51,17 @@ func TestAPIKey_UnknownKey(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalidCredential", err)
 	}
 }
+
+func TestApiKey_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("ak", map[string]any{
+		"static":     map[string]any{"key1": "svc"},
+		"lookupMode": "prefix",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

@@ -268,3 +268,17 @@ func TestIntrospection_ErrorCacheKeyHashed(t *testing.T) {
 		t.Errorf("digests share %d hex chars of prefix; sha256 should be uniform", common)
 	}
 }
+
+func TestIntrospection_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("intro", map[string]any{
+		"url":       "http://localhost/introspect",
+		"rateLimit": 100,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

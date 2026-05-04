@@ -193,7 +193,19 @@ func parseConfig(raw map[string]any) (Config, error) {
 	return cfg, nil
 }
 
+var knownKeys = map[string]struct{}{
+	"jwksUrl":            {},
+	"issuerUrl":          {},
+	"header":             {},
+	"scheme":             {},
+	"audiences":          {},
+	"minRefreshInterval": {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("jwt", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err

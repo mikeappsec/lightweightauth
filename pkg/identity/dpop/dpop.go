@@ -30,20 +30,20 @@
 //	          audiences: [api.example]
 //
 // Verification (per RFC 9449 §4.3):
-//   1. The `DPoP` header carries exactly one compact JWS.
-//   2. Its protected header contains `typ=dpop+jwt`, an asymmetric `alg`
-//      (HMAC and `none` are rejected outright per §4.2 step 4), and a
-//      single embedded `jwk` that is a public key.
-//   3. Signature verifies under that JWK.
-//   4. Payload claims:
-//        htm = request method (case-insensitive),
-//        htu = request URL ignoring query/fragment (§4.3 step 9),
-//        iat is within ±skew,
-//        jti is unique within a replay window (jti+skew*2 retained).
-//   5. When the inner identifier surfaces `cnf.jkt` (RFC 7800), the
-//      RFC-7638 thumbprint of the embedded JWK MUST equal it.
-//   6. When an access token is present on the request, the proof's
-//      `ath` claim MUST equal base64url(sha256(access_token)).
+//  1. The `DPoP` header carries exactly one compact JWS.
+//  2. Its protected header contains `typ=dpop+jwt`, an asymmetric `alg`
+//     (HMAC and `none` are rejected outright per §4.2 step 4), and a
+//     single embedded `jwk` that is a public key.
+//  3. Signature verifies under that JWK.
+//  4. Payload claims:
+//     htm = request method (case-insensitive),
+//     htu = request URL ignoring query/fragment (§4.3 step 9),
+//     iat is within ±skew,
+//     jti is unique within a replay window (jti+skew*2 retained).
+//  5. When the inner identifier surfaces `cnf.jkt` (RFC 7800), the
+//     RFC-7638 thumbprint of the embedded JWK MUST equal it.
+//  6. When an access token is present on the request, the proof's
+//     `ath` claim MUST equal base64url(sha256(access_token)).
 package dpop
 
 import (
@@ -67,10 +67,10 @@ import (
 )
 
 const (
-	defaultSkew         = 30 * time.Second
+	defaultSkew          = 30 * time.Second
 	defaultReplayEntries = 10_000
-	defaultProofHeader  = "DPoP"
-	defaultBearerHeader = "Authorization"
+	defaultProofHeader   = "DPoP"
+	defaultBearerHeader  = "Authorization"
 	dpopJWTType          = "dpop+jwt"
 )
 
@@ -94,28 +94,28 @@ type InnerSpec struct {
 }
 
 type identifier struct {
-	name    string
-	cfg     Config
-	inner   module.Identifier
-	replay  *cache.LRU
-	now     func() time.Time
+	name   string
+	cfg    Config
+	inner  module.Identifier
+	replay *cache.LRU
+	now    func() time.Time
 }
 
 func (i *identifier) Name() string { return i.name }
 
 // Identify is the wrapper entrypoint. The flow:
 //
-//   1. If no DPoP header is present:
-//        - required=true  → ErrInvalidCredential.
-//        - required=false → fall through to inner.Identify so this
-//                            identifier behaves transparently when DPoP
-//                            is opt-in per route.
-//   2. Otherwise verify the proof and only then defer to inner.Identify.
-//      Failures from inner are returned as-is (ErrNoMatch lets the next
-//      configured identifier try, ErrInvalidCredential is fatal for
-//      this identifier).
-//   3. After inner returns identity, optionally check `cnf.jkt` and
-//      `ath` to enforce the proof-of-possession binding.
+//  1. If no DPoP header is present:
+//     - required=true  → ErrInvalidCredential.
+//     - required=false → fall through to inner.Identify so this
+//     identifier behaves transparently when DPoP
+//     is opt-in per route.
+//  2. Otherwise verify the proof and only then defer to inner.Identify.
+//     Failures from inner are returned as-is (ErrNoMatch lets the next
+//     configured identifier try, ErrInvalidCredential is fatal for
+//     this identifier).
+//  3. After inner returns identity, optionally check `cnf.jkt` and
+//     `ath` to enforce the proof-of-possession binding.
 func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.Identity, error) {
 	proof := r.Header(i.cfg.ProofHeader)
 	if proof == "" {
@@ -348,7 +348,19 @@ func sha256sum(s string) []byte {
 	return h[:]
 }
 
+var knownKeys = map[string]struct{}{
+	"required":        {},
+	"skew":            {},
+	"replayCacheSize": {},
+	"proofHeader":     {},
+	"bearerHeader":    {},
+	"inner":           {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("dpop", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	cfg := Config{
 		Required:        true,
 		Skew:            defaultSkew,

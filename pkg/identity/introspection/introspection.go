@@ -250,7 +250,22 @@ func (s *singleflight) Do(key string, fn func() (any, error)) (any, error) {
 	return c.val, c.err
 }
 
+var knownKeys = map[string]struct{}{
+	"url":          {},
+	"clientId":     {},
+	"clientSecret": {},
+	"headerName":   {},
+	"cacheSize":    {},
+	"maxCacheTtl":  {},
+	"negativeTtl":  {},
+	"errorTtl":     {},
+	"resilience":   {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("oauth2-introspection", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	cfg := Config{
 		HeaderName:  "Authorization",
 		CacheSize:   100_000,

@@ -90,7 +90,14 @@ func contextVars(r *module.Request) map[string]any {
 	return r.Context
 }
 
+var knownKeys = map[string]struct{}{
+	"expression": {},
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
+	if err := module.CheckUnknownKeys("cel", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	expr, _ := raw["expression"].(string)
 	if expr == "" {
 		return nil, fmt.Errorf("%w: cel %q: expression is required", module.ErrConfig, name)

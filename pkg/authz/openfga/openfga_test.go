@@ -271,3 +271,23 @@ func TestOpenFGA_RetriesUntilSuccess(t *testing.T) {
 		t.Fatalf("attempts = %d, want 3", got)
 	}
 }
+
+func TestOpenFGA_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("fga", map[string]any{
+		"apiUrl":  "http://localhost:8080",
+		"storeId": "store-1",
+		"check": map[string]any{
+			"user":     "user:{{ .Identity.Subject }}",
+			"relation": "viewer",
+			"object":   "doc:1",
+		},
+		"defaultAllow": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}
