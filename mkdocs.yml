@@ -121,6 +121,18 @@ nav:
       - Policy shadow mode and canary evaluation: cookbook/policy-shadow-mode.md
       - Cache invalidation: cookbook/cache-invalidation.md
       - Valkey outage drill: cookbook/valkey-outage-drill.md
+      - Static API key authentication: cookbook/apikey-static-backend.md
+      - Header stamping & identity forwarding: cookbook/header-stamping-identity-forwarding.md
+      - mTLS & SPIFFE service identity: cookbook/mtls-spiffe-mesh.md
+      - OAuth2 token introspection with caching: cookbook/oauth2-introspection-caching.md
+      - Per-tenant rate limiting: cookbook/ratelimit-tenant-isolation.md
+      - Credential revocation & immediate logout: cookbook/revocation-immediate-logout.md
+      - CEL expression-based authorization: cookbook/cel-expression-authz.md
+      - Composite authorization patterns: cookbook/composite-authz-patterns.md
+      - SpiceDB relationship-based access control: cookbook/spicedb-rebac-authorization.md
+      - Multi-cluster federation & revocation sync: cookbook/federation-multi-cluster-sync.md
+      - WASM sandboxed plugins: cookbook/wasm-sandboxed-plugins.md
+      - DPoP sender-constrained tokens: cookbook/dpop-sender-binding.md
   - Modules:
       - modules/README.md
       - Identifiers:
@@ -132,11 +144,13 @@ nav:
           - HMAC (SigV4-style): modules/hmac.md
           - DPoP wrapper: modules/dpop.md
           - gRPC plugin: modules/plugin-grpc.md
+          - WASM plugin: modules/wasm.md
       - Authorizers:
           - RBAC: modules/rbac.md
           - CEL: modules/cel.md
           - OPA: modules/opa.md
           - OpenFGA: modules/openfga.md
+          - SpiceDB (ReBAC): modules/spicedb.md
           - Composite: modules/composite.md
       - Response mutators:
           - Header add: modules/header-add.md
@@ -148,9 +162,12 @@ nav:
           - Valkey: modules/cache-valkey.md
       - Cross-cutting:
           - Rate limit: modules/ratelimit.md
+          - Revocation: modules/revocation.md
           - Session: modules/session.md
           - Upstream guard: modules/upstream.md
           - ConfigStream broker: modules/configstream.md
+          - Bundle registry: modules/bundle.md
+          - Federation: modules/federation.md
           - Observability: modules/observability.md
   - Architecture:
       - Design: DESIGN.md

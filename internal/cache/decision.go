@@ -253,22 +253,30 @@ func NewDecisionWithTiered(o DecisionOptions, tiered *Tiered, tieredStats *Tiere
 // Key computes the cache key for this request+identity, returning ""
 // when the cache should be skipped (e.g. no identity yet, or the configured
 // fields produced an empty payload).
+//
+// Security hardening: uses length-prefixed encoding so field values cannot
+// inject delimiters. All configured fields are always included (even when
+// empty) to prevent key collisions from field count variance.
 func (d *Decision) Key(r *module.Request, id *module.Identity) string {
 	if d == nil || len(d.keyFields) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(d.keyFields))
+	var buf strings.Builder
+	nonEmpty := 0
 	for _, f := range d.keyFields {
 		v := resolveField(f, r, id)
-		if v == "" {
-			continue
+		if v != "" {
+			nonEmpty++
 		}
-		parts = append(parts, f+"="+v)
+		// Length-prefixed: "<len>:<field>=<value>," — unambiguous regardless
+		// of what characters appear in the value.
+		entry := f + "=" + v
+		fmt.Fprintf(&buf, "%d:%s,", len(entry), entry)
 	}
-	if len(parts) == 0 {
+	if nonEmpty == 0 {
 		return ""
 	}
-	h := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	h := sha256.Sum256([]byte(buf.String()))
 	return hex.EncodeToString(h[:]) // full 256-bit key — no truncation
 }
 

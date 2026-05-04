@@ -60,6 +60,12 @@ func (s *NativeAuthServer) Authorize(ctx context.Context, req *authv1.AuthorizeR
 	if limit := bodyLimit(s.MaxRequestBytes); limit > 0 && int64(len(req.GetBody())) > limit {
 		return nil, status.Error(codes.ResourceExhausted, "lwauth: request body too large")
 	}
+	// Security hardening: validate TenantID on native gRPC path (same
+	// constraints the HTTP handler enforces) to prevent metrics cardinality
+	// explosion and rate-limiter bucket exhaustion from arbitrary values.
+	if err := validateTenantID(req.GetTenantId()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	mreq := requestFromAuthorize(req)
 	mreq.PeerCerts = verifiedPeerCertFromContext(ctx)
 	dec, id, _ := eng.Evaluate(ctx, mreq)
@@ -95,6 +101,9 @@ func (s *NativeAuthServer) AuthorizeStream(stream authv1.Auth_AuthorizeStreamSer
 		}
 		if limit := bodyLimit(s.MaxRequestBytes); limit > 0 && int64(len(in.GetBody())) > limit {
 			return status.Error(codes.ResourceExhausted, "lwauth: request body too large")
+		}
+		if err := validateTenantID(in.GetTenantId()); err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
 		}
 		mreq := requestFromAuthorize(in)
 		mreq.PeerCerts = verifiedCert
@@ -276,4 +285,22 @@ func flattenClaims(in map[string]any) map[string]string {
 		}
 	}
 	return out
+}
+
+// validateTenantID enforces the same constraints the HTTP handler
+// applies (maxTenantIDLen, printable ASCII only) on the native gRPC
+// path. Without this, a malicious gRPC client can send arbitrary-length
+// or binary TenantIDs that blow up metrics cardinality and rate-limiter
+// bucket counts.
+func validateTenantID(tid string) error {
+	if n := len(tid); n > maxTenantIDLen {
+		return fmt.Errorf("lwauth: tenantId too long: %d bytes > %d", n, maxTenantIDLen)
+	}
+	for i := 0; i < len(tid); i++ {
+		c := tid[i]
+		if c < 0x20 || c > 0x7e {
+			return fmt.Errorf("lwauth: tenantId contains non-printable byte 0x%02x at offset %d", c, i)
+		}
+	}
+	return nil
 }

@@ -91,6 +91,19 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 			subj = v
 		}
 	}
+	// Security hardening: reject tokens without a subject claim. An empty
+	// subject defeats per-user caching, authorization, and audit attribution.
+	// M2M tokens (client_credentials) should use "client_id" or "azp" as sub.
+	if subj == "" {
+		// Fall back to client_id or azp (RFC 9068 §2.2) for M2M tokens.
+		if cid, ok := claims["client_id"].(string); ok && cid != "" {
+			subj = cid
+		} else if azp, ok := claims["azp"].(string); ok && azp != "" {
+			subj = azp
+		} else {
+			return nil, fmt.Errorf("%w: jwt: token has no sub, client_id, or azp claim", module.ErrInvalidCredential)
+		}
+	}
 	return &module.Identity{
 		Subject: subj,
 		Claims:  claims,

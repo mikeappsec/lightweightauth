@@ -95,7 +95,11 @@ func (i *identifier) handleStart(w http.ResponseWriter, r *http.Request) {
 func (i *identifier) handleCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if errMsg := q.Get("error"); errMsg != "" {
-		http.Error(w, "idp error: "+errMsg+" "+q.Get("error_description"), http.StatusBadGateway)
+		// Security hardening: set nosniff and truncate reflected IdP error
+		// parameters to prevent content injection.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		msg := "idp error: " + truncate(errMsg, 64) + " " + truncate(q.Get("error_description"), 256)
+		http.Error(w, msg, http.StatusBadGateway)
 		return
 	}
 	gotState := q.Get("state")
@@ -187,6 +191,13 @@ func (i *identifier) handleCallback(w http.ResponseWriter, r *http.Request) {
 // RP-Initiated Logout 1.0 §5, embedding `id_token_hint` and
 // `post_logout_redirect_uri` so the IdP can bounce the user back.
 func (i *identifier) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Security hardening: require POST to prevent cross-site forced logout
+	// via top-level GET navigations (SameSite=Lax cookies are sent on GET).
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	// Capture the id_token *before* clearing so we can pass it as a hint.
 	var idTokenHint string
 	if s, _ := i.store.Load(r); s != nil {
@@ -201,7 +212,7 @@ func (i *identifier) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, err := buildEndSessionURL(i.endSessionURL, idTokenHint, absoluteURL(r, i.postLogout))
+	target, err := buildEndSessionURL(i.endSessionURL, idTokenHint, i.absoluteURL(i.postLogout))
 	if err != nil {
 		// Fall back to local logout rather than 500ing the user.
 		http.Redirect(w, r, i.postLogout, http.StatusFound)
@@ -415,23 +426,13 @@ func buildEndSessionURL(endSession, idTokenHint, postLogoutRedirect string) (str
 	return u.String(), nil
 }
 
-// absoluteURL turns a path like "/" into a fully-qualified URL relative
-// to the inbound request, suitable for post_logout_redirect_uri (which
-// most IdPs require to be absolute and pre-registered).
-func absoluteURL(r *http.Request, path string) string {
+// absoluteURL turns a path like "/" into a fully-qualified URL using the
+// configured redirectUrl as the authoritative base. Security hardening:
+// never trust X-Forwarded-Host/Proto from the request to construct
+// security-critical redirect URIs — use the operator-configured origin.
+func (i *identifier) absoluteURL(path string) string {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		return path
-	}
-	scheme := "https"
-	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
-		scheme = "http"
-	}
-	if xf := r.Header.Get("X-Forwarded-Proto"); xf != "" {
-		scheme = xf
-	}
-	host := r.Host
-	if xh := r.Header.Get("X-Forwarded-Host"); xh != "" {
-		host = xh
 	}
 	if path == "" {
 		path = "/"
@@ -439,5 +440,28 @@ func absoluteURL(r *http.Request, path string) string {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return scheme + "://" + host + path
+	// Derive base from the configured redirectUrl (scheme + host).
+	base := i.configuredBaseURL()
+	return base + path
+}
+
+// configuredBaseURL extracts scheme://host from the operator-configured
+// RedirectURL. This is safe to use for redirect construction because
+// the operator controls the value and IdPs validate it against their
+// registration.
+func (i *identifier) configuredBaseURL() string {
+	u, err := url.Parse(i.oauth.RedirectURL)
+	if err != nil || u.Host == "" {
+		// Should never happen — RedirectURL is validated at construction.
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// truncate returns s capped to maxLen characters.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
 }

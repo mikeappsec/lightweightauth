@@ -116,10 +116,20 @@ helm install lwauth ./deploy/helm/lightweightauth \
 | `podDisruptionBudget.enabled` | `false` | PDB with `minAvailable: 1`. |
 | `networkPolicy.enabled` | `false` | Lock ingress to listed peers. |
 | `metrics.serviceMonitor` | `false` | Requires prometheus-operator CRDs. |
+| `cache.backend` | `memory` | Cache backend: `memory`, `valkey`, or `tiered`. |
+| `cache.addr` | `""` | Valkey address (required when backend is `valkey` or `tiered`). |
+| `rateLimit.perTenant.rps` | `0` (disabled) | Per-tenant token refill rate (tokens/sec). |
+| `rateLimit.perTenant.burst` | `0` | Per-tenant bucket capacity. |
+| `rateLimit.default.rps` | `0` (disabled) | Fallback rate when tenantID is empty. |
+| `revocation.backend` | `""` (disabled) | Revocation store: `memory` or `valkey`. |
+| `revocation.addr` | `""` | Valkey address for revocation (required when `valkey`). |
+| `gateway.enabled` | `false` | Embed Envoy as a sidecar (no external Envoy needed). |
+| `gateway.upstream.service` | `""` | Target upstream service name. |
+| `gateway.upstream.port` | `8000` | Target upstream port. |
 
-> Cache backend (`memory` / `redis`), token introspection, and
-> ServiceMonitor metric content land in M5–M9; the toggles above are
-> the chart-level surface area as of M4.
+> All module-level features (cache, rate limiting, revocation,
+> federation, session store) are wired in the chart. See the full
+> `values.yaml` for the complete reference.
 
 For the data-plane, install one of:
 
@@ -173,3 +183,9 @@ are not visible from this page.
 - [ ] Secrets (HMAC keys, OAuth client secrets) mounted from a real secret
       manager, not committed to `AuthConfig` CRs.
 - [ ] Image signed with cosign; verify via Kyverno/Sigstore policy.
+- [ ] Rate limiting configured: `rateLimit.perTenant` set; monitor
+      `lwauth_decisions_total{outcome="deny",authorizer="ratelimit"}`.
+- [ ] Revocation store deployed (Valkey with replication) if
+      `revocation.backend: valkey`.
+- [ ] Session store (Valkey) if using `oauth2` identifier for browser flows.
+- [ ] Federation peers configured with mTLS if multi-cluster.

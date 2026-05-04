@@ -90,9 +90,9 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Warn if multi-tenant config omits "tenant" from cache key fields.
-	// Without "tenant" in the key, one tenant's cached decision may serve
-	// another tenant's request (cross-tenant data leakage via cache).
+	// Security hardening: reject config when multi-tenant mode is active but
+	// "tenant" is missing from cache key fields. Without "tenant" in the key,
+	// one tenant's cached decision may serve another tenant's request.
 	if dc != nil && ac.TenantID != "" && ac.Cache != nil {
 		hasTenant := false
 		for _, k := range ac.Cache.Key {
@@ -102,8 +102,8 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 			}
 		}
 		if !hasTenant {
-			slog.Warn("cache.key omits 'tenant' in a multi-tenant config — cached decisions may be shared across tenants",
-				"tenantId", ac.TenantID)
+			return nil, fmt.Errorf("%w: cache.key must include 'tenant' when tenantId is configured to prevent cross-tenant cache sharing",
+				module.ErrConfig)
 		}
 	}
 	var lim *ratelimit.Limiter

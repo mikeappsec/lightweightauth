@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -209,18 +210,42 @@ func (s *Sink) push(batch []*audit.Event) error {
 
 // --- SSRF protection --------------------------------------------------------
 
+// Security hardening: validate Loki host against private/internal IP ranges
+// to prevent SSRF when audit config is partially tenant-controlled.
 func validateLokiHost(host string) error {
-	blocked := []string{
-		"169.254.169.254",
-		"metadata.google.internal",
-		"metadata.internal",
+	// Strip port if present.
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
 	}
-	for _, b := range blocked {
-		if host == b {
-			return fmt.Errorf("loki: URL host %q is blocked (SSRF protection)", host)
+
+	ip := net.ParseIP(h)
+	if ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("loki: IP %s is blocked (SSRF protection)", ip)
+		}
+		return nil
+	}
+
+	// DNS name — resolve and check each A/AAAA record.
+	addrs, err := net.LookupHost(h)
+	if err != nil {
+		// Allow unresolvable at config time (may resolve later in DNS).
+		return nil
+	}
+	for _, a := range addrs {
+		if resolved := net.ParseIP(a); resolved != nil && isBlockedIP(resolved) {
+			return fmt.Errorf("loki: host %q resolves to blocked IP %s (SSRF protection)", h, a)
 		}
 	}
 	return nil
+}
+
+// isBlockedIP returns true for loopback, private, link-local, and
+// unspecified addresses.
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 // --- Loki push API types ---------------------------------------------------

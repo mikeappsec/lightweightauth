@@ -70,7 +70,20 @@ func expand(s string, id *module.Identity) string {
 			out = strings.ReplaceAll(out, tok, fmt.Sprint(v))
 		}
 	}
-	return out
+	// Security hardening: strip characters that enable HTTP header injection
+	// and response splitting before the value leaves lwauth.
+	return sanitizeHeaderValue(out)
+}
+
+// sanitizeHeaderValue removes CR, LF, and NUL bytes which enable HTTP header
+// injection and response splitting attacks when claim values flow into headers.
+func sanitizeHeaderValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' || r == 0 {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func addFactory(name string, raw map[string]any) (module.ResponseMutator, error) {

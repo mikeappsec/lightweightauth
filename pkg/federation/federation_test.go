@@ -376,15 +376,16 @@ func TestPeer_AcceptSnapshot_VersionResetWithNewerTimestamp(t *testing.T) {
 	}
 
 	// After source restart, version resets to 1 but timestamp is newer.
-	// This should be ACCEPTED (version reset recovery).
+	// Security hardening: version downgrade is REJECTED to prevent policy
+	// rollback attacks regardless of timestamp.
 	time.Sleep(10 * time.Millisecond) // ensure timestamp is newer
 	snap2 := &Snapshot{Version: 1, SourceClusterID: "cluster-b", SpecJSON: spec, Timestamp: time.Now().Add(time.Second)}
 	sig2 := cfg.Sign(snapshotPayload(snap2))
-	if err := peer.AcceptSnapshot(snap2, sig2); err != nil {
-		t.Fatalf("expected acceptance after version reset: %v", err)
+	if err := peer.AcceptSnapshot(snap2, sig2); err == nil {
+		t.Fatal("expected rejection of version downgrade")
 	}
-	if peer.Version() != 1 {
-		t.Fatalf("version = %d, want 1", peer.Version())
+	if peer.Version() != 10 {
+		t.Fatalf("version = %d, want 10 (should not have been rolled back)", peer.Version())
 	}
 }
 

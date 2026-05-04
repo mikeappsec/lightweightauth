@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	rand2 "math/rand/v2"
 	"time"
 
@@ -513,7 +514,26 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 			if merged.Subject == "" {
 				merged.Subject = id.Subject
 			}
+			// Security hardening: first-writer-wins for claim merging.
+			//
+			// Design trade-offs:
+			//   - Earlier identifiers in config take precedence on key
+			//     collision, consistent with Subject (first-writer-wins).
+			//   - Operators should list the most-trusted identifier first.
+			//   - Collisions are logged so misconfigurations are observable.
+			//   - If an operator intentionally wants the later identifier's
+			//     value, they must reorder the config — there is no override.
+			//   - Benign collisions on standard claims (iss, iat, exp) will
+			//     produce log warnings; these can be filtered by key name in
+			//     log pipelines if noisy.
 			for k, v := range id.Claims {
+				if _, collision := merged.Claims[k]; collision {
+					slog.Warn("AllMust claim collision: keeping first identifier's value",
+						"claim", k,
+						"dropped_source", idr.Name(),
+					)
+					continue
+				}
 				merged.Claims[k] = v
 			}
 		}

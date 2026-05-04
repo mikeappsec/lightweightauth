@@ -27,6 +27,12 @@ rateLimit:
   default:
     rps:   50
     burst: 100
+  overrides:
+    premium-tenant:
+      rps:  1000
+      burst: 2000
+  maxBuckets: 100000       # max in-memory tenant buckets
+  bucketIdleTTL: "5m"      # evict idle tenant buckets after this
 ```
 
 | Field        | Behavior                                                              |
@@ -35,6 +41,9 @@ rateLimit:
 | `default`    | Fallback when `TenantID` is empty. `rps: 0` disables (always allow).  |
 | `rps`        | Refill rate (tokens/second). Float — `0.5` is valid.                  |
 | `burst`      | Bucket capacity. Tokens accumulate up to this max while idle.         |
+| `overrides`  | Per-tenant quota customization. Keys are tenant IDs (max 128 chars).  |
+| `maxBuckets` | Cap on in-memory buckets. When reached, least-recently-used buckets are evicted. Default `100000`. |
+| `bucketIdleTTL` | Evict tenant buckets idle longer than this duration. Default `5m`. Background reaper runs periodically. |
 
 ## Behavior on exhaustion
 
@@ -69,7 +78,9 @@ CRD mode — same block under `spec.rateLimit:` of an `AuthConfig`.
   multi-tenant Envoy cluster typically stamp it from the Envoy route's
   metadata.
 - **Memory.** One bucket struct per tenant; cleanup of idle tenants
-  is handled by an LRU sweep when `len(buckets) > 16384`. Operators
+  is handled by the background reaper when `bucketIdleTTL` expires
+  (default 5m). The `maxBuckets` cap (default 100k) evicts
+  least-recently-used tenants when exceeded. Operators
   with very high tenant cardinality should keep `burst` modest to
   bound the working set.
 - **Distribution.** Buckets are local to each lwauth replica by
@@ -93,7 +104,8 @@ rateLimit:
   distributed:
     type: valkey
     addr: valkey-master.cache.svc:6379
-    password: ${VALKEY_PASSWORD}    # optional
+    username: ${VALKEY_USERNAME}     # optional, Valkey ACL user
+    password: ${VALKEY_PASSWORD}     # optional
     keyPrefix: lwauth-rl/           # optional, default empty
     tls: false
     window: 1s                      # rolling window length (default 1s)
@@ -105,6 +117,7 @@ rateLimit:
 |--------------|----------------------------------------------------------------------------------------|
 | `type`       | Registered backend name. v1.1 ships `valkey`. Required when block present.             |
 | `addr`       | Valkey/Redis 7.x TCP address. Required.                                                |
+| `username`   | Valkey ACL username. Optional — omit for password-only auth.                           |
 | `keyPrefix`  | Prepended to every tenant key — lets multiple lwauth deployments share a Valkey.       |
 | `window`     | Sliding-window length. Default 1s.                                                     |
 | `timeout`    | Per-call deadline; on expiry the limiter falls back to the local bucket.               |

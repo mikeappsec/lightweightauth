@@ -20,7 +20,7 @@ most rotations skip.
 
 - An existing `AuthConfig` with a `jwt` identifier pointing at a JWKS
   URL (inline or via `IdentityProvider`).
-- lwauth refreshes JWKS every 10 minutes by default (or honours the
+- lwauth refreshes JWKS every 15 minutes by default (or honours the
   IdP's `Cache-Control: max-age` header). You have not overridden
   `jwksRefreshInterval` to something longer than 1 hour.
 - `lwauthctl` v1.0+ and `kubectl` on your workstation.
@@ -73,8 +73,8 @@ How you do this depends on your IdP:
 After the IdP publishes both keys, confirm lwauth sees them:
 
 ```bash
-# Wait for at least one JWKS refresh cycle (default 10 min).
-sleep 600
+# Wait for at least one JWKS refresh cycle (default 15 min).
+sleep 900
 
 # Verify both kids are in the cache.
 curl -s <JWKS_URL> | jq '[.keys[].kid]'
@@ -194,7 +194,7 @@ lwauth.
 
 ## Accelerating the refresh (optional)
 
-If you cannot wait 10 minutes for the background refresh to pick up a
+If you cannot wait 15 minutes for the background refresh to pick up a
 newly published key, two options:
 
 1. **Lower the refresh interval.** Set `jwksRefreshInterval: 60s` on

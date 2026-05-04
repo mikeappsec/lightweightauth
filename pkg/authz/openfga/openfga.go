@@ -45,6 +45,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -104,15 +105,15 @@ func (a *authorizer) Authorize(ctx context.Context, r *module.Request, id *modul
 		Request:  buildTemplateRequest(r),
 	}
 
-	user, err := render(a.userTpl, in)
+	user, err := renderSafe(a.userTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: openfga %q: render user: %v", module.ErrConfig, a.name, err)
 	}
-	relation, err := render(a.relationTpl, in)
+	relation, err := renderSafe(a.relationTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: openfga %q: render relation: %v", module.ErrConfig, a.name, err)
 	}
-	object, err := render(a.objectTpl, in)
+	object, err := renderSafe(a.objectTpl, in)
 	if err != nil {
 		return nil, fmt.Errorf("%w: openfga %q: render object: %v", module.ErrConfig, a.name, err)
 	}
@@ -196,7 +197,13 @@ func (a *authorizer) check(ctx context.Context, user, relation, object string) (
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			return fmt.Errorf("%w: openfga check: status %d: %s", module.ErrUpstream, resp.StatusCode, bytes.TrimSpace(preview))
+			// Security hardening: log upstream error details at debug level
+			// only; return a generic error to prevent leaking internal
+			// topology and store IDs to API consumers.
+			slog.Debug("openfga: upstream error response",
+				"status", resp.StatusCode,
+				"body", string(bytes.TrimSpace(preview)))
+			return fmt.Errorf("%w: openfga check: upstream returned status %d", module.ErrUpstream, resp.StatusCode)
 		}
 		// Cap successful response decode. A misbehaving or compromised
 		// OpenFGA endpoint could otherwise return an arbitrarily large
@@ -258,6 +265,27 @@ func render(t *template.Template, in templateInput) (string, error) {
 	return strings.TrimSpace(buf.String()), nil
 }
 
+// Security hardening: maxRenderedLen caps template output to prevent
+// oversized values being sent to the external OpenFGA service.
+const maxRenderedLen = 1024
+
+// renderSafe wraps render with panic recovery and a length cap.
+func renderSafe(t *template.Template, in templateInput) (result string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: template panic: %v", module.ErrConfig, r)
+		}
+	}()
+	s, e := render(t, in)
+	if e != nil {
+		return "", e
+	}
+	if len(s) > maxRenderedLen {
+		return "", fmt.Errorf("%w: rendered value exceeds %d chars", module.ErrConfig, maxRenderedLen)
+	}
+	return s, nil
+}
+
 // templateFuncs are the helpers available inside user/relation/object
 // templates. Kept tiny on purpose; users wanting full Sprig should reach
 // for OPA instead.
@@ -299,7 +327,7 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 	}
 
 	parse := func(field, src string) (*template.Template, error) {
-		t, err := template.New(name + "." + field).Funcs(templateFuncs).Parse(src)
+		t, err := template.New(name+"."+field).Funcs(templateFuncs).Option("missingkey=error").Parse(src)
 		if err != nil {
 			return nil, fmt.Errorf("%w: openfga %q: parse %s: %v", module.ErrConfig, name, field, err)
 		}

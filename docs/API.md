@@ -23,6 +23,7 @@ Always mounted by [internal/server/http.go](https://github.com/mikeappsec/lightw
 | `GET`  | `/healthz`       | Liveness. Always `200` once the process is up. K8s uses this to decide *restart*. | `200` |
 | `GET`  | `/readyz`        | Readiness. `200` once `EngineHolder.Load()` returns a compiled engine; `503` until then. K8s uses this to decide *route traffic*. | `200`, `503` |
 | `GET`  | `/metrics`       | Prometheus scrape. Surfaces the M9 counter/histogram set (`lwauth_decisions_total`, `lwauth_decision_latency_seconds`, `lwauth_identifier_total`, `lwauth_cache_*`). | `200` |
+| `POST` | `/v1/admin/revoke` | Revoke a credential (E2 feature). Requires admin auth (JWT or mTLS — see [admin-auth](operations/admin-auth.md)). Request body: `{"key":"jti:abc","reason":"user-logout","ttl":"1h"}`. | `200`, `4xx`, `5xx` |
 
 Mounted dynamically when an `oauth2` identifier is configured
 ([pkg/identity/oauth2/oauth2.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/identity/oauth2/oauth2.go)):
@@ -144,8 +145,6 @@ grpcurl -plaintext -d '{
 
 - [DOC-OPENAPI-1](DESIGN.md) — generate this catalog from the Go
   structs and serve at `GET /openapi.json` behind an admin gate.
-- [M14](DESIGN.md) — `POST /v1/admin/revoke` (decision-cache
-  invalidation, audited).
 - [M10-PLUGIN-LIFECYCLE](DESIGN.md) — adds an optional supervised
   dial path (no new public endpoint, but the gRPC dial credentials
   contract gains mTLS).

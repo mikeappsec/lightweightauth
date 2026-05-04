@@ -6,11 +6,16 @@ package wasm
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
+
+// defaultPluginBaseDir is the default directory for WASM plugins when
+// LWAUTH_WASM_PLUGIN_DIR is not set.
+const defaultPluginBaseDir = "/etc/lwauth/plugins/wasm"
 
 var (
 	globalRuntime     *Runtime
@@ -21,7 +26,11 @@ var (
 // globalRT lazily initializes the shared WASM runtime.
 func globalRT() (*Runtime, error) {
 	globalRuntimeOnce.Do(func() {
-		globalRuntime, globalRuntimeErr = NewRuntime(context.Background())
+		baseDir := os.Getenv("LWAUTH_WASM_PLUGIN_DIR")
+		if baseDir == "" {
+			baseDir = defaultPluginBaseDir
+		}
+		globalRuntime, globalRuntimeErr = NewRuntime(context.Background(), baseDir)
 	})
 	return globalRuntime, globalRuntimeErr
 }

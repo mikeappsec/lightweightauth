@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -50,10 +51,19 @@ var (
 // It follows DNS subdomain naming rules (RFC 1123).
 type ClusterID string
 
-// Validate checks the cluster ID is non-empty and within length limits.
+// validClusterID enforces RFC 1123 DNS subdomain naming: lowercase
+// alphanumeric, hyphens, dots; must start and end with alphanumeric.
+var validClusterID = regexp.MustCompile(`^[a-z0-9]([a-z0-9.\-]{0,251}[a-z0-9])?$`)
+
+// Validate checks the cluster ID is non-empty, within length limits,
+// and conforms to DNS subdomain naming (security hardening against
+// log injection and downstream parsing confusion).
 func (c ClusterID) Validate() error {
 	if len(c) == 0 || len(c) > MaxClusterIDLen {
 		return fmt.Errorf("%w: length %d", ErrInvalidClusterID, len(c))
+	}
+	if !validClusterID.MatchString(string(c)) {
+		return fmt.Errorf("%w: must match RFC 1123 DNS subdomain (lowercase alphanumeric, hyphens, dots)", ErrInvalidClusterID)
 	}
 	return nil
 }

@@ -127,6 +127,14 @@ func parseCommon(name string, raw map[string]any) (commonConfig, error) {
 	if err != nil {
 		return c, err
 	}
+	// Security hardening: for non-unix TCP transport without explicit insecure
+	// opt-in, default signing mode to "verify" instead of "disabled" to
+	// prevent response injection by host-local attackers.
+	if sigCfg.mode == signingDisabled && !isUnixTransport(c.Address) && !c.Insecure {
+		if _, hasSigning := raw["signing"]; !hasSigning {
+			sigCfg.mode = signingVerify
+		}
+	}
 	c.Signing = sigCfg
 
 	lc, err := parseLifecycle(name, raw)
@@ -165,6 +173,12 @@ func requiresTLS(address string) bool {
 		return false
 	}
 	return true
+}
+
+// isUnixTransport returns true when the address uses a Unix domain socket.
+func isUnixTransport(address string) bool {
+	addr := strings.TrimPrefix(address, "passthrough:///")
+	return strings.HasPrefix(addr, "unix:") || strings.HasPrefix(addr, "unix-abstract:") || strings.HasPrefix(addr, "/")
 }
 
 // connPool de-duplicates *grpc.ClientConn across multiple plugin
@@ -277,6 +291,9 @@ func dial(name string, cfg commonConfig) (*grpc.ClientConn, error) {
 	cc, err := grpc.NewClient(
 		cfg.Address,
 		grpc.WithTransportCredentials(creds),
+		// Security hardening: cap inbound message size to prevent a
+		// compromised plugin from returning arbitrarily large responses.
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1<<20)), // 1 MiB
 	)
 	if err != nil {
 		return nil, fmt.Errorf("grpc-plugin: dial %q: %w", cfg.Address, err)
