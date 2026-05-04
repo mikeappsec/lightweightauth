@@ -17,11 +17,13 @@ import (
 	"hash/fnv"
 	"log/slog"
 	rand2 "math/rand/v2"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
@@ -372,30 +374,24 @@ func (e *Engine) checkRevocation(ctx context.Context, r *module.Request, id *mod
 	defer span.End()
 	span.SetAttributes(attribute.Int("lwauth.revocation.keys_checked", len(keys)))
 
-	for _, key := range keys {
-		revoked, err := e.revocationStore.Exists(ctx, key)
-		if err != nil {
-			span.SetAttributes(attribute.String("lwauth.revocation.error", err.Error()))
-			if e.revocationFailOpen {
-				// Fail-open: skip check on store error. Emit metric so
-				// operators detect this immediately.
-				span.SetAttributes(attribute.Bool("lwauth.revocation.fail_open", true))
-				metrics.RecordRevocation(r.TenantID, "fail_open")
-				return false, nil
-			}
-			// Fail-closed (default): treat store error as revoked.
-			span.SetStatus(codes.Error, "revocation store error")
-			metrics.RecordRevocation(r.TenantID, "fail_closed")
-			return true, nil
+	// Use parallel checker for concurrent key lookups when >1 key.
+	pc := revocation.NewParallelChecker(e.revocationStore)
+	revoked, err := pc.ExistsAny(ctx, keys)
+	if err != nil {
+		span.SetAttributes(attribute.String("lwauth.revocation.error", err.Error()))
+		if e.revocationFailOpen {
+			span.SetAttributes(attribute.Bool("lwauth.revocation.fail_open", true))
+			metrics.RecordRevocation(r.TenantID, "fail_open")
+			return false, nil
 		}
-		if revoked {
-			span.SetAttributes(
-				attribute.String("lwauth.revocation.matched_key", key),
-				attribute.Bool("lwauth.revocation.revoked", true),
-			)
-			metrics.RecordRevocation(r.TenantID, "revoked")
-			return true, nil
-		}
+		span.SetStatus(codes.Error, "revocation store error")
+		metrics.RecordRevocation(r.TenantID, "fail_closed")
+		return true, nil
+	}
+	if revoked {
+		span.SetAttributes(attribute.Bool("lwauth.revocation.revoked", true))
+		metrics.RecordRevocation(r.TenantID, "revoked")
+		return true, nil
 	}
 
 	metrics.RecordRevocation(r.TenantID, "not_revoked")
@@ -502,42 +498,7 @@ func (e *Engine) deriveCacheTags(r *module.Request, id *module.Identity) []strin
 func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Identity, error) {
 	switch e.identifierMode {
 	case AllMust:
-		merged := &module.Identity{Claims: map[string]any{}, Source: "all"}
-		for _, idr := range e.identifiers {
-			id, err := idr.Identify(ctx, r)
-			if err != nil {
-				return nil, err
-			}
-			if id == nil {
-				return nil, fmt.Errorf("%w: identifier %q produced no identity in AllMust mode", module.ErrInvalidCredential, idr.Name())
-			}
-			if merged.Subject == "" {
-				merged.Subject = id.Subject
-			}
-			// Security hardening: first-writer-wins for claim merging.
-			//
-			// Design trade-offs:
-			//   - Earlier identifiers in config take precedence on key
-			//     collision, consistent with Subject (first-writer-wins).
-			//   - Operators should list the most-trusted identifier first.
-			//   - Collisions are logged so misconfigurations are observable.
-			//   - If an operator intentionally wants the later identifier's
-			//     value, they must reorder the config — there is no override.
-			//   - Benign collisions on standard claims (iss, iat, exp) will
-			//     produce log warnings; these can be filtered by key name in
-			//     log pipelines if noisy.
-			for k, v := range id.Claims {
-				if _, collision := merged.Claims[k]; collision {
-					slog.Warn("AllMust claim collision: keeping first identifier's value",
-						"claim", k,
-						"dropped_source", idr.Name(),
-					)
-					continue
-				}
-				merged.Claims[k] = v
-			}
-		}
-		return merged, nil
+		return e.identifyAllMust(ctx, r)
 	default: // FirstMatch
 		// Security: only ErrNoMatch falls through. The error taxonomy
 		// in pkg/module/errors.go documents that ErrInvalidCredential
@@ -578,6 +539,64 @@ func (e *Engine) identify(ctx context.Context, r *module.Request) (*module.Ident
 		}
 		return nil, fmt.Errorf("%w: no identifier matched", module.ErrInvalidCredential)
 	}
+}
+
+// identifyAllMust runs all identifiers concurrently via errgroup. All
+// must succeed; the first error cancels remaining goroutines. Claims are
+// merged with first-writer-wins semantics (identifier order in config
+// determines priority).
+func (e *Engine) identifyAllMust(ctx context.Context, r *module.Request) (*module.Identity, error) {
+	type indexedIdentity struct {
+		index int
+		id    *module.Identity
+		name  string
+	}
+
+	g, ctx := errgroup.WithContext(ctx)
+	results := make([]indexedIdentity, len(e.identifiers))
+	var mu sync.Mutex
+
+	for i, idr := range e.identifiers {
+		g.Go(func() error {
+			id, err := idr.Identify(ctx, r)
+			if err != nil {
+				return err
+			}
+			if id == nil {
+				return fmt.Errorf("%w: identifier %q produced no identity in AllMust mode", module.ErrInvalidCredential, idr.Name())
+			}
+			mu.Lock()
+			results[i] = indexedIdentity{index: i, id: id, name: idr.Name()}
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Merge claims in config order (first-writer-wins).
+	merged := &module.Identity{Claims: map[string]any{}, Source: "all"}
+	for _, res := range results {
+		if res.id == nil {
+			continue
+		}
+		if merged.Subject == "" {
+			merged.Subject = res.id.Subject
+		}
+		for k, v := range res.id.Claims {
+			if _, collision := merged.Claims[k]; collision {
+				slog.Warn("AllMust claim collision: keeping first identifier's value",
+					"claim", k,
+					"dropped_source", res.name,
+				)
+				continue
+			}
+			merged.Claims[k] = v
+		}
+	}
+	return merged, nil
 }
 
 // shadowExpired returns true if shadowExpiry is set and has passed.
