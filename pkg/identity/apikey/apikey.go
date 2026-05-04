@@ -42,6 +42,7 @@ import (
 //	      roles:   [admin]
 type Config struct {
 	HeaderName string         `yaml:"headerName" json:"headerName"`
+	Header     string         `yaml:"header" json:"header"`
 	Static     map[string]any `yaml:"static" json:"static"`
 	Hashed     map[string]any `yaml:"hashed" json:"hashed"`
 }
@@ -87,22 +88,16 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 	}, nil
 }
 
-var knownKeys = map[string]struct{}{
-	"headerName": {},
-	"header":     {},
-	"static":     {},
-	"hashed":     {},
-}
-
 func factory(name string, raw map[string]any) (module.Identifier, error) {
-	if err := module.CheckUnknownKeys("apikey", name, raw, knownKeys); err != nil {
-		return nil, err
+	var cfg Config
+	if err := module.DecodeConfig(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("apikey %q: %w", name, err)
 	}
 	hdr := "X-Api-Key"
-	if v, ok := raw["headerName"].(string); ok && v != "" {
-		hdr = v
-	} else if v, ok := raw["header"].(string); ok && v != "" {
-		hdr = v
+	if cfg.HeaderName != "" {
+		hdr = cfg.HeaderName
+	} else if cfg.Header != "" {
+		hdr = cfg.Header
 	}
 	store, err := buildStore(name, raw)
 	if err != nil {

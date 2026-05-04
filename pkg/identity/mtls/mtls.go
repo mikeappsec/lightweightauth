@@ -231,70 +231,48 @@ func loadCAPool(files []string, inline string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-var knownKeys = map[string]struct{}{
-	"header":                   {},
-	"trustForwardedClientCert": {},
-	"trustedCAFiles":           {},
-	"trustedCAs":               {},
-	"trustedIssuers":           {},
+// MtlsConfig is the typed configuration for the mTLS identifier module.
+type MtlsConfig struct {
+	Header                   string   `yaml:"header" json:"header"`
+	TrustForwardedClientCert bool     `yaml:"trustForwardedClientCert" json:"trustForwardedClientCert"`
+	TrustedCAFiles           []string `yaml:"trustedCAFiles" json:"trustedCAFiles"`
+	TrustedCAs               string   `yaml:"trustedCAs" json:"trustedCAs"`
+	TrustedIssuers           []string `yaml:"trustedIssuers" json:"trustedIssuers"`
 }
 
 func factory(name string, raw map[string]any) (module.Identifier, error) {
-	if err := module.CheckUnknownKeys("mtls", name, raw, knownKeys); err != nil {
-		return nil, err
+	var cfg MtlsConfig
+	if err := module.DecodeConfig(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("mtls %q: %w", name, err)
 	}
+
 	hdr := "X-Forwarded-Client-Cert"
-	if v, ok := raw["header"].(string); ok && v != "" {
-		hdr = v
+	if cfg.Header != "" {
+		hdr = cfg.Header
 	}
-	trustXFCC := false
-	if v, ok := raw["trustForwardedClientCert"].(bool); ok {
-		trustXFCC = v
-	}
-	var caFiles []string
-	if v, ok := raw["trustedCAFiles"].([]any); ok {
-		for _, x := range v {
-			if s, ok := x.(string); ok && s != "" {
-				caFiles = append(caFiles, s)
-			}
-		}
-	}
-	inlinePEM := ""
-	if v, ok := raw["trustedCAs"].(string); ok {
-		inlinePEM = v
-	}
-	pool, err := loadCAPool(caFiles, inlinePEM)
+
+	pool, err := loadCAPool(cfg.TrustedCAFiles, cfg.TrustedCAs)
 	if err != nil {
 		return nil, err
 	}
-	if pool != nil && !trustXFCC {
-		// A CA bundle without trustForwardedClientCert is a
-		// configuration mistake — the operator clearly meant to enable
-		// the XFCC path. Fail closed at compile time so the mistake
-		// surfaces during AuthConfig validation, not at request time.
+	if pool != nil && !cfg.TrustForwardedClientCert {
 		return nil, fmt.Errorf("mtls: trustedCAFiles/trustedCAs requires trustForwardedClientCert: true")
 	}
+
 	trusted := map[string]struct{}{}
-	if v, ok := raw["trustedIssuers"].([]any); ok {
-		for _, x := range v {
-			if s, ok := x.(string); ok && s != "" {
-				trusted[s] = struct{}{}
-			}
+	for _, iss := range cfg.TrustedIssuers {
+		if iss != "" {
+			trusted[iss] = struct{}{}
 		}
 	}
-	// Symmetric to the gate above: trustForwardedClientCert: true
-	// without ANY anchor (no CA bundle, no issuer allow-list) silently
-	// re-enables the original blind-XFCC behavior — anyone able to
-	// reach the listener could spoof any subject. Fail closed at
-	// compile time so the operator has to make the trust boundary
-	// explicit. (SEC-MTLS-1.)
-	if trustXFCC && pool == nil && len(trusted) == 0 {
+
+	if cfg.TrustForwardedClientCert && pool == nil && len(trusted) == 0 {
 		return nil, fmt.Errorf("mtls: trustForwardedClientCert: true requires at least one anchor (trustedCAFiles, trustedCAs, or trustedIssuers)")
 	}
 	return &identifier{
 		name:           name,
 		header:         hdr,
-		trustXFCC:      trustXFCC,
+		trustXFCC:      cfg.TrustForwardedClientCert,
 		trustedRoots:   pool,
 		trustedIssuers: trusted,
 	}, nil

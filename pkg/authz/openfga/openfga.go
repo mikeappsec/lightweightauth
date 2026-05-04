@@ -52,6 +52,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/mikeappsec/lightweightauth/pkg/connpool"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
@@ -340,7 +341,7 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 	}
 
 	parse := func(field, src string) (*template.Template, error) {
-		t, err := template.New(name+"."+field).Funcs(templateFuncs).Option("missingkey=error").Parse(src)
+		t, err := template.New(name + "." + field).Funcs(templateFuncs).Option("missingkey=error").Parse(src)
 		if err != nil {
 			return nil, fmt.Errorf("%w: openfga %q: parse %s: %v", module.ErrConfig, name, field, err)
 		}
@@ -374,8 +375,11 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 		userTpl:     userTpl,
 		relationTpl: relTpl,
 		objectTpl:   objTpl,
-		client:      &http.Client{Timeout: timeout + time.Second},
-		guard:       upstream.NewGuard(guardCfg),
+		client: connpool.GetHTTP(connpool.HTTPConfig{
+			BaseURL: apiURL,
+			Timeout: timeout + time.Second,
+		}),
+		guard: upstream.NewGuard(guardCfg),
 	}, nil
 }
 

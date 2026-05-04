@@ -25,7 +25,6 @@ package cachevalkey
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"time"
@@ -33,6 +32,7 @@ import (
 	"github.com/valkey-io/valkey-go"
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/connpool"
 	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
 
@@ -149,39 +149,28 @@ func factory(spec cache.BackendSpec, _ *cache.Stats) (cache.Backend, error) {
 	if spec.Addr == "" {
 		return nil, errors.New("valkey: addr is required")
 	}
-	opt := valkey.ClientOption{
-		InitAddress: []string{spec.Addr},
-		Username:    spec.Username,
-		Password:    spec.Password,
-	}
-	if spec.TLS {
-		opt.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+
+	poolCfg := connpool.ValkeyConfig{
+		Addr:     spec.Addr,
+		Username: spec.Username,
+		Password: spec.Password,
+		TLS:      spec.TLS,
 	}
 	// Connection pool cap (CAC9): bound the number of connections to
-	// prevent unbounded FD consumption under memory pressure. The
-	// valkey-go PipelineMultiplex controls how many server connections
-	// are used for pipelining; 0 uses the library default (usually
-	// runtime.GOMAXPROCS × 2). Operators can tune via extra.maxConns.
+	// prevent unbounded FD consumption under memory pressure.
 	if v, ok := spec.Extra["maxConns"]; ok {
 		if n, ok := v.(int); ok && n > 0 {
-			opt.PipelineMultiplex = n
+			poolCfg.PipelineMultiplex = n
 		}
 	}
-	client, err := valkey.NewClient(opt)
+
+	client, err := connpool.GetValkey(poolCfg)
 	if err != nil {
-		return nil, fmt.Errorf("valkey: dial %s: %w", spec.Addr, err)
+		return nil, fmt.Errorf("valkey: %w", err)
 	}
-	// Fail fast if the server is unreachable so misconfiguration surfaces
-	// at AuthConfig compile time rather than on the first hot-path call.
-	pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := client.Do(pingCtx, client.B().Ping().Build()).Error(); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("valkey: ping %s: %w", spec.Addr, err)
-	}
+
 	guardCfg, gerr := upstream.FromMap(spec.Extra)
 	if gerr != nil {
-		client.Close()
 		return nil, fmt.Errorf("valkey: %w", gerr)
 	}
 	return &Backend{client: client, keyPrefix: spec.KeyPrefix, guard: upstream.NewGuard(guardCfg)}, nil
