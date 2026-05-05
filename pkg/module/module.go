@@ -37,9 +37,9 @@ type Request struct {
 	// See DESIGN.md §8 (multi-tenancy).
 	TenantID string
 
-	Method  string
-	Host    string
-	Path    string
+	Method string
+	Host   string
+	Path   string
 
 	// Headers carries the request's headers.
 	//
@@ -104,11 +104,11 @@ type Identity struct {
 
 // Decision is what the pipeline ultimately returns to the caller / Envoy.
 type Decision struct {
-	Allow            bool
-	Status           int               // HTTP status to return on deny
-	ResponseHeaders  map[string]string // headers to add on allow (e.g. X-User)
-	UpstreamHeaders  map[string]string // headers Envoy should inject upstream
-	Reason           string
+	Allow           bool
+	Status          int               // HTTP status to return on deny
+	ResponseHeaders map[string]string // headers to add on allow (e.g. X-User)
+	UpstreamHeaders map[string]string // headers Envoy should inject upstream
+	Reason          string
 
 	// StepUp is non-nil when the deny is a step-up challenge rather than
 	// a hard deny. The caller should return 401 with a WWW-Authenticate

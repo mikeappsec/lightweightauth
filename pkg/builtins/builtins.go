@@ -13,8 +13,8 @@ package builtins
 
 import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/assurance"
-	_ "github.com/mikeappsec/lightweightauth/pkg/authz/composite"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/cel"
+	_ "github.com/mikeappsec/lightweightauth/pkg/authz/composite"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/opa"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/openfga"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/rbac"
@@ -26,7 +26,6 @@ import (
 	// aggregator. Adds the type name "valkey" under
 	// rateLimit.distributed.type. Operators who don't enable
 	// distributed limiting pay nothing for the import.
-	_ "github.com/mikeappsec/lightweightauth/pkg/ratelimit/valkey"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/apikey"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/dpop"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/hmac"
@@ -36,6 +35,7 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/oauth2"
 	_ "github.com/mikeappsec/lightweightauth/pkg/mutator/headers"
 	_ "github.com/mikeappsec/lightweightauth/pkg/mutator/jwtissue"
+	_ "github.com/mikeappsec/lightweightauth/pkg/ratelimit/valkey"
 
 	// M10: out-of-process plugin host. Registers the type "grpc-plugin"
 	// under all three module kinds so configs can pull in remote
