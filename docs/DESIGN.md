@@ -2214,7 +2214,7 @@ G7. ~~**POL-SIM-1 — Policy simulation and impact analysis.**~~ ✅ Done
   merge this, who breaks?" before committing the change. Promotion
   trigger: D2 + D4 (audit sinks for replay source).
 
-G8. **POL-TEST-1 — Policy-as-Code testing framework.**
+G8. ~~**POL-TEST-1 — Policy-as-Code testing framework.**~~ ✅ Done
   Gives application teams a CI contract for policy changes. Add
   `lwauthctl test` that runs YAML test fixtures (`request -> expected
   decision`) like Rego unit tests. Generate test scaffolds from
