@@ -10,9 +10,9 @@
 // duties — one team cannot edit another team's auth policy even if they
 // have Kubernetes RBAC `edit` on the namespace.
 //
-// The webhook is intentionally fail-open (failurePolicy: Ignore) so that
-// a webhook outage does not block all AuthConfig changes cluster-wide.
-// This trade-off is documented in DESIGN.md §G2.
+// The webhook is intentionally fail-closed for AuthConfig mutations:
+// resolver errors and missing PolicyBindings deny the request. This
+// preserves separation-of-duties guarantees under control-plane stress.
 package webhook
 
 import (
@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,7 +97,19 @@ func (h *Handler) validate(ctx context.Context, req *admissionv1.AdmissionReques
 	// Map the K8s operation to our policy verb.
 	verb, ok := operationToVerb(req.Operation)
 	if !ok {
-		return allowed("operation not gated")
+		return denied(fmt.Sprintf("unsupported operation %q", req.Operation))
+	}
+
+	// Resolve the resource name. For CREATE admission requests req.Name may
+	// be empty; metadata.name is carried in req.Object.Raw.
+	resourceName, err := resourceNameFromRequest(req)
+	if err != nil {
+		h.log.Warn("admin RBAC: denied malformed admission request",
+			"namespace", req.Namespace,
+			"operation", req.Operation,
+			"error", err,
+		)
+		return denied("malformed admission request: missing resource name")
 	}
 
 	// Look up PolicyBindings in the target namespace.
@@ -106,24 +119,19 @@ func (h *Handler) validate(ctx context.Context, req *admissionv1.AdmissionReques
 			"namespace", req.Namespace,
 			"error", err,
 		)
-		// Fail-open: allow if we can't resolve bindings.
-		return allowed("policy resolver error (fail-open)")
+		// Fail-closed: deny if we can't resolve bindings.
+		return denied("policy resolver error")
 	}
 
-	// If no bindings exist in the namespace, allow (no policy = open).
+	// Enforce explicit policy presence per namespace.
 	if len(bindings) == 0 {
-		return allowed("no PolicyBindings in namespace")
+		return denied("no PolicyBindings in namespace")
 	}
 
 	// Check if any binding authorizes this user.
 	userInfo := UserInfo{
 		Username: req.UserInfo.Username,
 		Groups:   req.UserInfo.Groups,
-	}
-
-	resourceName := ""
-	if req.Name != "" {
-		resourceName = req.Name
 	}
 
 	for i := range bindings {
@@ -168,8 +176,8 @@ func bindingAuthorizes(binding *crdv1alpha1.PolicyBinding, user UserInfo, verb c
 	}
 
 	// Check resource name restriction.
-	if len(binding.Spec.ResourceNames) > 0 && resourceName != "" {
-		if !stringInSlice(resourceName, binding.Spec.ResourceNames) {
+	if len(binding.Spec.ResourceNames) > 0 {
+		if resourceName == "" || !stringInSlice(resourceName, binding.Spec.ResourceNames) {
 			return false
 		}
 	}
@@ -226,6 +234,29 @@ func operationToVerb(op admissionv1.Operation) (crdv1alpha1.PolicyVerb, bool) {
 	default:
 		return "", false
 	}
+}
+
+func resourceNameFromRequest(req *admissionv1.AdmissionRequest) (string, error) {
+	if req.Name != "" {
+		return req.Name, nil
+	}
+	for _, raw := range [][]byte{req.Object.Raw, req.OldObject.Raw} {
+		if len(raw) == 0 {
+			continue
+		}
+		var meta struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			continue
+		}
+		if strings.TrimSpace(meta.Metadata.Name) != "" {
+			return meta.Metadata.Name, nil
+		}
+	}
+	return "", fmt.Errorf("missing request name and object metadata.name")
 }
 
 func stringInSlice(s string, slice []string) bool {

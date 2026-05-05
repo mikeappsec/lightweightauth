@@ -150,7 +150,7 @@ func makeInvalidateHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Requ
 			return
 		}
 		var req struct {
-			Scope   string `json:"scope"`   // "all", "tenant", "subject"
+			Scope   string `json:"scope"` // "all", "tenant", "subject"
 			Tenant  string `json:"tenant"`
 			Subject string `json:"subject"`
 		}

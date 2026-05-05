@@ -30,12 +30,12 @@ type explainRequest struct {
 
 // explainResponse is the JSON output of the explain endpoint.
 type explainResponse struct {
-	Timestamp     string               `json:"timestamp"`
-	PolicyVersion string               `json:"policy_version,omitempty"`
-	TotalLatencyMs float64             `json:"total_latency_ms"`
-	Identity      *explainIdentityJSON `json:"identity,omitempty"`
-	Stages        []explainStageJSON   `json:"stages"`
-	Decision      explainDecisionJSON  `json:"decision"`
+	Timestamp      string               `json:"timestamp"`
+	PolicyVersion  string               `json:"policy_version,omitempty"`
+	TotalLatencyMs float64              `json:"total_latency_ms"`
+	Identity       *explainIdentityJSON `json:"identity,omitempty"`
+	Stages         []explainStageJSON   `json:"stages"`
+	Decision       explainDecisionJSON  `json:"decision"`
 }
 
 type explainIdentityJSON struct {
@@ -46,12 +46,12 @@ type explainIdentityJSON struct {
 }
 
 type explainStageJSON struct {
-	Name       string  `json:"name"`
-	Module     string  `json:"module"`
-	LatencyMs  float64 `json:"latency_ms"`
-	Result     string  `json:"result"`
-	Detail     string  `json:"detail,omitempty"`
-	CacheHit   bool    `json:"cache_hit,omitempty"`
+	Name      string  `json:"name"`
+	Module    string  `json:"module"`
+	LatencyMs float64 `json:"latency_ms"`
+	Result    string  `json:"result"`
+	Detail    string  `json:"detail,omitempty"`
+	CacheHit  bool    `json:"cache_hit,omitempty"`
 }
 
 type explainDecisionJSON struct {

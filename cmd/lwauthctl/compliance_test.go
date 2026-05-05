@@ -12,6 +12,10 @@ import (
 )
 
 func TestCompliance_SOC2_FullyConfigured(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = false
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
 	ac := &config.AuthConfig{
 		Version: "v1.0.0",
 		Identifiers: []config.ModuleSpec{
@@ -55,6 +59,10 @@ func TestCompliance_SOC2_FullyConfigured(t *testing.T) {
 }
 
 func TestCompliance_SOC2_Minimal_HasFailures(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = false
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
 	ac := &config.AuthConfig{} // empty config
 
 	report := evaluate(ac, soc2Framework, "empty.yaml")
@@ -77,6 +85,10 @@ func TestCompliance_SOC2_Minimal_HasFailures(t *testing.T) {
 }
 
 func TestCompliance_AllFrameworks(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = false
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
 	ac := &config.AuthConfig{
 		Identifiers: []config.ModuleSpec{{Name: "jwt", Type: "jwt"}},
 		Authorizers: []config.ModuleSpec{{Name: "rbac", Type: "rbac"}},
@@ -96,6 +108,10 @@ func TestCompliance_AllFrameworks(t *testing.T) {
 }
 
 func TestCompliance_JSONMarshal(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = false
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
 	ac := &config.AuthConfig{
 		Version:     "v2.0",
 		Identifiers: []config.ModuleSpec{{Name: "apikey", Type: "apikey"}},
@@ -122,6 +138,10 @@ func TestCompliance_JSONMarshal(t *testing.T) {
 }
 
 func TestCompliance_DefaultAllow_Fails(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = false
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
 	ac := &config.AuthConfig{
 		Identifiers: []config.ModuleSpec{{Name: "jwt", Type: "jwt"}},
 		Authorizers: []config.ModuleSpec{
@@ -143,7 +163,42 @@ func TestCompliance_DefaultAllow_Fails(t *testing.T) {
 	t.Fatal("CC6.3 not found in controls")
 }
 
-func TestCompliance_PIIRedaction_Pass(t *testing.T) {
+func TestCompliance_PIIRedaction_WarnWithoutRuntimeEvidence(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = false
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
+	ac := &config.AuthConfig{
+		Identifiers: []config.ModuleSpec{{Name: "jwt", Type: "jwt"}},
+		Authorizers: []config.ModuleSpec{{Name: "rbac", Type: "rbac"}},
+		Audit: &config.AuditSpec{
+			Redaction: &config.RedactionSpec{
+				Fields: []config.RedactionField{
+					{Name: "subject", Action: config.RedactHash},
+					{Name: "path", Action: config.RedactDrop},
+				},
+			},
+		},
+	}
+
+	report := evaluate(ac, soc2Framework, "test.yaml")
+
+	for _, c := range report.Controls {
+		if c.ID == "CC9.1" {
+			if c.Status != "warn" {
+				t.Fatalf("CC9.1 should warn without runtime evidence, got %s: %s", c.Status, c.Evidence)
+			}
+			return
+		}
+	}
+	t.Fatal("CC9.1 not found")
+}
+
+func TestCompliance_PIIRedaction_PassWithRuntimeEvidence(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = true
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
 	ac := &config.AuthConfig{
 		Identifiers: []config.ModuleSpec{{Name: "jwt", Type: "jwt"}},
 		Authorizers: []config.ModuleSpec{{Name: "rbac", Type: "rbac"}},
@@ -162,7 +217,7 @@ func TestCompliance_PIIRedaction_Pass(t *testing.T) {
 	for _, c := range report.Controls {
 		if c.ID == "CC9.1" {
 			if c.Status != "pass" {
-				t.Fatalf("CC9.1 should pass with PII redaction, got %s: %s", c.Status, c.Evidence)
+				t.Fatalf("CC9.1 should pass with runtime evidence, got %s: %s", c.Status, c.Evidence)
 			}
 			return
 		}
@@ -171,6 +226,10 @@ func TestCompliance_PIIRedaction_Pass(t *testing.T) {
 }
 
 func TestCompliance_RevocationEnabled_Pass(t *testing.T) {
+	prev := complianceRuntimeVerified
+	complianceRuntimeVerified = false
+	t.Cleanup(func() { complianceRuntimeVerified = prev })
+
 	ac := &config.AuthConfig{
 		Identifiers: []config.ModuleSpec{{Name: "jwt", Type: "jwt"}},
 		Authorizers: []config.ModuleSpec{{Name: "rbac", Type: "rbac"}},

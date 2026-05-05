@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
@@ -28,6 +29,12 @@ func id(acr string, amr []string) *module.Identity {
 		ACR:     acr,
 		AMR:     amr,
 	}
+}
+
+func idWithAuthTime(acr string, amr []string, authTime int64) *module.Identity {
+	id := id(acr, amr)
+	id.Claims["auth_time"] = authTime
+	return id
 }
 
 func TestAssurance_AllowsWhenACRMatches(t *testing.T) {
@@ -314,6 +321,87 @@ func TestAssurance_MaxAgeInChallenge(t *testing.T) {
 	}
 }
 
+func TestAssurance_DeniesWhenMaxAgeExceeded(t *testing.T) {
+	now := time.Now().Unix()
+	az := &authorizer{
+		name: "age-enforced",
+		rules: []Rule{{
+			Require: Requirement{ACR: []string{"urn:mfa"}, MaxAge: 60},
+		}},
+	}
+
+	dec, err := az.Authorize(context.Background(), req("GET", "/"), idWithAuthTime("urn:mfa", nil, now-120))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Allow {
+		t.Fatal("expected deny when auth_time exceeds maxAge")
+	}
+	if dec.StepUp == nil || dec.StepUp.MaxAge != 60 {
+		t.Fatalf("expected step-up MaxAge=60, got %+v", dec.StepUp)
+	}
+}
+
+func TestAssurance_DeniesWhenMaxAgeConfiguredAndAuthTimeMissing(t *testing.T) {
+	az := &authorizer{
+		name: "age-enforced",
+		rules: []Rule{{
+			Require: Requirement{ACR: []string{"urn:mfa"}, MaxAge: 60},
+		}},
+	}
+
+	dec, err := az.Authorize(context.Background(), req("GET", "/"), id("urn:mfa", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Allow {
+		t.Fatal("expected deny when auth_time is missing")
+	}
+	if dec.StepUp == nil || dec.StepUp.MaxAge != 60 {
+		t.Fatalf("expected step-up MaxAge=60, got %+v", dec.StepUp)
+	}
+}
+
+func TestAssurance_AllowsWhenMaxAgeFresh(t *testing.T) {
+	now := time.Now().Unix()
+	az := &authorizer{
+		name: "age-enforced",
+		rules: []Rule{{
+			Require: Requirement{ACR: []string{"urn:mfa"}, MaxAge: 300},
+		}},
+	}
+
+	dec, err := az.Authorize(context.Background(), req("GET", "/"), idWithAuthTime("urn:mfa", nil, now-30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dec.Allow {
+		t.Fatalf("expected allow for fresh auth_time, got deny: %s", dec.Reason)
+	}
+}
+
+func TestAssurance_DeniesWhenAuthTimeInFuture(t *testing.T) {
+	now := time.Now().Unix()
+	az := &authorizer{
+		name: "age-enforced",
+		rules: []Rule{{
+			Require: Requirement{ACR: []string{"urn:mfa"}, MaxAge: 60},
+		}},
+	}
+
+	// Future auth_time must be rejected (G5-03).
+	dec, err := az.Authorize(context.Background(), req("GET", "/"), idWithAuthTime("urn:mfa", nil, now+999999))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Allow {
+		t.Fatal("expected deny when auth_time is in the future")
+	}
+	if dec.StepUp == nil || dec.StepUp.MaxAge != 60 {
+		t.Fatalf("expected step-up MaxAge=60, got %+v", dec.StepUp)
+	}
+}
+
 func TestAssurance_Factory(t *testing.T) {
 	raw := map[string]any{
 		"rules": []any{
@@ -364,5 +452,49 @@ func TestAssurance_FactoryRejectsUnknownKeys(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown key")
+	}
+}
+
+func TestAssurance_FactoryRejectsEmptyRequire(t *testing.T) {
+	_, err := factory("bad", map[string]any{
+		"rules": []any{map[string]any{"require": map[string]any{}}},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty require")
+	}
+}
+
+func TestAssurance_FactoryRejectsUnknownRuleKey(t *testing.T) {
+	_, err := factory("bad", map[string]any{
+		"rules": []any{map[string]any{
+			"require": map[string]any{"acr": []any{"urn:mfa"}},
+			"oops":    true,
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown rule key")
+	}
+}
+
+func TestAssurance_FactoryRejectsUnknownMatchKey(t *testing.T) {
+	_, err := factory("bad", map[string]any{
+		"rules": []any{map[string]any{
+			"match":   map[string]any{"methodz": []any{"GET"}},
+			"require": map[string]any{"acr": []any{"urn:mfa"}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown match key")
+	}
+}
+
+func TestAssurance_FactoryRejectsUnknownRequireKey(t *testing.T) {
+	_, err := factory("bad", map[string]any{
+		"rules": []any{map[string]any{
+			"require": map[string]any{"acr": []any{"urn:mfa"}, "acrr": []any{"urn:otp"}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown require key")
 	}
 }

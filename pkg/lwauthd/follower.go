@@ -166,7 +166,18 @@ func runFollowerStream(ctx context.Context, log *slog.Logger, addr, nodeID strin
 			metrics.RecordCacheDistSF("follower_compile_error")
 			return nil // don't tear down the stream for a bad snapshot
 		}
-		holder.Swap(eng)
+		// G3-02: Serialize engine and audit policy swaps
+		server.ConfigApplyMu.Lock()
+		auditErr := applyAuditPolicy(spec, log)
+		if auditErr == nil {
+			holder.Swap(eng)
+		}
+		server.ConfigApplyMu.Unlock()
+		if auditErr != nil {
+			log.Error("follower: audit policy apply failed",
+				"version", version, "err", auditErr)
+			return nil // keep previous engine/policy
+		}
 		log.Info("follower: engine swapped from configstream", "version", version)
 		return nil
 	})

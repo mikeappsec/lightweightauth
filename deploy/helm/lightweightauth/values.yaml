@@ -179,6 +179,10 @@ gateway:
 # ---------------------------------------------------------------------------
 webhook:
   enabled: false
+  # Security default: deny on webhook errors/timeouts to preserve
+  # admin-plane RBAC enforcement guarantees.
+  failurePolicy: Fail
+  timeoutSeconds: 5
   certManager:
     enabled: false
     issuerRef:

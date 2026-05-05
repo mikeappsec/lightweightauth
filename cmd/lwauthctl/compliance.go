@@ -14,6 +14,8 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/config"
 )
 
+var complianceRuntimeVerified bool
+
 // compliance implements `lwauthctl compliance --config FILE --framework NAME`.
 // It inspects an AuthConfig YAML offline and emits a JSON compliance
 // evidence report against a well-known framework control catalogue.
@@ -22,6 +24,7 @@ func compliance(args []string) {
 	cfgPath := fs.String("config", "", "path to AuthConfig YAML")
 	framework := fs.String("framework", "", "compliance framework: soc2, iso27001, pci-dss, hipaa, fedramp")
 	outPath := fs.String("out", "", "output file (default: stdout)")
+	runtimeVerified := fs.Bool("runtime-verified", false, "assert runtime verification evidence exists for audit/privacy controls")
 	_ = fs.Parse(args)
 
 	if *cfgPath == "" || *framework == "" {
@@ -40,6 +43,8 @@ func compliance(args []string) {
 		fmt.Fprintln(os.Stderr, "load:", err)
 		os.Exit(1)
 	}
+
+	complianceRuntimeVerified = *runtimeVerified
 
 	report := evaluate(ac, fw, *cfgPath)
 
@@ -304,28 +309,40 @@ func checkRevocationEnabled(ac *config.AuthConfig) (string, string) {
 }
 
 func checkAuditConfigured(ac *config.AuthConfig) (string, string) {
-	// Audit is always on by default (pipeline.Engine emits via
-	// audit.Default() on every terminal decision). The presence of
-	// AuditSpec indicates explicit operator configuration.
-	if ac.Audit != nil {
+	if ac.Audit == nil {
+		return "warn", "no explicit audit policy configured (redaction/data residency); runtime sink wiring must be verified"
+	}
+	if !complianceRuntimeVerified {
 		if ac.Audit.Redaction != nil && len(ac.Audit.Redaction.Fields) > 0 {
-			return "pass", fmt.Sprintf("audit configured with %d redaction field(s)", len(ac.Audit.Redaction.Fields))
+			return "warn", "audit policy is statically configured; runtime verification evidence not provided (use --runtime-verified only after live verification)"
 		}
-		if ac.Audit.DataResidency != nil {
-			return "pass", fmt.Sprintf("audit configured with data residency (region: %s)", ac.Audit.DataResidency.Region)
+		if ac.Audit.DataResidency != nil && strings.TrimSpace(ac.Audit.DataResidency.Region) != "" {
+			return "warn", "data residency is statically configured; runtime verification evidence not provided (use --runtime-verified only after live verification)"
 		}
 	}
-	return "pass", "audit events are emitted by default on every authorization decision"
+	if ac.Audit.Redaction != nil && len(ac.Audit.Redaction.Fields) > 0 {
+		return "pass", fmt.Sprintf("audit policy includes %d redaction field(s)", len(ac.Audit.Redaction.Fields))
+	}
+	if ac.Audit.DataResidency != nil && strings.TrimSpace(ac.Audit.DataResidency.Region) != "" {
+		return "pass", fmt.Sprintf("audit policy includes data residency region %q", ac.Audit.DataResidency.Region)
+	}
+	return "warn", "audit policy present but missing explicit redaction/data residency controls"
 }
 
 func checkAuditRetention(ac *config.AuthConfig) (string, string) {
-	// Audit retention is an operator-side concern (sink configuration,
-	// Loki/Kafka retention policies). We can only check that audit is
-	// not explicitly disabled and recommend configuration.
+	// Audit retention is primarily an operator-side concern (sink
+	// configuration, storage retention policies). We only surface static
+	// policy indicators from AuthConfig.
 	if ac.Audit != nil && ac.Audit.DataResidency != nil {
-		return "pass", "data residency configured — ensures regional audit retention compliance"
+		if strings.TrimSpace(ac.Audit.DataResidency.Region) == "" {
+			return "warn", "data residency block present but region is empty — retention routing cannot be validated"
+		}
+		if !complianceRuntimeVerified {
+			return "warn", "data residency region configured; runtime retention verification evidence not provided (use --runtime-verified only after live verification)"
+		}
+		return "pass", "data residency region configured; verify sink/storage retention controls out-of-band"
 	}
-	return "warn", "no data-residency or retention policy in config — verify audit retention at the sink/storage layer"
+	return "warn", "no data-residency policy in config — verify audit retention at the sink/storage layer"
 }
 
 func checkPolicyVersionSet(ac *config.AuthConfig) (string, string) {
@@ -339,11 +356,26 @@ func checkPIIRedaction(ac *config.AuthConfig) (string, string) {
 	if ac.Audit == nil || ac.Audit.Redaction == nil || len(ac.Audit.Redaction.Fields) == 0 {
 		return "warn", "no PII redaction configured — audit events may contain personal data"
 	}
-	fields := make([]string, len(ac.Audit.Redaction.Fields))
-	for i, f := range ac.Audit.Redaction.Fields {
-		fields[i] = f.Name + "=" + string(f.Action)
+	valid := make([]string, 0, len(ac.Audit.Redaction.Fields))
+	for _, f := range ac.Audit.Redaction.Fields {
+		name := strings.TrimSpace(f.Name)
+		if !isKnownRedactionField(name) {
+			return "fail", fmt.Sprintf("unknown redaction field %q", f.Name)
+		}
+		switch f.Action {
+		case config.RedactHash, config.RedactDrop:
+			valid = append(valid, name+"="+string(f.Action))
+		default:
+			return "fail", fmt.Sprintf("unsupported redaction action %q for field %q", f.Action, f.Name)
+		}
 	}
-	return "pass", fmt.Sprintf("PII redaction: %s", strings.Join(fields, ", "))
+	if len(valid) == 0 {
+		return "warn", "PII redaction policy is present but has no effective fields"
+	}
+	if !complianceRuntimeVerified {
+		return "warn", fmt.Sprintf("PII redaction policy present (%s), but runtime verification evidence not provided (use --runtime-verified only after live verification)", strings.Join(valid, ", "))
+	}
+	return "pass", fmt.Sprintf("PII redaction policy: %s", strings.Join(valid, ", "))
 }
 
 func checkSecretRefUsed(ac *config.AuthConfig) (string, string) {
@@ -377,6 +409,15 @@ func checkCacheEnabled(ac *config.AuthConfig) (string, string) {
 		return "warn", "decision cache not configured — every request evaluates the full authorization pipeline"
 	}
 	return "pass", fmt.Sprintf("decision cache enabled (backend: %s, TTL: %s)", ac.Cache.Backend, ac.Cache.TTL)
+}
+
+func isKnownRedactionField(name string) bool {
+	switch name {
+	case "subject", "path", "host", "deny_reason", "identity_source", "trace_id":
+		return true
+	default:
+		return false
+	}
 }
 
 // --- Evaluation engine ----------------------------------------------------

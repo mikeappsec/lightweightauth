@@ -14,6 +14,7 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	crdv1alpha1 "github.com/mikeappsec/lightweightauth/api/crd/v1alpha1"
@@ -64,15 +65,15 @@ func binding(name, ns string, subjects []crdv1alpha1.PolicySubject, verbs []crdv
 	}
 }
 
-func TestWebhook_AllowsWhenNoBindings(t *testing.T) {
+func TestWebhook_DeniesWhenNoBindings(t *testing.T) {
 	resolver := NewStaticResolver(nil)
 	handler := NewHandler(resolver, nil)
 
 	review := makeReview(admissionv1.Create, "alice", nil, "authconfigs", "my-config", "team-a")
 	resp := postReview(t, handler, review)
 
-	if !resp.Response.Allowed {
-		t.Fatalf("expected allowed, got denied: %s", resp.Response.Result.Message)
+	if resp.Response.Allowed {
+		t.Fatalf("expected denied when namespace has no PolicyBindings")
 	}
 }
 
@@ -207,6 +208,31 @@ func TestWebhook_ResourceNameRestriction(t *testing.T) {
 	if resp2.Response.Allowed {
 		t.Fatal("expected denied for non-matching resource name, got allowed")
 	}
+
+	// CREATE with empty req.Name must still enforce resourceNames by using metadata.name.
+	review3 := makeReview(admissionv1.Create, "alice", nil, "authconfigs", "", "ns1")
+	objAllowed := map[string]any{"metadata": map[string]any{"name": "allowed-config"}}
+	rawAllowed, err := json.Marshal(objAllowed)
+	if err != nil {
+		t.Fatalf("marshal object: %v", err)
+	}
+	review3.Request.Object = runtime.RawExtension{Raw: rawAllowed}
+	resp3 := postReview(t, handler, review3)
+	if !resp3.Response.Allowed {
+		t.Fatalf("expected CREATE allowed for metadata.name matching resourceNames")
+	}
+
+	review4 := makeReview(admissionv1.Create, "alice", nil, "authconfigs", "", "ns1")
+	objDenied := map[string]any{"metadata": map[string]any{"name": "other-config"}}
+	rawDenied, err := json.Marshal(objDenied)
+	if err != nil {
+		t.Fatalf("marshal object: %v", err)
+	}
+	review4.Request.Object = runtime.RawExtension{Raw: rawDenied}
+	resp4 := postReview(t, handler, review4)
+	if resp4.Response.Allowed {
+		t.Fatalf("expected CREATE denied for metadata.name not in resourceNames")
+	}
 }
 
 func TestWebhook_NonAuthConfigAllowed(t *testing.T) {
@@ -230,15 +256,35 @@ func TestWebhook_NonAuthConfigAllowed(t *testing.T) {
 	}
 }
 
-func TestWebhook_FailOpenOnResolverError(t *testing.T) {
+func TestWebhook_FailClosedOnResolverError(t *testing.T) {
 	resolver := &errorResolver{}
 	handler := NewHandler(resolver, nil)
 
 	review := makeReview(admissionv1.Create, "bob", nil, "authconfigs", "cfg", "ns1")
 	resp := postReview(t, handler, review)
 
-	if !resp.Response.Allowed {
-		t.Fatalf("expected fail-open on resolver error, got denied")
+	if resp.Response.Allowed {
+		t.Fatalf("expected fail-closed on resolver error, got allowed")
+	}
+}
+
+func TestWebhook_DeniesUnknownOperation(t *testing.T) {
+	resolver := NewStaticResolver(map[string][]crdv1alpha1.PolicyBinding{
+		"ns1": {
+			binding("admins", "ns1",
+				[]crdv1alpha1.PolicySubject{{Kind: crdv1alpha1.SubjectKindUser, Name: "alice"}},
+				[]crdv1alpha1.PolicyVerb{crdv1alpha1.PolicyVerbAll},
+				nil,
+			),
+		},
+	})
+	handler := NewHandler(resolver, nil)
+
+	// CONNECT is not a supported AuthConfig mutation operation.
+	review := makeReview(admissionv1.Operation("CONNECT"), "alice", nil, "authconfigs", "cfg", "ns1")
+	resp := postReview(t, handler, review)
+	if resp.Response.Allowed {
+		t.Fatalf("expected denied for unknown operation")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/mikeappsec/lightweightauth/internal/config"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -99,6 +100,9 @@ func startCRDController(ctx context.Context, log *slog.Logger, opts Options, hol
 			Name:      opts.AuthConfigName,
 		},
 		Broker: broker,
+		AfterSwap: func(spec *config.AuthConfig) error {
+			return applyAuditPolicy(spec, log)
+		},
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("setup reconciler: %w", err)
@@ -173,13 +177,22 @@ func startFileWatcher(ctx context.Context, log *slog.Logger, path string, holder
 				log.Error("file watcher", "err", err)
 			case <-debounce:
 				debounce = nil
-				eng, err := LoadEngine(path)
+				eng, ac, err := loadEngineWithConfig(path)
 				if err != nil {
 					log.Error("config reload failed; keeping previous engine",
 						"path", path, "err", err)
 					continue
 				}
+				server.ConfigApplyMu.Lock()
+				err = applyAuditPolicy(ac, log)
+				if err != nil {
+					server.ConfigApplyMu.Unlock()
+					log.Error("audit policy apply failed; keeping previous engine",
+						"path", path, "err", err)
+					continue
+				}
 				holder.Swap(eng)
+				server.ConfigApplyMu.Unlock()
 				log.Info("config reloaded", "path", path)
 			}
 		}
