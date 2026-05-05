@@ -173,6 +173,17 @@ gateway:
 
   podAnnotations: {}
   nodeSelector: {}
+
+# ---------------------------------------------------------------------------
+# Admission Webhook (G2 — Admin RBAC)
+# ---------------------------------------------------------------------------
+webhook:
+  enabled: false
+  certManager:
+    enabled: false
+    issuerRef:
+      name: ""
+      kind: Issuer
   tolerations: []
   affinity: {}
 

@@ -44,6 +44,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&AuthPolicy{}, &AuthPolicyList{},
 		&IdentityProvider{}, &IdentityProviderList{},
 		&ClusterPeer{}, &ClusterPeerList{},
+		&PolicyBinding{}, &PolicyBindingList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil

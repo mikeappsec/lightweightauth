@@ -2153,7 +2153,7 @@ benefit: removing blockers for regulated adoption first, then reducing
 policy-change risk, then improving supportability, and finally adding
 advanced or narrower integrations.
 
-G1. **SEC-EXTREF-1 — External secret-backend resolvers.**
+G1. ~~**SEC-EXTREF-1 — External secret-backend resolvers.**~~ ✅ Done.
   Highest enterprise benefit because many regulated customers cannot
   accept plaintext secrets in Kubernetes manifests. Add a pluggable
   `SecretResolver` interface in `pkg/secrets`. Reference format:
@@ -2163,7 +2163,7 @@ G1. **SEC-EXTREF-1 — External secret-backend resolvers.**
   Secrets Store driver. Promotion trigger: D1 (key rotation) shipped —
   secret refs feed rotatable identifiers.
 
-G2. **ADMIN-RBAC-1 — RBAC for the admin plane itself.**
+G2. ~~**ADMIN-RBAC-1 — RBAC for the admin plane itself.**~~ ✅ Done.
   Required by separation-of-duties programs and most enterprise change
   management. Per-tenant policy authors: who can edit which
   `AuthConfig` CRD? Today anyone with K8s edit on the namespace can
@@ -2172,7 +2172,7 @@ G2. **ADMIN-RBAC-1 — RBAC for the admin plane itself.**
   (admin-plane auth) shipped — that gates *who* can call the API; G2
   gates *which* policies they can edit.
 
-G3. **DATA-RES-1 — PII redaction and data residency.**
+G3. ~~**DATA-RES-1 — PII redaction and data residency.**~~ ✅ Done.
   Non-negotiable for EU and multi-region customers. Audit events gain
   configurable PII fields that are auto-hashed or dropped per region
   (GDPR Art. 17 right-to-erasure). Audit sink routing by tenant region
