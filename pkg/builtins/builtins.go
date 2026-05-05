@@ -12,6 +12,7 @@
 package builtins
 
 import (
+	_ "github.com/mikeappsec/lightweightauth/pkg/authz/assurance"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/composite"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/cel"
 	_ "github.com/mikeappsec/lightweightauth/pkg/authz/opa"

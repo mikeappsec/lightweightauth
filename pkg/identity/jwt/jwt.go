@@ -108,7 +108,41 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		Subject: subj,
 		Claims:  claims,
 		Source:  i.name,
+		ACR:     extractACR(claims),
+		AMR:     extractAMR(claims),
 	}, nil
+}
+
+// extractACR reads the OIDC "acr" claim (Authentication Context Class
+// Reference) from the JWT claims map.
+func extractACR(claims map[string]any) string {
+	if v, ok := claims["acr"].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// extractAMR reads the OIDC "amr" claim (Authentication Methods References,
+// RFC 8176) from the JWT claims map. The claim is typically a JSON array
+// of strings.
+func extractAMR(claims map[string]any) []string {
+	switch v := claims["amr"].(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	case string:
+		return []string{v}
+	}
+	return nil
 }
 
 func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, error) {

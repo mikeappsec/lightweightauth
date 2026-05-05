@@ -2189,7 +2189,7 @@ G4. ~~**COMP-REPORT-1 — Compliance report generator.**~~ ✅ Done.
   Scheduled generation via CronJob; exportable to GRC tools. Promotion
   trigger: D2 + D4 (versioned policy + durable audit).
 
-G5. **ID-MFA-1 — Step-up MFA and assurance-level policies.**
+G5. ~~**ID-MFA-1 — Step-up MFA and assurance-level policies.**~~ ✅ Done.
   New recommended feature. Enterprise buyers often need policies like
   "allow read with normal SSO, require phishing-resistant MFA for admin
   writes". Add identity assurance claims (`acr`, `amr`, device posture,

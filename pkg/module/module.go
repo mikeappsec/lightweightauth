@@ -90,6 +90,16 @@ type Identity struct {
 	Subject string
 	Claims  map[string]any
 	Source  string // name of the module that produced it
+
+	// ACR is the Authentication Context Class Reference (OIDC Core §2).
+	// Populated from the "acr" claim when present. Example values:
+	// "urn:mfa", "urn:otp", "urn:hwk" (hardware key), "0" (no assurance).
+	ACR string
+
+	// AMR is the Authentication Methods References (RFC 8176).
+	// Populated from the "amr" claim when present. Multiple methods
+	// are space-separated. Example: "pwd otp" (password + OTP).
+	AMR []string
 }
 
 // Decision is what the pipeline ultimately returns to the caller / Envoy.
@@ -99,6 +109,26 @@ type Decision struct {
 	ResponseHeaders  map[string]string // headers to add on allow (e.g. X-User)
 	UpstreamHeaders  map[string]string // headers Envoy should inject upstream
 	Reason           string
+
+	// StepUp is non-nil when the deny is a step-up challenge rather than
+	// a hard deny. The caller should return 401 with a WWW-Authenticate
+	// header containing the required acr_values so the client/IdP can
+	// trigger a stronger authentication flow. Set by the assurance
+	// authorizer (G5 — ID-MFA-1).
+	StepUp *StepUpChallenge
+}
+
+// StepUpChallenge carries the parameters for a step-up MFA challenge.
+type StepUpChallenge struct {
+	// RequiredACR is the acr value(s) the client must satisfy.
+	// Example: "urn:mfa", "urn:hwk".
+	RequiredACR []string
+	// RequiredAMR is the amr method(s) the client must prove.
+	// Example: ["otp"], ["hwk", "pin"].
+	RequiredAMR []string
+	// MaxAge is the maximum acceptable authentication age in seconds.
+	// Zero means no max-age constraint.
+	MaxAge int
 }
 
 // Identifier extracts a credential from the request (JWT, API key, mTLS cert,
