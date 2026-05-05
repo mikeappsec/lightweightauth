@@ -2223,7 +2223,7 @@ G8. ~~**POL-TEST-1 — Policy-as-Code testing framework.**~~ ✅ Done
   `AuthConfig` CRDs so PRs require passing tests. Promotion trigger:
   D2 (policy versioning) shipped.
 
-G9. **ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**
+G9. ~~**ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**~~ ✅ Done
   Common procurement blocker in FSI, healthcare, education, and
   government. Add `pkg/identity/saml` (SP-initiated and IdP-initiated
   flows, signature validation, NotBefore/NotOnOrAfter) and
