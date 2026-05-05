@@ -66,7 +66,7 @@ jobs:
       # who wants to spot-check rendering on a PR can download it
       # without running mkdocs locally. Retention kept short because
       # the build is reproducible from the PR head.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: site-${{ github.sha }}
           path: site/
