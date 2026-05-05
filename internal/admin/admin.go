@@ -66,6 +66,7 @@ const (
 	VerbInvalidateCache Verb = "invalidate_cache"
 	VerbRevokeToken     Verb = "revoke_token"
 	VerbReadAudit       Verb = "read_audit"
+	VerbExplain         Verb = "explain"
 )
 
 // AllVerbs is the complete set of admin RBAC verbs.
@@ -75,6 +76,7 @@ var AllVerbs = []Verb{
 	VerbInvalidateCache,
 	VerbRevokeToken,
 	VerbReadAudit,
+	VerbExplain,
 }
 
 // Identity represents an authenticated admin caller.

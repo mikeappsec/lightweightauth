@@ -2197,9 +2197,9 @@ G5. ~~**ID-MFA-1 — Step-up MFA and assurance-level policies.**~~ ✅ Done.
   can return a step-up challenge hint to the upstream or IdP. Promotion
   trigger: D2 (policy versioning) and OAuth2/OIDC flow docs are stable.
 
-G6. **EXPLAIN-API-1 — Decision explainability API.**
+G6. ~~**EXPLAIN-API-1 — Decision explainability API.**~~ ✅ Done
   High day-two value: support teams need to answer "why was this denied?"
-  without reproducing a live request. `POST /v1/explain` (admin-gated)
+  without reproducing a live request. `POST /v1/admin/explain` (admin-gated)
   returns a full trace for a request: which identifier matched, which
   authorizer ran, which rule fired, which mutators executed, with
   per-stage timing and the policy version evaluated. Outputs are
