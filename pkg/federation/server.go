@@ -42,8 +42,8 @@ type Server struct {
 	mu     sync.RWMutex
 	latest *Snapshot
 
-	subscribers     map[string]chan *Snapshot // clusterID -> channel
-	subscribersMu   sync.Mutex
+	subscribers   map[string]chan *Snapshot // clusterID -> channel
+	subscribersMu sync.Mutex
 
 	revocationHandler RevocationHandler
 }
@@ -116,6 +116,14 @@ func (s *Server) Subscribe(clusterID ClusterID) (<-chan *Snapshot, error) {
 		return nil, fmt.Errorf("federation: unknown peer %q — not in configured peers list", clusterID)
 	}
 
+	// Snapshot latest before subscriber registration so we avoid taking
+	// s.mu while holding subscribersMu (prevents lock-order inversion with
+	// Publish, which takes s.mu then subscribersMu).
+	var latest *Snapshot
+	s.mu.RLock()
+	latest = s.latest
+	s.mu.RUnlock()
+
 	s.subscribersMu.Lock()
 	// Prevent overwrite: close existing channel if peer re-subscribes.
 	if existing, ok := s.subscribers[string(clusterID)]; ok {
@@ -123,17 +131,16 @@ func (s *Server) Subscribe(clusterID ClusterID) (<-chan *Snapshot, error) {
 	}
 	ch := make(chan *Snapshot, 8) // buffered to absorb bursts
 	s.subscribers[string(clusterID)] = ch
-	s.subscribersMu.Unlock()
 
-	// Send current snapshot if available.
-	s.mu.RLock()
-	if s.latest != nil {
+	// Send current snapshot (captured above) while still holding
+	// subscribersMu, so Unsubscribe cannot close ch concurrently.
+	if latest != nil {
 		select {
-		case ch <- s.latest:
+		case ch <- latest:
 		default:
 		}
 	}
-	s.mu.RUnlock()
+	s.subscribersMu.Unlock()
 
 	slog.Info("federation: peer subscribed", "peer", clusterID)
 	return ch, nil

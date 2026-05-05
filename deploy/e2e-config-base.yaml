@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lwauth-config
+data:
+  config.yaml: |
+    identifiers:
+      - name: bearer-introspect
+        type: oauth2-introspection
+        config:
+          url: "http://lwauth-idp.default.svc.cluster.local:9090/oauth2/introspect"
+          maxCacheTtl: "60s"
+      - name: dpop-introspect
+        type: dpop
+        config:
+          required: true
+          skew: "60s"
+          inner:
+            type: oauth2-introspection
+            name: dpop-introspect-inner
+            config:
+              url: "http://lwauth-idp.default.svc.cluster.local:9090/oauth2/introspect"
+              maxCacheTtl: "60s"
+    authorizers:
+      - name: allow-all
+        type: cel
+        config:
+          expression: "true"
+    response:
+      - name: forward-identity
+        type: header-add
+        config:
+          subjectHeader: "X-Auth-Subject"

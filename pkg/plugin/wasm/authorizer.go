@@ -25,13 +25,19 @@ func (a *Authorizer) Name() string { return a.mod.name }
 // Authorize calls the guest "authorize" export with the serialized request
 // and identity.
 func (a *Authorizer) Authorize(ctx context.Context, r *module.Request, id *module.Identity) (*module.Decision, error) {
+	var subject string
+	var claims map[string]any
+	if id != nil {
+		subject = id.Subject
+		claims = id.Claims
+	}
 	req := authorizeRequest{
 		Method:  r.Method,
 		Host:    r.Host,
 		Path:    r.Path,
 		Headers: r.Headers,
-		Subject: id.Subject,
-		Claims:  id.Claims,
+		Subject: subject,
+		Claims:  claims,
 	}
 
 	var resp authorizeResponse

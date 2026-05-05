@@ -3,7 +3,12 @@
 
 package oauth2
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/mikeappsec/lightweightauth/pkg/module"
+)
 
 func TestSafeRedirect(t *testing.T) {
 	t.Parallel()
@@ -63,5 +68,20 @@ func TestSafeRedirect(t *testing.T) {
 				t.Errorf("safeRedirect(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestOAuth2_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := parseConfig(map[string]any{
+		"clientId":     "test",
+		"cookie":       map[string]any{"secret": "s"},
+		"defaultAllow": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
 	}
 }

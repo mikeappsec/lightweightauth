@@ -80,7 +80,15 @@ func (a *authorizer) extractRoles(id *module.Identity) []string {
 	return nil
 }
 
+var knownKeys = map[string]struct{}{
+	"rolesFrom": {},
+	"allow":     {},
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
+	if err := module.CheckUnknownKeys("rbac", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	cfg := Config{RolesFrom: "claim:roles"}
 	if v, ok := raw["rolesFrom"].(string); ok && v != "" {
 		cfg.RolesFrom = v

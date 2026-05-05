@@ -60,6 +60,10 @@ type AuthConfigReconciler struct {
 	// In single-process embedders (cmd/lwauth) this stays nil; the
 	// in-process Holder.Swap is enough.
 	Broker *configstream.Broker
+
+	// AfterSwap runs under the config-apply lock right before Holder.Swap.
+	// Used by lwauthd to wire runtime audit policy for the same spec.
+	AfterSwap func(spec *config.AuthConfig) error
 }
 
 // Reconcile compiles the watched AuthConfig's .spec into a
@@ -109,15 +113,24 @@ func (r *AuthConfigReconciler) Reconcile(ctx context.Context, req reconcile.Requ
 		return reconcile.Result{}, nil //nolint:nilerr // we recorded it on status
 	}
 
+	// Publish/callback use a deep-copied spec so nobody observes cache mutations.
+	specCopy := ac.DeepCopy().Spec
+
+	server.ConfigApplyMu.Lock()
+	if r.AfterSwap != nil {
+		if err := r.AfterSwap(&specCopy); err != nil {
+			server.ConfigApplyMu.Unlock()
+			logger.Error(err, "post-compile policy wiring failed; previous engine kept running")
+			setReady(&ac, metav1.ConditionFalse, v1alpha1.ReasonCompileError, err.Error())
+			_ = r.Client.Status().Update(ctx, &ac)
+			return reconcile.Result{}, nil //nolint:nilerr // surfaced on status
+		}
+	}
 	r.Holder.Swap(eng)
 	if r.Broker != nil {
-		// Publish a deep-copied spec so subscribers can't see
-		// further mutations. The CR object's spec is shared with
-		// the local cache; copying via the existing DeepCopy keeps
-		// us honest.
-		specCopy := ac.DeepCopy().Spec
 		r.Broker.Publish(&specCopy)
 	}
+	server.ConfigApplyMu.Unlock()
 
 	setReady(&ac, metav1.ConditionTrue, v1alpha1.ReasonCompiled, "compiled and swapped")
 	if err := r.Client.Status().Update(ctx, &ac); err != nil {

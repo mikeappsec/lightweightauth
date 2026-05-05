@@ -1,0 +1,42 @@
+﻿image:
+  repository: lightweightauth
+  tag: dev
+  pullPolicy: Never
+
+replicaCount: 1
+
+config:
+  inline: |
+    secrets:
+      defaultTtl: "5m"
+      backends:
+        vault:
+          addr: "http://vault.default.svc.cluster.local:8200"
+          token: "root"
+
+    identifiers:
+      - name: hmac-svc
+        type: hmac
+        config:
+          clockSkew: "5m"
+          keys:
+            svc-a:
+              secret: "vault://secret/data/lwauth/hmac-keys#svc-a"
+              subject: "service-a"
+              roles:
+                - machine
+
+    authorizers:
+      - name: allow-all
+        type: cel
+        config:
+          expression: "true"
+
+    response:
+      - name: forward-identity
+        type: header-add
+        config:
+          subjectHeader: "X-Auth-Subject"
+
+networkPolicy:
+  enabled: false

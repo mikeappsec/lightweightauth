@@ -46,14 +46,28 @@ type AuthConfig struct {
 	WithBody     bool `json:"withBody,omitempty" yaml:"withBody,omitempty"`
 	MaxBodyBytes int  `json:"maxBodyBytes,omitempty" yaml:"maxBodyBytes,omitempty"`
 
-	Identifiers []ModuleSpec      `json:"identifiers" yaml:"identifiers"`
-	Authorizers []ModuleSpec      `json:"authorizers" yaml:"authorizers"`
-	Response    []ModuleSpec      `json:"response,omitempty" yaml:"response,omitempty"`
-	Cache       *CacheSpec        `json:"cache,omitempty" yaml:"cache,omitempty"`
-	RateLimit   *ratelimit.Spec   `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
-	Identifier  IdentifierMode   `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
-	Canary      *CanarySpec      `json:"canary,omitempty" yaml:"canary,omitempty"`
-	Revocation  *RevocationSpec  `json:"revocation,omitempty" yaml:"revocation,omitempty"`
+	Identifiers []ModuleSpec    `json:"identifiers" yaml:"identifiers"`
+	Authorizers []ModuleSpec    `json:"authorizers" yaml:"authorizers"`
+	Response    []ModuleSpec    `json:"response,omitempty" yaml:"response,omitempty"`
+	Cache       *CacheSpec      `json:"cache,omitempty" yaml:"cache,omitempty"`
+	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
+	Identifier  IdentifierMode  `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
+	Canary      *CanarySpec     `json:"canary,omitempty" yaml:"canary,omitempty"`
+	Revocation  *RevocationSpec `json:"revocation,omitempty" yaml:"revocation,omitempty"`
+	Secrets     *SecretsSpec    `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	Audit       *AuditSpec      `json:"audit,omitempty" yaml:"audit,omitempty"`
+}
+
+// SecretsSpec configures the external secret-backend resolver (G1).
+// When present, any string value in a module's Config map that matches a
+// registered URI scheme (e.g. vault://...) is resolved before the module
+// factory is called. This removes plaintext secrets from manifests.
+type SecretsSpec struct {
+	// DefaultTTL is the cache duration for resolved secrets. Default "5m".
+	DefaultTTL string `json:"defaultTtl,omitempty" yaml:"defaultTtl,omitempty"`
+	// Backends maps scheme names to backend-specific configuration.
+	// Example: {"vault": {"addr": "https://vault.local:8200", "role": "lwauth"}}
+	Backends map[string]map[string]any `json:"backends,omitempty" yaml:"backends,omitempty"`
 }
 
 // CanarySpec configures canary policy evaluation (D3 — ENT-POLICY-2).
@@ -208,4 +222,66 @@ type RevocationSpec struct {
 	// unreachable. "deny" (default) fails closed (401). "allow" fails
 	// open (skip revocation check).
 	OnStoreError string `json:"onStoreError,omitempty" yaml:"onStoreError,omitempty"`
+}
+
+// AuditSpec configures per-tenant PII redaction and data-residency routing
+// for audit events (G3 — DATA-RES-1).
+type AuditSpec struct {
+	// Redaction configures PII field handling in audit events.
+	Redaction *RedactionSpec `json:"redaction,omitempty" yaml:"redaction,omitempty"`
+
+	// DataResidency configures region-based audit sink routing.
+	DataResidency *DataResidencySpec `json:"dataResidency,omitempty" yaml:"dataResidency,omitempty"`
+}
+
+// RedactionSpec configures per-field PII handling in audit events.
+type RedactionSpec struct {
+	// Fields lists the audit event fields to redact and how to handle them.
+	// Recognised field names: "subject", "path", "host", "deny_reason",
+	// "identity_source", "trace_id".
+	Fields []RedactionField `json:"fields" yaml:"fields"`
+}
+
+// RedactionField specifies how a single audit event field is redacted.
+type RedactionField struct {
+	// Name is the audit event field name (json tag). Required.
+	Name string `json:"name" yaml:"name"`
+
+	// Action controls what happens to the field value.
+	// "hash" — replace with SHA-256 HMAC (preserves correlation without
+	//          revealing the plaintext).
+	// "drop" — replace with "" (GDPR Art. 17 erasure).
+	Action RedactionAction `json:"action" yaml:"action"`
+}
+
+// RedactionAction is the transformation applied to a PII field.
+type RedactionAction string
+
+const (
+	// RedactHash replaces the field value with HMAC-SHA-256 of the original.
+	// A per-instance HMAC key is derived from the AuthConfig's TenantID +
+	// a configurable secret to prevent rainbow-table correlation across
+	// tenants.
+	RedactHash RedactionAction = "hash"
+	// RedactDrop replaces the field value with an empty string.
+	RedactDrop RedactionAction = "drop"
+)
+
+// DataResidencySpec constrains where audit events for this tenant are
+// routed. The Region tag is matched against sink labels configured at
+// the operator level (e.g., "eu", "us", "ap").
+type DataResidencySpec struct {
+	// Region is the data-residency region for this tenant's audit events.
+	// Events are only sent to sinks whose label matches this region.
+	// Example: "eu", "us-east", "ap-southeast".
+	Region string `json:"region" yaml:"region"`
+}
+
+// ToAuditRedactionFields converts config RedactionFields to the audit
+// package's field format (same shape, avoids import cycle).
+func (s *RedactionSpec) ToAuditFields() []RedactionField {
+	if s == nil {
+		return nil
+	}
+	return s.Fields
 }

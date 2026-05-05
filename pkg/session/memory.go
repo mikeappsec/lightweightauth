@@ -23,8 +23,8 @@ import (
 
 // MemoryStoreConfig parameterises a MemoryStore.
 type MemoryStoreConfig struct {
-	Name     string        // cookie name; default "_lwauth_sid"
-	Path     string        // default "/"
+	Name     string // cookie name; default "_lwauth_sid"
+	Path     string // default "/"
 	Domain   string
 	Secure   *bool         // default true
 	HTTPOnly *bool         // default true
@@ -125,7 +125,13 @@ func (m *MemoryStore) Load(r *http.Request) (*Session, error) {
 		delete(m.entries, ck.Value)
 		return nil, nil
 	}
-	return s, nil
+	// Return a deep copy so concurrent callers cannot race on the Claims map.
+	cp := *s
+	cp.Claims = make(map[string]any, len(s.Claims))
+	for k, v := range s.Claims {
+		cp.Claims[k] = v
+	}
+	return &cp, nil
 }
 
 // Clear removes the server-side row and writes an expired cookie.

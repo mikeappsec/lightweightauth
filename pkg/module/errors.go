@@ -3,7 +3,12 @@
 
 package module
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // Sentinel errors returned by modules and recognized by the pipeline.
 //
@@ -36,3 +41,21 @@ var (
 	// instance.
 	ErrConfig = errors.New("module: configuration error")
 )
+
+// CheckUnknownKeys returns an ErrConfig if raw contains any key not in
+// the known set. This prevents silent misconfiguration where a typo or
+// unsupported field is silently ignored — potentially degrading security
+// posture without any operator feedback.
+func CheckUnknownKeys(moduleName, instanceName string, raw map[string]any, known map[string]struct{}) error {
+	var bad []string
+	for k := range raw {
+		if _, ok := known[k]; !ok {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	sort.Strings(bad)
+	return fmt.Errorf("%w: %s %q: unknown config key(s): %s", ErrConfig, moduleName, instanceName, strings.Join(bad, ", "))
+}

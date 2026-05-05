@@ -5,6 +5,7 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
@@ -65,5 +66,18 @@ func TestRBAC_StringRoleAlsoWorks(t *testing.T) {
 	dec, _ := a.Authorize(context.Background(), &module.Request{}, id)
 	if !dec.Allow {
 		t.Error("Allow = false, want true (string-form roles claim)")
+	}
+}
+
+func TestRBAC_RejectsUnknownConfigKey(t *testing.T) {
+	_, err := factory("bad", map[string]any{
+		"allow":        []any{"admin"},
+		"defaultAllow": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
 	}
 }

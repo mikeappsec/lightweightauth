@@ -108,20 +108,21 @@ lightweightauth/
 │   ├── cache/               # decision + JWKS + token-introspection cache
 │   └── config/              # config loading, hot reload
 ├── pkg/
-│   ├── module/              # public plugin interfaces (stable API)
+│   ├── module/              # public plugin interfaces + decorator infrastructure
 │   ├── identity/            # JWT, OAuth2, mTLS, HMAC, API key, DPoP, introspection
 │   ├── authz/               # RBAC, CEL, OPA, OpenFGA, SpiceDB, composite
 │   ├── mutator/             # header add/remove/passthrough, JWT issue
 │   ├── plugin/              # gRPC + WASM plugin runtimes
+│   ├── connpool/            # process-wide connection singletons (Valkey, HTTP, gRPC)
 │   ├── ratelimit/           # per-tenant token-bucket rate limiter
-│   ├── revocation/          # credential deny-list (memory + Valkey)
+│   ├── revocation/          # credential deny-list (memory + Valkey + parallel checker)
 │   ├── session/             # browser session (cookie + memory stores)
-│   ├── keyrotation/         # verifier-side key rotation with overlap model
+│   ├── keyrotation/         # verifier-side key rotation with overlap model + reaper
 │   ├── upstream/            # circuit breaker + retry budget
 │   ├── bundle/              # OCI policy bundle pack/push/pull
 │   ├── federation/          # multi-cluster config + revocation sync
 │   ├── configstream/        # xDS-style config snapshot streaming
-│   ├── observability/       # metrics, tracing, audit
+│   ├── observability/       # metrics, tracing, audit (unified facade singleton)
 │   ├── buildinfo/           # build metadata + FIPS status
 │   ├── lwauthd/             # public daemon embedding surface
 │   └── client/go/           # Go SDK for callers of lwauth-protected services

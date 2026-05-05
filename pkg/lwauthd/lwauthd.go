@@ -115,13 +115,13 @@ type Options struct {
 	// [buildGRPCServerOptions] for the wiring; they bound how long
 	// an idle / long-lived / silent gRPC connection can hold a
 	// server goroutine and FD.
-	GRPCKeepaliveMinTime       time.Duration // default 30s  (enforcement: client ping floor)
-	GRPCKeepaliveTime          time.Duration // default 1m   (server-initiated ping period)
-	GRPCKeepaliveTimeout       time.Duration // default 20s  (server ping ack deadline)
-	GRPCMaxConnectionIdle      time.Duration // default 5m   (close idle conns after)
-	GRPCMaxConnectionAge       time.Duration // default 30m  (rotate any conn after)
-	GRPCMaxConnectionAgeGrace  time.Duration // default 30s  (graceful close window)
-	GRPCMaxConcurrentStreams   int           // default 1024 (HTTP/2 streams per conn)
+	GRPCKeepaliveMinTime      time.Duration // default 30s  (enforcement: client ping floor)
+	GRPCKeepaliveTime         time.Duration // default 1m   (server-initiated ping period)
+	GRPCKeepaliveTimeout      time.Duration // default 20s  (server ping ack deadline)
+	GRPCMaxConnectionIdle     time.Duration // default 5m   (close idle conns after)
+	GRPCMaxConnectionAge      time.Duration // default 30m  (rotate any conn after)
+	GRPCMaxConnectionAgeGrace time.Duration // default 30s  (graceful close window)
+	GRPCMaxConcurrentStreams  int           // default 1024 (HTTP/2 streams per conn)
 
 	// WatchConfigFile, if true, starts an fsnotify watcher on
 	// ConfigPath that hot-reloads the engine on every change. Cheap;
@@ -171,11 +171,20 @@ type Options struct {
 // pipeline.Engine using the compile-time module registry. Useful for
 // tests that want the engine without a live HTTP server.
 func LoadEngine(path string) (*pipeline.Engine, error) {
+	eng, _, err := loadEngineWithConfig(path)
+	return eng, err
+}
+
+func loadEngineWithConfig(path string) (*pipeline.Engine, *config.AuthConfig, error) {
 	ac, err := config.LoadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return config.Compile(ac)
+	eng, err := config.Compile(ac)
+	if err != nil {
+		return nil, nil, err
+	}
+	return eng, ac, nil
 }
 
 // Run boots HTTP and Envoy ext_authz gRPC servers fronting the pipeline.
@@ -220,11 +229,18 @@ func Run(opts Options) error {
 		}
 		holder = server.NewEngineHolder(nil)
 	case opts.ConfigPath != "":
-		eng, err := LoadEngine(opts.ConfigPath)
+		eng, ac, err := loadEngineWithConfig(opts.ConfigPath)
 		if err != nil {
 			return err
 		}
-		holder = server.NewEngineHolder(eng)
+		holder = server.NewEngineHolder(nil)
+		server.ConfigApplyMu.Lock()
+		if err := applyAuditPolicy(ac, log); err != nil {
+			server.ConfigApplyMu.Unlock()
+			return fmt.Errorf("audit policy: %w", err)
+		}
+		holder.Swap(eng)
+		server.ConfigApplyMu.Unlock()
 	default:
 		return errors.New("lwauthd: must set either ConfigPath or WatchNamespace")
 	}
@@ -436,28 +452,28 @@ func Main() {
 		return
 	}
 	if err := Run(Options{
-		ConfigPath:           *cfgPath,
-		HTTPAddr:             *httpAddr,
-		GRPCAddr:             *grpcAddr,
-		WatchConfigFile:      *watchFile,
-		WatchNamespace:       *watchNS,
-		AuthConfigName:       *acName,
-		TLSCertFile:          *httpCert,
-		TLSKeyFile:           *httpKey,
-		TLSClientCAFile:      *httpClientCA,
-		GRPCTLSCertFile:      *grpcCert,
-		GRPCTLSKeyFile:       *grpcKey,
-		GRPCTLSClientCAFile:  *grpcClientCA,
-		EnableReflection:     *enableReflection,
-		DisableHTTPAuthorize: *disableAuthorize,
-		DisableHTTPMetrics:   *disableMetrics,
-		DisableHTTPOpenAPI:   *disableOpenAPI,
-		MaxRequestBytes:      *maxBody,
-		LeaderElection:       *leaderElect,
-		LeaderElectionID:     *leaderID,
+		ConfigPath:              *cfgPath,
+		HTTPAddr:                *httpAddr,
+		GRPCAddr:                *grpcAddr,
+		WatchConfigFile:         *watchFile,
+		WatchNamespace:          *watchNS,
+		AuthConfigName:          *acName,
+		TLSCertFile:             *httpCert,
+		TLSKeyFile:              *httpKey,
+		TLSClientCAFile:         *httpClientCA,
+		GRPCTLSCertFile:         *grpcCert,
+		GRPCTLSKeyFile:          *grpcKey,
+		GRPCTLSClientCAFile:     *grpcClientCA,
+		EnableReflection:        *enableReflection,
+		DisableHTTPAuthorize:    *disableAuthorize,
+		DisableHTTPMetrics:      *disableMetrics,
+		DisableHTTPOpenAPI:      *disableOpenAPI,
+		MaxRequestBytes:         *maxBody,
+		LeaderElection:          *leaderElect,
+		LeaderElectionID:        *leaderID,
 		LeaderElectionNamespace: *leaderNS,
-		ConfigStreamAddr:     *configStreamAddr,
-		ConfigStreamNodeID:   *configStreamNode,
+		ConfigStreamAddr:        *configStreamAddr,
+		ConfigStreamNodeID:      *configStreamNode,
 	}); err != nil {
 		slog.Error("lwauthd", "err", err)
 		os.Exit(1)

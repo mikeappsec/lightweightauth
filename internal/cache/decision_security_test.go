@@ -103,7 +103,7 @@ func TestDecision_HMACRejectsTamperedValue(t *testing.T) {
 
 	// The cache should reject the unsigned value and call fn instead.
 	callCount := 0
-	dec, cacheHit, err := d.Do(ctx, "attacker-key", nil, func() (*module.Decision, error) {
+	dec, cacheHit, err := d.Do(ctx, "attacker-key", nil, func(_ context.Context) (*module.Decision, error) {
 		callCount++
 		return &module.Decision{Allow: false, Status: 403, Reason: "denied by policy"}, nil
 	})
@@ -137,7 +137,7 @@ func TestDecision_HMACAcceptsValidSignedValue(t *testing.T) {
 	}
 
 	// First call — populate cache with a signed value.
-	_, _, err = d.Do(ctx, "valid-key", nil, func() (*module.Decision, error) {
+	_, _, err = d.Do(ctx, "valid-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true, Status: 200}, nil
 	})
 	if err != nil {
@@ -145,7 +145,7 @@ func TestDecision_HMACAcceptsValidSignedValue(t *testing.T) {
 	}
 
 	// Second call — should be a cache hit (valid HMAC).
-	dec, cacheHit, err := d.Do(ctx, "valid-key", nil, func() (*module.Decision, error) {
+	dec, cacheHit, err := d.Do(ctx, "valid-key", nil, func(_ context.Context) (*module.Decision, error) {
 		t.Fatal("fn should not be called on cache hit")
 		return nil, nil
 	})
@@ -179,7 +179,7 @@ func TestDecision_HMACRejectsTruncatedValue(t *testing.T) {
 	_ = d.backend.Set(ctx, "short-key", []byte("short"), time.Minute)
 
 	callCount := 0
-	dec, cacheHit, err := d.Do(ctx, "short-key", nil, func() (*module.Decision, error) {
+	dec, cacheHit, err := d.Do(ctx, "short-key", nil, func(_ context.Context) (*module.Decision, error) {
 		callCount++
 		return &module.Decision{Allow: false, Status: 403}, nil
 	})
@@ -216,7 +216,7 @@ func TestDecision_CrossInstanceHMACRejection(t *testing.T) {
 	}
 
 	// Cache a value via d1.
-	_, _, err = d1.Do(ctx, "shared-key", nil, func() (*module.Decision, error) {
+	_, _, err = d1.Do(ctx, "shared-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true, Status: 200}, nil
 	})
 	if err != nil {
@@ -244,7 +244,7 @@ func TestDecision_CrossInstanceHMACRejection(t *testing.T) {
 	d2.backend = backend
 
 	// d2 should reject d1's signed value (different HMAC key).
-	dec, cacheHit, err := d2.Do(ctx, "shared-key", nil, func() (*module.Decision, error) {
+	dec, cacheHit, err := d2.Do(ctx, "shared-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: false, Status: 403}, nil
 	})
 	if err != nil {

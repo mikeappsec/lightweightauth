@@ -20,6 +20,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
 	"github.com/mikeappsec/lightweightauth/pkg/revocation"
+	"github.com/mikeappsec/lightweightauth/pkg/secrets"
 )
 
 // Source produces successive AuthConfig snapshots. The server layer
@@ -51,6 +52,51 @@ func LoadFile(path string) (*AuthConfig, error) {
 func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	if ac == nil {
 		return nil, fmt.Errorf("%w: nil AuthConfig", module.ErrConfig)
+	}
+
+	// G1: resolve external secret references in module configs.
+	if ac.Secrets != nil {
+		resolver, err := buildSecretResolver(ac.Secrets)
+		if err != nil {
+			return nil, fmt.Errorf("%w: secrets: %v", module.ErrConfig, err)
+		}
+		defer resolver.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := resolveModuleSecrets(ctx, resolver, ac.Identifiers); err != nil {
+			return nil, fmt.Errorf("%w: resolve identifier secrets: %v", module.ErrConfig, err)
+		}
+		if err := resolveModuleSecrets(ctx, resolver, ac.Authorizers); err != nil {
+			return nil, fmt.Errorf("%w: resolve authorizer secrets: %v", module.ErrConfig, err)
+		}
+		if err := resolveModuleSecrets(ctx, resolver, ac.Response); err != nil {
+			return nil, fmt.Errorf("%w: resolve mutator secrets: %v", module.ErrConfig, err)
+		}
+		// Resolve cache password if it's a secretRef.
+		if ac.Cache != nil && secrets.IsSecretRef(ac.Cache.Password) {
+			val, err := resolver.ResolveString(ctx, ac.Cache.Password)
+			if err != nil {
+				return nil, fmt.Errorf("%w: resolve cache.password: %v", module.ErrConfig, err)
+			}
+			ac.Cache.Password = val
+		}
+		if ac.Cache != nil && secrets.IsSecretRef(ac.Cache.SharedHMACKey) {
+			val, err := resolver.ResolveString(ctx, ac.Cache.SharedHMACKey)
+			if err != nil {
+				return nil, fmt.Errorf("%w: resolve cache.sharedHmacKey: %v", module.ErrConfig, err)
+			}
+			ac.Cache.SharedHMACKey = val
+		}
+		// Resolve revocation password if it's a secretRef.
+		if ac.Revocation != nil && secrets.IsSecretRef(ac.Revocation.Password) {
+			val, err := resolver.ResolveString(ctx, ac.Revocation.Password)
+			if err != nil {
+				return nil, fmt.Errorf("%w: resolve revocation.password: %v", module.ErrConfig, err)
+			}
+			ac.Revocation.Password = val
+		}
 	}
 
 	idents := make([]module.Identifier, 0, len(ac.Identifiers))
@@ -417,4 +463,68 @@ func buildRevocationStore(spec *RevocationSpec) (revocation.Store, bool, error) 
 	}
 
 	return store, failOpen, nil
+}
+
+// --- G1: External secret resolver helpers ---
+
+// buildSecretResolver constructs a secrets.Resolver from the SecretsSpec.
+func buildSecretResolver(spec *SecretsSpec) (*secrets.Resolver, error) {
+	ttl := 5 * time.Minute
+	if spec.DefaultTTL != "" {
+		d, err := time.ParseDuration(spec.DefaultTTL)
+		if err != nil {
+			return nil, fmt.Errorf("secrets.defaultTtl: %v", err)
+		}
+		ttl = d
+	}
+
+	return secrets.New(secrets.Options{
+		DefaultTTL:     ttl,
+		BackendConfigs: spec.Backends,
+	}), nil
+}
+
+// resolveModuleSecrets walks a slice of ModuleSpecs and resolves any
+// string values in their Config maps that look like secret references.
+func resolveModuleSecrets(ctx context.Context, resolver *secrets.Resolver, specs []ModuleSpec) error {
+	for i := range specs {
+		if specs[i].Config == nil {
+			continue
+		}
+		if err := resolveMapSecrets(ctx, resolver, specs[i].Config); err != nil {
+			return fmt.Errorf("module %q: %w", specs[i].Name, err)
+		}
+	}
+	return nil
+}
+
+// resolveMapSecrets recursively resolves secret references in a config map.
+func resolveMapSecrets(ctx context.Context, resolver *secrets.Resolver, m map[string]any) error {
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			if secrets.IsSecretRef(val) {
+				resolved, err := resolver.ResolveString(ctx, val)
+				if err != nil {
+					return fmt.Errorf("key %q: %w", k, err)
+				}
+				m[k] = resolved
+			}
+		case map[string]any:
+			if err := resolveMapSecrets(ctx, resolver, val); err != nil {
+				return fmt.Errorf("key %q: %w", k, err)
+			}
+		case map[any]any:
+			// YAML sometimes produces map[any]any; convert and resolve.
+			typed := make(map[string]any, len(val))
+			for mk, mv := range val {
+				typed[fmt.Sprint(mk)] = mv
+			}
+			if err := resolveMapSecrets(ctx, resolver, typed); err != nil {
+				return fmt.Errorf("key %q: %w", k, err)
+			}
+			m[k] = typed
+		}
+	}
+	return nil
 }

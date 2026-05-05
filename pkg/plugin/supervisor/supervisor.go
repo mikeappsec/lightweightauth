@@ -118,10 +118,10 @@ type State int32
 const (
 	StateStopped State = iota // not yet started, or Stop returned
 	StateStarting
-	StateRunning  // child alive AND most recent health probe passed
+	StateRunning   // child alive AND most recent health probe passed
 	StateUnhealthy // child alive, FailureThreshold-1 or fewer fails so far
-	StateBackoff  // child not running; waiting before next spawn
-	StateGaveUp   // MaxRestarts exhausted
+	StateBackoff   // child not running; waiting before next spawn
+	StateGaveUp    // MaxRestarts exhausted
 )
 
 // Supervisor owns a single plugin child process. Safe for concurrent
@@ -341,16 +341,38 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	// waitCh. Whichever fires first wins; we cancel the other path.
 	healthCtx, cancelHealth := context.WithCancel(ctx)
 	defer cancelHealth()
-	go s.healthLoop(healthCtx, cmd, pid)
+
+	// terminateOnce ensures we only signal the child once even if
+	// both the health loop and ctx cancellation fire concurrently.
+	var terminateOnce sync.Once
+	var killTimerMu sync.Mutex
+	var killTimer *time.Timer
+	doTerminate := func(reason string) {
+		terminateOnce.Do(func() {
+			kt := s.terminate(cmd, reason)
+			killTimerMu.Lock()
+			killTimer = kt
+			killTimerMu.Unlock()
+		})
+	}
+
+	go s.healthLoop(healthCtx, cmd, pid, doTerminate)
 
 	// Watch for ctx cancellation (Stop() called) so we terminate the
 	// child gracefully even if the supervisor is shutting down.
 	go func() {
 		<-ctx.Done()
-		s.terminate(cmd, "supervisor stopping")
+		doTerminate("supervisor stopping")
 	}()
 
 	waitErr := cmd.Wait()
+	// Child exited — stop the kill timer to avoid sending SIGKILL to a
+	// potentially-reused PID.
+	killTimerMu.Lock()
+	if killTimer != nil {
+		killTimer.Stop()
+	}
+	killTimerMu.Unlock()
 	_ = stdoutW.Close()
 	_ = stderrW.Close()
 	return waitErr
@@ -358,7 +380,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 
 // healthLoop probes the child every Interval and terminates it after
 // FailureThreshold consecutive failures.
-func (s *Supervisor) healthLoop(ctx context.Context, cmd *exec.Cmd, pid int) {
+func (s *Supervisor) healthLoop(ctx context.Context, cmd *exec.Cmd, pid int, doTerminate func(string)) {
 	consecutiveFailures := 0
 	t := time.NewTicker(s.cfg.HealthCheck.Interval)
 	defer t.Stop()
@@ -399,7 +421,7 @@ func (s *Supervisor) healthLoop(ctx context.Context, cmd *exec.Cmd, pid int) {
 					"pid", pid,
 					"threshold", s.cfg.HealthCheck.FailureThreshold,
 				)
-				s.terminate(cmd, "health threshold exceeded")
+				doTerminate("health threshold exceeded")
 				return
 			}
 		}
@@ -413,11 +435,11 @@ func (s *Supervisor) healthLoop(ctx context.Context, cmd *exec.Cmd, pid int) {
 }
 
 // terminate signals the child to exit and, if it does not within
-// GracefulTimeout, kills it. Best-effort; both calls swallow errors
-// because a child that has already exited is the success case.
-func (s *Supervisor) terminate(cmd *exec.Cmd, reason string) {
+// GracefulTimeout, force-kills it. Returns the kill timer so the caller
+// can stop it after cmd.Wait() returns (preventing SIGKILL on a reused PID).
+func (s *Supervisor) terminate(cmd *exec.Cmd, reason string) *time.Timer {
 	if cmd.Process == nil {
-		return
+		return nil
 	}
 	pid := cmd.Process.Pid
 	s.log.Info("plugin terminating", "pid", pid, "reason", reason)
@@ -434,13 +456,7 @@ func (s *Supervisor) terminate(cmd *exec.Cmd, reason string) {
 			"timeout", s.cfg.GracefulTimeout,
 		)
 	})
-	go func() {
-		// Stop the timer once the wait completes elsewhere; we can't
-		// observe Wait here without racing the run-loop, so we just
-		// let the timer self-cleanup on the kill path. A successful
-		// graceful stop simply makes the kill a no-op.
-		_ = timer
-	}()
+	return timer
 }
 
 // computeBackoff returns initial * 2^attempt, capped at MaxBackoff,

@@ -13,8 +13,8 @@ import (
 	grpcsrv "google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	pluginv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/plugin/v1"
+	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/plugin/sign"
 )
@@ -181,7 +181,7 @@ func TestSign_Identifier_RequireMode_RejectsTamperedResponse(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		"signing":  signingCfg("require", kid, signSecretHex),
 	})
@@ -216,7 +216,7 @@ func TestSign_Identifier_RequireMode_RejectsUnknownKid(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		// Configured key id is a DIFFERENT one — the host sees a kid
 		// it doesn't know about and refuses, regardless of the fact

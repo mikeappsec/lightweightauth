@@ -30,20 +30,20 @@
 //	          audiences: [api.example]
 //
 // Verification (per RFC 9449 §4.3):
-//   1. The `DPoP` header carries exactly one compact JWS.
-//   2. Its protected header contains `typ=dpop+jwt`, an asymmetric `alg`
-//      (HMAC and `none` are rejected outright per §4.2 step 4), and a
-//      single embedded `jwk` that is a public key.
-//   3. Signature verifies under that JWK.
-//   4. Payload claims:
-//        htm = request method (case-insensitive),
-//        htu = request URL ignoring query/fragment (§4.3 step 9),
-//        iat is within ±skew,
-//        jti is unique within a replay window (jti+skew*2 retained).
-//   5. When the inner identifier surfaces `cnf.jkt` (RFC 7800), the
-//      RFC-7638 thumbprint of the embedded JWK MUST equal it.
-//   6. When an access token is present on the request, the proof's
-//      `ath` claim MUST equal base64url(sha256(access_token)).
+//  1. The `DPoP` header carries exactly one compact JWS.
+//  2. Its protected header contains `typ=dpop+jwt`, an asymmetric `alg`
+//     (HMAC and `none` are rejected outright per §4.2 step 4), and a
+//     single embedded `jwk` that is a public key.
+//  3. Signature verifies under that JWK.
+//  4. Payload claims:
+//     htm = request method (case-insensitive),
+//     htu = request URL ignoring query/fragment (§4.3 step 9),
+//     iat is within ±skew,
+//     jti is unique within a replay window (jti+skew*2 retained).
+//  5. When the inner identifier surfaces `cnf.jkt` (RFC 7800), the
+//     RFC-7638 thumbprint of the embedded JWK MUST equal it.
+//  6. When an access token is present on the request, the proof's
+//     `ath` claim MUST equal base64url(sha256(access_token)).
 package dpop
 
 import (
@@ -63,14 +63,15 @@ import (
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
 	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 const (
-	defaultSkew         = 30 * time.Second
+	defaultSkew          = 30 * time.Second
 	defaultReplayEntries = 10_000
-	defaultProofHeader  = "DPoP"
-	defaultBearerHeader = "Authorization"
+	defaultProofHeader   = "DPoP"
+	defaultBearerHeader  = "Authorization"
 	dpopJWTType          = "dpop+jwt"
 )
 
@@ -94,28 +95,28 @@ type InnerSpec struct {
 }
 
 type identifier struct {
-	name    string
-	cfg     Config
-	inner   module.Identifier
-	replay  *cache.LRU
-	now     func() time.Time
+	name   string
+	cfg    Config
+	inner  module.Identifier
+	replay *cache.LRU
+	now    func() time.Time
 }
 
 func (i *identifier) Name() string { return i.name }
 
 // Identify is the wrapper entrypoint. The flow:
 //
-//   1. If no DPoP header is present:
-//        - required=true  → ErrInvalidCredential.
-//        - required=false → fall through to inner.Identify so this
-//                            identifier behaves transparently when DPoP
-//                            is opt-in per route.
-//   2. Otherwise verify the proof and only then defer to inner.Identify.
-//      Failures from inner are returned as-is (ErrNoMatch lets the next
-//      configured identifier try, ErrInvalidCredential is fatal for
-//      this identifier).
-//   3. After inner returns identity, optionally check `cnf.jkt` and
-//      `ath` to enforce the proof-of-possession binding.
+//  1. If no DPoP header is present:
+//     - required=true  → ErrInvalidCredential.
+//     - required=false → fall through to inner.Identify so this
+//     identifier behaves transparently when DPoP
+//     is opt-in per route.
+//  2. Otherwise verify the proof and only then defer to inner.Identify.
+//     Failures from inner are returned as-is (ErrNoMatch lets the next
+//     configured identifier try, ErrInvalidCredential is fatal for
+//     this identifier).
+//  3. After inner returns identity, optionally check `cnf.jkt` and
+//     `ath` to enforce the proof-of-possession binding.
 func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.Identity, error) {
 	proof := r.Header(i.cfg.ProofHeader)
 	if proof == "" {
@@ -130,7 +131,13 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		return nil, err
 	}
 
-	id, err := i.inner.Identify(ctx, r)
+	// Rewrite the Authorization header from "DPoP <token>" to
+	// "Bearer <token>" so the inner identifier (e.g. oauth2-introspection)
+	// can extract it. The DPoP proof has already been validated above;
+	// the inner only needs to validate/introspect the access token.
+	innerReq := i.rewriteAuthForInner(r)
+
+	id, err := i.inner.Identify(ctx, innerReq)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +355,53 @@ func sha256sum(s string) []byte {
 	return h[:]
 }
 
+// rewriteAuthForInner returns a shallow copy of r with the Authorization
+// header rewritten from "DPoP <token>" to "Bearer <token>". This allows
+// inner identifiers (like oauth2-introspection) that only recognize the
+// Bearer scheme to extract and validate the access token. The DPoP proof
+// header is stripped to prevent the inner from accidentally re-parsing it.
+func (i *identifier) rewriteAuthForInner(r *module.Request) *module.Request {
+	hdr := strings.ToLower(i.cfg.BearerHeader)
+	if hdr == "" {
+		hdr = "authorization"
+	}
+	v := r.Header(hdr)
+	if v == "" {
+		return r
+	}
+	const dpopPrefix = "dpop "
+	if len(v) <= len(dpopPrefix) || !strings.EqualFold(v[:len(dpopPrefix)], dpopPrefix) {
+		return r // already Bearer or something else; pass through
+	}
+	token := strings.TrimSpace(v[len(dpopPrefix):])
+
+	// Shallow-copy the request; deep-copy only the Headers map.
+	cp := *r
+	cp.Headers = make(map[string][]string, len(r.Headers))
+	for k, vs := range r.Headers {
+		cp.Headers[k] = vs
+	}
+	cp.Headers[hdr] = []string{"Bearer " + token}
+	// Strip the DPoP proof header so the inner identifier cannot
+	// accidentally re-parse or trust the already-consumed proof JWS.
+	delete(cp.Headers, strings.ToLower(i.cfg.ProofHeader))
+	return &cp
+}
+
+var knownKeys = map[string]struct{}{
+	"required":        {},
+	"skew":            {},
+	"replayCacheSize": {},
+	"proofHeader":     {},
+	"bearerHeader":    {},
+	"inner":           {},
+	"pinnedKeys":      {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("dpop", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	cfg := Config{
 		Required:        true,
 		Skew:            defaultSkew,
@@ -364,6 +417,8 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	}
 	if v, ok := raw["replayCacheSize"].(int); ok && v > 0 {
 		cfg.ReplayCacheSize = v
+	} else if v, ok := raw["replayCacheSize"].(float64); ok && v > 0 {
+		cfg.ReplayCacheSize = int(v)
 	}
 	if v, ok := raw["proofHeader"].(string); ok && v != "" {
 		cfg.ProofHeader = v
@@ -399,13 +454,61 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		return nil, fmt.Errorf("%w: dpop %q replay cache: %v", module.ErrConfig, name, err)
 	}
 
-	return &identifier{
+	id := &identifier{
 		name:   name,
 		cfg:    cfg,
 		inner:  inner,
 		replay: replay,
 		now:    time.Now,
-	}, nil
+	}
+
+	// If pinnedKeys is configured, wrap in rotatableIdentifier with a
+	// KeySet that enforces proof key pinning.
+	if pinned, ok := raw["pinnedKeys"].([]any); ok && len(pinned) > 0 {
+		ks := keyrotation.NewKeySet[string](nil)
+		for i, entry := range pinned {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d] must be a map", module.ErrConfig, name, i)
+			}
+			kid, _ := m["kid"].(string)
+			if kid == "" {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].kid is required", module.ErrConfig, name, i)
+			}
+			thumb, _ := m["thumbprint"].(string)
+			if thumb == "" {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].thumbprint is required", module.ErrConfig, name, i)
+			}
+			meta := keyrotation.KeyMeta{KID: kid}
+			if nb, ok := m["notBefore"].(string); ok && nb != "" {
+				if t, terr := time.Parse(time.RFC3339, nb); terr == nil {
+					meta.NotBefore = t
+				} else {
+					return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].notBefore: %v", module.ErrConfig, name, i, terr)
+				}
+			}
+			if na, ok := m["notAfter"].(string); ok && na != "" {
+				if t, terr := time.Parse(time.RFC3339, na); terr == nil {
+					meta.NotAfter = t
+				} else {
+					return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].notAfter: %v", module.ErrConfig, name, i, terr)
+				}
+			}
+			if gp, ok := m["gracePeriod"].(string); ok && gp != "" {
+				if d, derr := time.ParseDuration(gp); derr == nil {
+					meta.GracePeriod = d
+				} else {
+					return nil, fmt.Errorf("%w: dpop %q: pinnedKeys[%d].gracePeriod: %v", module.ErrConfig, name, i, derr)
+				}
+			}
+			if !ks.Put(meta, thumb) {
+				return nil, fmt.Errorf("%w: dpop %q: pinnedKeys set full at entry %d", module.ErrConfig, name, i)
+			}
+		}
+		return &rotatableIdentifier{identifier: *id, pinned: ks}, nil
+	}
+
+	return id, nil
 }
 
 func durationFrom(raw map[string]any, key string) (time.Duration, bool) {

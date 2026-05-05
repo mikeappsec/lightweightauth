@@ -71,3 +71,17 @@ func TestCEL_HeaderLookup(t *testing.T) {
 		t.Fatalf("got (%+v, %v), want allow", dec, err)
 	}
 }
+
+func TestCEL_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("cel", map[string]any{
+		"expression":   "true",
+		"defaultAllow": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

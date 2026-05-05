@@ -109,7 +109,12 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		}
 	}
 
-	v, err := i.sf.Do(key, func() (any, error) { return i.callIntrospection(ctx, tok) })
+	v, err := i.sf.Do(key, func() (any, error) {
+		// Use context.WithoutCancel so a single client disconnect doesn't
+		// fail all coalesced waiters sharing this singleflight slot.
+		sfCtx := context.WithoutCancel(ctx)
+		return i.callIntrospection(sfCtx, tok)
+	})
 	if err != nil {
 		// Cache ErrUpstream outcomes briefly so a flood of requests
 		// for the same token can't hammer a flapping IdP. We do NOT
@@ -122,7 +127,13 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		}
 		return nil, err
 	}
-	claims := v.(map[string]any)
+	shared := v.(map[string]any)
+	// Copy the claims map — singleflight returns the same reference to all
+	// coalesced waiters, and downstream stages may mutate Claims.
+	claims := make(map[string]any, len(shared))
+	for k, val := range shared {
+		claims[k] = val
+	}
 
 	active, _ := claims["active"].(bool)
 	if !active {
@@ -204,6 +215,13 @@ func bearerFrom(r *module.Request, header string) string {
 	if len(v) > len(bearer) && strings.EqualFold(v[:len(bearer)], bearer) {
 		return strings.TrimSpace(v[len(bearer):])
 	}
+	// For the Authorization header, non-Bearer schemes (e.g. "DPoP",
+	// "Basic") are not ours to claim — return empty so the pipeline
+	// tries the next identifier. For custom headers (X-Token, etc.)
+	// the raw value IS the token.
+	if strings.EqualFold(header, "Authorization") {
+		return ""
+	}
 	return v
 }
 
@@ -250,7 +268,22 @@ func (s *singleflight) Do(key string, fn func() (any, error)) (any, error) {
 	return c.val, c.err
 }
 
+var knownKeys = map[string]struct{}{
+	"url":          {},
+	"clientId":     {},
+	"clientSecret": {},
+	"headerName":   {},
+	"cacheSize":    {},
+	"maxCacheTtl":  {},
+	"negativeTtl":  {},
+	"errorTtl":     {},
+	"resilience":   {},
+}
+
 func factory(name string, raw map[string]any) (module.Identifier, error) {
+	if err := module.CheckUnknownKeys("oauth2-introspection", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	cfg := Config{
 		HeaderName:  "Authorization",
 		CacheSize:   100_000,

@@ -2153,7 +2153,7 @@ benefit: removing blockers for regulated adoption first, then reducing
 policy-change risk, then improving supportability, and finally adding
 advanced or narrower integrations.
 
-G1. **SEC-EXTREF-1 — External secret-backend resolvers.**
+G1. ~~**SEC-EXTREF-1 — External secret-backend resolvers.**~~ ✅ Done.
   Highest enterprise benefit because many regulated customers cannot
   accept plaintext secrets in Kubernetes manifests. Add a pluggable
   `SecretResolver` interface in `pkg/secrets`. Reference format:
@@ -2163,7 +2163,7 @@ G1. **SEC-EXTREF-1 — External secret-backend resolvers.**
   Secrets Store driver. Promotion trigger: D1 (key rotation) shipped —
   secret refs feed rotatable identifiers.
 
-G2. **ADMIN-RBAC-1 — RBAC for the admin plane itself.**
+G2. ~~**ADMIN-RBAC-1 — RBAC for the admin plane itself.**~~ ✅ Done.
   Required by separation-of-duties programs and most enterprise change
   management. Per-tenant policy authors: who can edit which
   `AuthConfig` CRD? Today anyone with K8s edit on the namespace can
@@ -2172,7 +2172,7 @@ G2. **ADMIN-RBAC-1 — RBAC for the admin plane itself.**
   (admin-plane auth) shipped — that gates *who* can call the API; G2
   gates *which* policies they can edit.
 
-G3. **DATA-RES-1 — PII redaction and data residency.**
+G3. ~~**DATA-RES-1 — PII redaction and data residency.**~~ ✅ Done.
   Non-negotiable for EU and multi-region customers. Audit events gain
   configurable PII fields that are auto-hashed or dropped per region
   (GDPR Art. 17 right-to-erasure). Audit sink routing by tenant region
@@ -2180,7 +2180,7 @@ G3. **DATA-RES-1 — PII redaction and data residency.**
   data-residency policy attaches to `AuthConfig`. Promotion trigger:
   D4 (audit sinks) shipped.
 
-G4. **COMP-REPORT-1 — Compliance report generator.**
+G4. ~~**COMP-REPORT-1 — Compliance report generator.**~~ ✅ Done.
   Converts technical controls into procurement evidence. `lwauthctl
   compliance --framework {soc2|iso27001|pci-dss|hipaa|fedramp}` emits
   PDF and JSON evidence: who can access what, who changed policy when
@@ -2189,7 +2189,7 @@ G4. **COMP-REPORT-1 — Compliance report generator.**
   Scheduled generation via CronJob; exportable to GRC tools. Promotion
   trigger: D2 + D4 (versioned policy + durable audit).
 
-G5. **ID-MFA-1 — Step-up MFA and assurance-level policies.**
+G5. ~~**ID-MFA-1 — Step-up MFA and assurance-level policies.**~~ ✅ Done.
   New recommended feature. Enterprise buyers often need policies like
   "allow read with normal SSO, require phishing-resistant MFA for admin
   writes". Add identity assurance claims (`acr`, `amr`, device posture,
@@ -2197,9 +2197,9 @@ G5. **ID-MFA-1 — Step-up MFA and assurance-level policies.**
   can return a step-up challenge hint to the upstream or IdP. Promotion
   trigger: D2 (policy versioning) and OAuth2/OIDC flow docs are stable.
 
-G6. **EXPLAIN-API-1 — Decision explainability API.**
+G6. ~~**EXPLAIN-API-1 — Decision explainability API.**~~ ✅ Done
   High day-two value: support teams need to answer "why was this denied?"
-  without reproducing a live request. `POST /v1/explain` (admin-gated)
+  without reproducing a live request. `POST /v1/admin/explain` (admin-gated)
   returns a full trace for a request: which identifier matched, which
   authorizer ran, which rule fired, which mutators executed, with
   per-stage timing and the policy version evaluated. Outputs are
@@ -2304,6 +2304,25 @@ G18. **FED-CRDT-1 — Multi-region active/active policy sync.**
   rate limits, last-writer-wins for rule lists, etc.). Promotion
   trigger: F8 prototype + at least one customer with a global
   active/active deployment commitment.
+
+G19. **STATE-PERSIST-1 — Embedded persistent storage for identifiers
+  and authorizers.**
+  Solves a fundamental gap: any lwauth-managed state (API key
+  revocations, local client registrations, session blacklists,
+  abuse bans) is lost on pod restart because it lives only in volatile
+  cache. Without persistent storage lwauth cannot be the source of
+  truth for any credential lifecycle — it must always delegate to an
+  external IdP or third-party service. Add a `pkg/storage` interface
+  backed by an embedded key-value store (bbolt or Badger) at a
+  configurable `--data-dir` path, mounted as a PVC in Kubernetes.
+  On startup the store is replayed into the in-memory decision path;
+  writes are WAL-durable before acknowledgement. Identifiers (e.g.
+  API key, DPoP pinned keys) and authorizers (e.g. revocation lists,
+  ban tables) use the store to persist decisions that survive restarts
+  without depending on upstream availability. HA topologies can layer
+  Raft consensus or LiteFS replication over the same interface.
+  Promotion trigger: E2 (revocation) design finalised — the
+  revocation store is the first consumer of persistent state.
 
 ### Prioritization rationale
 

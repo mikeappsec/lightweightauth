@@ -5,6 +5,7 @@ package headers
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
@@ -74,5 +75,47 @@ func TestHeaderPassthrough(t *testing.T) {
 	}
 	if d.UpstreamHeaders["X-Trace-Id"] != "trace-1" {
 		t.Errorf("X-Trace-Id = %q", d.UpstreamHeaders["X-Trace-Id"])
+	}
+}
+
+func TestHeaderAdd_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := addFactory("h", map[string]any{
+		"subjectHeader": "X-Subject",
+		"mode":          "overwrite",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}
+
+func TestHeaderRemove_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := removeFactory("h", map[string]any{
+		"upstream": []any{"X-Internal"},
+		"mode":     "force",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}
+
+func TestHeaderPassthrough_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := passthroughFactory("h", map[string]any{
+		"headers":    []any{"X-Trace"},
+		"allowEmpty": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
 	}
 }

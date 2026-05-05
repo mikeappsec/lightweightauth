@@ -77,8 +77,8 @@ type authorizer struct {
 
 	consistency string // "minimize_latency", "fully_consistent", or "at_least_as_fresh"
 
-	client *authzed.Client
-	guard  *upstream.Guard
+	checker PermissionChecker
+	guard   *upstream.Guard
 }
 
 // templateInput is the value passed into the check templates.
@@ -179,7 +179,7 @@ func (a *authorizer) checkPermission(ctx context.Context, resourceType, resource
 
 	var allowed bool
 	err := a.guard.Do(ctx, func(ctx context.Context) error {
-		resp, err := a.client.CheckPermission(ctx, req)
+		resp, err := a.checker.CheckPermission(ctx, req)
 		if err != nil {
 			return fmt.Errorf("%w: spicedb check: %v", module.ErrUpstream, err)
 		}
@@ -293,7 +293,20 @@ func sanitizeObjectID(s string) string {
 	return b.String()
 }
 
+var knownKeys = map[string]struct{}{
+	"endpoint":    {},
+	"token":       {},
+	"insecure":    {},
+	"timeout":     {},
+	"consistency": {},
+	"check":       {},
+	"resilience":  {},
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
+	if err := module.CheckUnknownKeys("spicedb", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	endpoint, _ := raw["endpoint"].(string)
 	if endpoint == "" {
 		return nil, fmt.Errorf("%w: spicedb %q: endpoint is required", module.ErrConfig, name)
@@ -404,7 +417,7 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 		permissionTpl:   permissionTpl,
 		subjectTypeTpl:  subjectTypeTpl,
 		subjectIDTpl:    subjectIDTpl,
-		client:          client,
+		checker:         client,
 		guard:           upstream.NewGuard(guardCfg),
 	}, nil
 }

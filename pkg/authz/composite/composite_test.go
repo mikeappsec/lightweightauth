@@ -106,3 +106,17 @@ func TestFactory_RequiresExactlyOneOfAnyOfAllOf(t *testing.T) {
 		t.Errorf("both set: err = %v, want ErrConfig", err)
 	}
 }
+
+func TestComposite_RejectsUnknownConfigKey(t *testing.T) {
+	t.Parallel()
+	_, err := factory("c", map[string]any{
+		"anyOf":   []any{},
+		"enabled": true,
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown config key, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

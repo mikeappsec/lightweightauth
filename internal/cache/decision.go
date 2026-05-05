@@ -292,9 +292,9 @@ func (d *Decision) Key(r *module.Request, id *module.Identity) string {
 //
 // tags are associated with the cache key for tag-based invalidation (E3).
 // Pass nil if no tags apply.
-func (d *Decision) Do(ctx context.Context, key string, tags []string, fn func() (*module.Decision, error)) (*module.Decision, bool, error) {
+func (d *Decision) Do(ctx context.Context, key string, tags []string, fn func(context.Context) (*module.Decision, error)) (*module.Decision, bool, error) {
 	if d == nil || key == "" {
-		dec, err := fn()
+		dec, err := fn(ctx)
 		return dec, false, err
 	}
 
@@ -340,16 +340,23 @@ func (d *Decision) Do(ctx context.Context, key string, tags []string, fn func() 
 
 	// Singleflight: coalesce concurrent misses/revalidations.
 	type doResult struct {
-		dec      *module.Decision
+		dec       *module.Decision
 		fromStale bool
 		fromCache bool
 	}
 	v, err, _ := d.sf.Do(key, func() (any, error) {
-		dec, err := fn()
+		// Use a context detached from the first caller's cancellation so
+		// that one client disconnect doesn't fail all coalesced waiters.
+		sfCtx := context.WithoutCancel(ctx)
+		dec, err := fn(sfCtx)
 		if err != nil {
 			// Upstream error — try stale fallback.
+			// RC-03: release distributed lock on error paths so that losing
+			// replicas stop polling immediately instead of waiting the full
+			// holdDuration before falling back to local evaluation.
+			d.distSF.Release(sfCtx, key)
 			if d.serveStaleOnError && errors.Is(err, module.ErrUpstream) {
-				if stale := d.getStaleEntry(ctx, key); stale != nil {
+				if stale := d.getStaleEntry(sfCtx, key); stale != nil {
 					return &doResult{dec: stale, fromStale: true, fromCache: true}, nil
 				}
 			}
@@ -360,9 +367,9 @@ func (d *Decision) Do(ctx context.Context, key string, tags []string, fn func() 
 		if !dec.Allow {
 			ttl = d.negativeTTL
 		}
-		d.storeEntry(ctx, key, dec, ttl, tags)
+		d.storeEntry(sfCtx, key, dec, ttl, tags)
 		// E4: release distributed lock after writing result to L2.
-		d.distSF.Release(ctx, key)
+		d.distSF.Release(sfCtx, key)
 		return &doResult{dec: dec}, nil
 	})
 	if err != nil {
@@ -457,14 +464,20 @@ func (d *Decision) InvalidateAll(ctx context.Context) {
 	// For LRU or Tiered backends we don't have a "clear all" on the Backend
 	// interface. We clear the tag index; entries will expire via TTL.
 	if d.tagIndex != nil {
-		// Evict all tracked keys.
+		// Collect keys under lock, then delete outside to avoid holding
+		// the write lock during network I/O (Valkey round-trips).
 		d.tagIndex.mu.Lock()
+		keys := make([]string, 0, len(d.tagIndex.keyToTags))
 		for key := range d.tagIndex.keyToTags {
-			_ = d.backend.Delete(ctx, key)
+			keys = append(keys, key)
 		}
 		d.tagIndex.tagToKeys = make(map[string]map[string]struct{})
 		d.tagIndex.keyToTags = make(map[string]map[string]struct{})
 		d.tagIndex.mu.Unlock()
+
+		for _, key := range keys {
+			_ = d.backend.Delete(ctx, key)
+		}
 	}
 }
 

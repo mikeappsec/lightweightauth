@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lwauth-idp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lwauth-idp
+  template:
+    metadata:
+      labels:
+        app: lwauth-idp
+    spec:
+      containers:
+      - name: idp
+        image: lwauth-idp:dev
+        imagePullPolicy: Never
+        args:
+        - "--issuer=http://lwauth-idp.default.svc.cluster.local:9090"
+        - "--listen=:9090"
+        ports:
+        - containerPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lwauth-idp
+spec:
+  selector:
+    app: lwauth-idp
+  ports:
+  - port: 9090
+    targetPort: 9090

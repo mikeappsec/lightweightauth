@@ -225,7 +225,7 @@ func TestDecision_DistSFIntegration(t *testing.T) {
 
 	// First call: should win the lock and evaluate.
 	var calls atomic.Int64
-	dec, cached, err := d.Do(ctx, "integration-key", nil, func() (*module.Decision, error) {
+	dec, cached, err := d.Do(ctx, "integration-key", nil, func(_ context.Context) (*module.Decision, error) {
 		calls.Add(1)
 		return &module.Decision{Allow: true}, nil
 	})
@@ -245,7 +245,7 @@ func TestDecision_DistSFIntegration(t *testing.T) {
 	}
 
 	// Second call: should hit cache (no distSF needed).
-	dec2, cached2, err := d.Do(ctx, "integration-key", nil, func() (*module.Decision, error) {
+	dec2, cached2, err := d.Do(ctx, "integration-key", nil, func(_ context.Context) (*module.Decision, error) {
 		calls.Add(1)
 		return &module.Decision{Allow: false}, nil
 	})
@@ -286,7 +286,7 @@ func TestDecision_DistSFStatsCounter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _ = d.Do(ctx, "stats-key", nil, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "stats-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
 

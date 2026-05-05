@@ -173,6 +173,21 @@ gateway:
 
   podAnnotations: {}
   nodeSelector: {}
+
+# ---------------------------------------------------------------------------
+# Admission Webhook (G2 — Admin RBAC)
+# ---------------------------------------------------------------------------
+webhook:
+  enabled: false
+  # Security default: deny on webhook errors/timeouts to preserve
+  # admin-plane RBAC enforcement guarantees.
+  failurePolicy: Fail
+  timeoutSeconds: 5
+  certManager:
+    enabled: false
+    issuerRef:
+      name: ""
+      kind: Issuer
   tolerations: []
   affinity: {}
 

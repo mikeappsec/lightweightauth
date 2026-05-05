@@ -62,6 +62,11 @@ type AdminDeps struct {
 	// PeerSecret is the shared HMAC secret used to authenticate incoming
 	// peer broadcast requests. Must match the secret in PeerBroadcasterOptions.
 	PeerSecret []byte
+
+	// ExplainFunc runs the pipeline in explain/trace mode (G6 — EXPLAIN-API-1).
+	// Returns a structured trace of what would happen for the given request.
+	// Nil if no engine is loaded.
+	ExplainFunc ExplainFunc
 }
 
 // isPeerRequest returns true if the request carries a valid peer token,
@@ -112,6 +117,10 @@ func NewAdminMux(mw *Middleware, deps *AdminDeps) http.Handler {
 	mux.Handle("/v1/admin/audit", rl(mw.Require(VerbReadAudit,
 		http.HandlerFunc(handleAuditQuery))))
 
+	// POST /v1/admin/explain — decision explainability (G6 — EXPLAIN-API-1).
+	mux.Handle("/v1/admin/explain", rl(mw.Require(VerbExplain,
+		http.HandlerFunc(makeExplainHandler(deps)))))
+
 	return mux
 }
 
@@ -141,7 +150,7 @@ func makeInvalidateHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Requ
 			return
 		}
 		var req struct {
-			Scope   string `json:"scope"`   // "all", "tenant", "subject"
+			Scope   string `json:"scope"` // "all", "tenant", "subject"
 			Tenant  string `json:"tenant"`
 			Subject string `json:"subject"`
 		}

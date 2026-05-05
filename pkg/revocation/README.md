@@ -65,10 +65,32 @@ vStore, err := revocation.NewValkeyStore(revocation.ValkeyConfig{
 - **MemoryStore**: in-process map with lazy eviction + background reaper goroutine
 - **ValkeyStore**: shared storage via SET+EX/EXISTS for multi-replica deployments
 - **NegCache**: local negative-result cache wrapper to avoid network round-trips
+- **ParallelChecker**: bounded goroutine pool for concurrent multi-key revocation checks
 - Key-agnostic: stores any opaque string (JTI, sha256(token), session ID, etc.)
 - TTL-based automatic expiry (no manual cleanup needed)
 - Pagination support for List operations
 - Evict API for cross-replica invalidation via event bus
+
+## Parallel Revocation Checking
+
+The `ParallelChecker` wraps a `Store` and checks multiple revocation keys concurrently
+using a bounded worker pool via `errgroup`. For the common case of 2 keys (jti + sub)
+this eliminates sequential round-trips to the backing store.
+
+```go
+pc := revocation.NewParallelChecker(store,
+    revocation.WithConcurrency(4), // default: 4 goroutines
+)
+
+// Returns true as soon as any key is found revoked.
+revoked, err := pc.ExistsAny(ctx, []string{"jti:abc123", "sub:acme:alice"})
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithConcurrency(n)` | `4` | Max concurrent goroutines for key checks |
+
+For 0–1 keys, `ExistsAny` inlines the call without spawning goroutines.
 
 ## How It Works
 

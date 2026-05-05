@@ -50,7 +50,17 @@ type flowState struct {
 // handleStart begins an authorization-code+PKCE flow. We mint state and
 // PKCE material, store them in the flow cookie, and 302 the user to the
 // IdP's authorize URL.
+//
+// RC-04 hardening: GET only (RFC 6749 §4.1.1). A browser always initiates
+// the authorization code flow via a GET redirect. Accepting POST would open
+// a login-CSRF vector: an attacker could submit a form to /oauth2/start,
+// setting the victim's flow cookie and initiating a flow that logs the victim
+// into the attacker's account at the IdP (account takeover via login CSRF).
 func (i *identifier) handleStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	// `rd` is the post-login redirect target. We validate it BEFORE
 	// stashing it in the flow cookie so an attacker can't smuggle an
 	// absolute URL through /oauth2/start?rd=https://evil.example and
@@ -92,7 +102,19 @@ func (i *identifier) handleStart(w http.ResponseWriter, r *http.Request) {
 
 // handleCallback consumes the IdP's redirect, validates state, exchanges
 // the code (with PKCE), verifies the id_token, and mints the session.
+//
+// RC-05 hardening: GET only (RFC 6749 §4.1.2 / OAuth Security BCP RFC 9700
+// §4.18). The IdP always delivers the authorization response via a browser
+// redirect, which is always GET. Accepting POST would allow an attacker to
+// submit a form carrying a stolen authorization code + the victim's flow
+// cookie (same-origin form), bypassing the state check. Defense-in-depth:
+// even though the PKCE verifier in the flow cookie provides strong binding,
+// restricting the method to GET closes all form-based injection paths.
 func (i *identifier) handleCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	q := r.URL.Query()
 	if errMsg := q.Get("error"); errMsg != "" {
 		// Security hardening: set nosniff and truncate reflected IdP error
@@ -225,7 +247,15 @@ func (i *identifier) handleLogout(w http.ResponseWriter, r *http.Request) {
 // for "is my login working?" smoke tests. Returns 401 when no session.
 // If RefreshLeeway is configured and the access token is near expiry,
 // we transparently rotate it before responding.
+//
+// RC-07 hardening: GET and POST only (OIDC Core 1.0 §5.3). Arbitrary
+// methods (PUT, DELETE, PATCH, TRACE) are rejected — they serve no
+// legitimate purpose and expand the attack surface unnecessarily.
 func (i *identifier) handleUserInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s, _ := i.store.Load(r)
 	if s == nil {
 		http.Error(w, "no session", http.StatusUnauthorized)
@@ -286,7 +316,16 @@ func pkceS256(verifier string) string {
 // pre-warm a fresh access token before a long-running call. Returns 401
 // when there is no session or no refresh_token, 502 when the IdP
 // rejects the refresh.
+//
+// RC-02 hardening: require POST so that SameSite=Lax cookies are NOT sent
+// by browsers on cross-site top-level GET navigations. Accepting GET would
+// let an attacker trigger a refresh via a link/redirect, consuming the
+// victim's refresh_token without their consent.
 func (i *identifier) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s, _ := i.store.Load(r)
 	if s == nil {
 		http.Error(w, "no session", http.StatusUnauthorized)
@@ -334,7 +373,40 @@ func (i *identifier) refreshIfNeeded(ctx context.Context, w http.ResponseWriter,
 // possibly new refresh + id_token) and persists the rotated session.
 // Per RFC 6749 §6, the IdP MAY return a new refresh_token; we keep the
 // old one when it doesn't.
+//
+// RC-01 hardening: the exchange is coalesced via a per-session singleflight
+// keyed by the session cookie value. All concurrent callers that arrive
+// while a refresh is in flight share the winner's result instead of each
+// hitting the IdP with the same refresh_token. IdPs with reuse detection
+// (Auth0, Okta, Keycloak) revoke the entire grant on a second presentation
+// of the same token, which would permanently kill the session.
 func (i *identifier) doRefresh(ctx context.Context, w http.ResponseWriter, r *http.Request, s *session.Session) (*session.Session, error) {
+	// Derive a singleflight key from the session cookie name so that two
+	// different sessions on the same server don't coalesce each other.
+	sfKey := i.store.Name()
+	if ck, err := r.Cookie(sfKey); err == nil && ck.Value != "" {
+		sfKey = ck.Value
+	}
+
+	type sfResult struct {
+		sess *session.Session
+	}
+	v, err, _ := i.refreshSF.Do(sfKey, func() (any, error) {
+		sess, err := i.doRefreshOnce(ctx, w, r, s)
+		if err != nil {
+			return nil, err
+		}
+		return &sfResult{sess: sess}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*sfResult).sess, nil
+}
+
+// doRefreshOnce is the actual token exchange; called at most once per
+// concurrent batch of requests for the same session.
+func (i *identifier) doRefreshOnce(ctx context.Context, w http.ResponseWriter, r *http.Request, s *session.Session) (*session.Session, error) {
 	src := i.oauth.TokenSource(ctx, &oauth2.Token{
 		RefreshToken: s.RefreshToken,
 	})

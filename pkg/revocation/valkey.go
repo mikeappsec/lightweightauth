@@ -5,12 +5,13 @@ package revocation
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/valkey-io/valkey-go"
+
+	"github.com/mikeappsec/lightweightauth/pkg/connpool"
 )
 
 // ValkeyStore is a revocation store backed by a shared Valkey instance.
@@ -57,26 +58,14 @@ func NewValkeyStore(cfg ValkeyConfig) (*ValkeyStore, error) {
 		cfg.KeyPrefix = "lwauth/rev/"
 	}
 
-	opt := valkey.ClientOption{
-		InitAddress: []string{cfg.Addr},
-		Username:    cfg.Username,
-		Password:    cfg.Password,
-	}
-	if cfg.TLS {
-		opt.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
-
-	client, err := valkey.NewClient(opt)
+	client, err := connpool.GetValkey(connpool.ValkeyConfig{
+		Addr:     cfg.Addr,
+		Username: cfg.Username,
+		Password: cfg.Password,
+		TLS:      cfg.TLS,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("revocation/valkey: dial %s: %w", cfg.Addr, err)
-	}
-
-	// Fail fast on misconfiguration.
-	pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := client.Do(pingCtx, client.B().Ping().Build()).Error(); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("revocation/valkey: ping %s: %w", cfg.Addr, err)
+		return nil, fmt.Errorf("revocation/valkey: %w", err)
 	}
 
 	return &ValkeyStore{
@@ -188,10 +177,8 @@ func (s *ValkeyStore) List(ctx context.Context, prefix string, limit int, cursor
 	return entries, nextCursor, nil
 }
 
-// Close releases the underlying Valkey client.
+// Close is a no-op: the underlying Valkey client is owned by the
+// process-wide connpool and must not be closed by individual consumers.
 func (s *ValkeyStore) Close() error {
-	if s.client != nil {
-		s.client.Close()
-	}
 	return nil
 }

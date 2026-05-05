@@ -90,9 +90,17 @@ func contextVars(r *module.Request) map[string]any {
 	return r.Context
 }
 
+// CelConfig is the typed configuration for the CEL authorizer.
+type CelConfig struct {
+	Expression string `yaml:"expression" json:"expression"`
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
-	expr, _ := raw["expression"].(string)
-	if expr == "" {
+	var cfg CelConfig
+	if err := module.DecodeConfig(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("cel %q: %w", name, err)
+	}
+	if cfg.Expression == "" {
 		return nil, fmt.Errorf("%w: cel %q: expression is required", module.ErrConfig, name)
 	}
 	env, err := cel.NewEnv(
@@ -103,7 +111,7 @@ func factory(name string, raw map[string]any) (module.Authorizer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: cel %q: env: %v", module.ErrConfig, name, err)
 	}
-	ast, iss := env.Compile(expr)
+	ast, iss := env.Compile(cfg.Expression)
 	if iss != nil && iss.Err() != nil {
 		return nil, fmt.Errorf("%w: cel %q: compile: %v", module.ErrConfig, name, iss.Err())
 	}

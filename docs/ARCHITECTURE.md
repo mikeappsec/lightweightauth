@@ -63,24 +63,55 @@ requests never see a half-applied config.
 
 ```go
 type Engine struct {
-    identifiers []module.Identifier
-    authorizer  module.Authorizer       // single composite (and/or)
-    mutators    []module.ResponseMutator
-    cache       *cache.Layer
+    identifiers    []module.Identifier
+    authorizer     module.Authorizer       // single composite (and/or)
+    mutators       []module.ResponseMutator
+    identifierMode IdentifierMode          // FirstMatch | AllMust
+    decisionCache  *cache.Decision
+    revocationStore revocation.Store
 }
 
-func (e *Engine) Evaluate(ctx, req) (*Decision, error)
+func (e *Engine) Evaluate(ctx, req) (*Decision, *Identity, error)
 ```
+
+### Identifier modes
+
+| Mode | Execution | Behaviour |
+|------|-----------|-----------|
+| `FirstMatch` | Sequential | First non-ErrNoMatch result wins; other errors are terminal |
+| `AllMust` | Concurrent (`errgroup`) | All identifiers fan out in parallel; first error cancels rest; claims merge in config order (first-writer-wins) |
+
+### Revocation checking
+
+After identification, revocation keys are checked concurrently via
+`revocation.ParallelChecker` (bounded `errgroup`). For the common 2-key
+case (jti + sub), this halves the latency vs sequential lookups.
 
 ## Concurrency model
 
-- One goroutine per inbound RPC (gRPC / HTTP). No worker pools.
-- Identifiers run **sequentially** by default (cheap, deterministic). A
-  config flag enables parallel evaluation when an `AuthConfig` lists many
-  independent identifiers.
+- One goroutine per inbound RPC (gRPC / HTTP).
+- **FirstMatch identifiers** run sequentially (cheap, deterministic, early-exit).
+- **AllMust identifiers** fan out concurrently via `errgroup` with bounded
+  goroutines — all must succeed, first error cancels the rest. Claims merge
+  in config order (first-writer-wins).
+- **Revocation checks** use `ParallelChecker` to query multiple keys
+  concurrently (bounded worker pool), eliminating sequential round-trips.
 - Cache lookups go through `singleflight` keyed by the cache key, so a
   thousand simultaneous requests for the same JWKS/token cause one upstream
   call.
+- **Background workers**: Key rotation `Reaper` goroutine, NegCache reaper,
+  JWKS refresh (delegated to jwx library).
+
+## Connection pools (Singleton)
+
+Process-wide connection pool singletons in `pkg/connpool` eliminate connection
+churn on config reload and share connections across subsystems:
+
+| Pool | Key | Purpose |
+|------|-----|---------|
+| `connpool.GetValkey(cfg)` | address+user | Shared Valkey client (cache + revocation) |
+| `connpool.GetHTTP(base)` | base URL | Shared `*http.Client` with timeouts |
+| `connpool.GetGRPC(target, opts)` | target+creds | Shared gRPC `*ClientConn` |
 
 ## Configuration & hot reload
 
@@ -98,14 +129,39 @@ config.Source ── pushes ──► config.Compiler ── builds ──► *E
 ## Plugin registry
 
 ```go
-// pkg/module/registry.go (sketch)
-var identifiers = map[string]Factory{}
-func RegisterIdentifier(name string, f Factory) { identifiers[name] = f }
+// pkg/module/generic_registry.go
+type Registry[T any] struct { ... }
+func NewRegistry[T any](kind string) *Registry[T]
+func (r *Registry[T]) Register(typeName string, factory FactoryFunc[T])
+func (r *Registry[T]) Build(typeName, instanceName string, cfg map[string]any) (T, error)
 ```
 
-Built-ins call this in their `init()`. The compile-time registry is the
-default; an out-of-process registry adapter can be added later that wraps a
-gRPC plugin behind the same `Identifier` interface.
+The `Registry[T]` is generic over `Identifier`, `Authorizer`, and `ResponseMutator`.
+Built-ins call `Register()` in their `init()`. A `DecoratedRegistry[T]` extends this
+with a composable decorator chain applied automatically at build time.
+
+### Decorator chain
+
+Cross-cutting concerns are applied via decorators rather than embedding logic in
+the pipeline engine:
+
+| Decorator | Purpose |
+|-----------|---------|
+| `WithIdentifierTimeout(d)` | Per-module deadline enforcement |
+| `WithIdentifierTracing(tracer)` | OTel span per Identify call |
+| `WithIdentifierMetrics(fn)` | Per-call latency/outcome recording |
+| `WithIdentifierBreaker(guard)` | Circuit breaker + retry budget |
+| `WithAuthorizerTimeout(d)` | Per-authorizer deadline |
+| `WithAuthorizerTracing(tracer)` | OTel span per Authorize call |
+| `WithAuthorizerMetrics(fn)` | Per-call latency/outcome recording |
+| `WithAuthorizerBreaker(guard)` | Circuit breaker + retry budget |
+| `WithShadowAuthorizer(shadow, fn)` | Run shadow policy, report disagreements |
+| `WithMutatorTimeout(d)` | Per-mutator deadline |
+| `WithMutatorTracing(tracer)` | OTel span per Mutate call |
+| `WithMutatorBreaker(guard)` | Circuit breaker + retry budget |
+
+Decorators compose via `DecoratedRegistry.AddDecorator(func(T) T)` — they wrap
+every module produced by `Build()` in the order they are added (first = innermost).
 
 ## Server layer
 

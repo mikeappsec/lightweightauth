@@ -71,13 +71,13 @@ func TestDecision_TagBasedInvalidation(t *testing.T) {
 	}
 
 	// Populate entries with tags.
-	_, _, _ = d.Do(ctx, "key-alice-acme", []string{"tenant:acme", "subject:alice"}, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "key-alice-acme", []string{"tenant:acme", "subject:alice"}, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
-	_, _, _ = d.Do(ctx, "key-bob-acme", []string{"tenant:acme", "subject:bob"}, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "key-bob-acme", []string{"tenant:acme", "subject:bob"}, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
-	_, _, _ = d.Do(ctx, "key-alice-other", []string{"tenant:other", "subject:alice"}, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "key-alice-other", []string{"tenant:other", "subject:alice"}, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
 
@@ -89,7 +89,7 @@ func TestDecision_TagBasedInvalidation(t *testing.T) {
 
 	// Verify invalidated entries are misses.
 	calls := 0
-	_, hit, _ := d.Do(ctx, "key-alice-acme", nil, func() (*module.Decision, error) {
+	_, hit, _ := d.Do(ctx, "key-alice-acme", nil, func(_ context.Context) (*module.Decision, error) {
 		calls++
 		return &module.Decision{Allow: false}, nil
 	})
@@ -101,7 +101,7 @@ func TestDecision_TagBasedInvalidation(t *testing.T) {
 	}
 
 	// Non-invalidated entry is still a hit.
-	_, hit, _ = d.Do(ctx, "key-alice-other", nil, func() (*module.Decision, error) {
+	_, hit, _ = d.Do(ctx, "key-alice-other", nil, func(_ context.Context) (*module.Decision, error) {
 		t.Fatal("fn should not be called for non-invalidated key")
 		return nil, nil
 	})
@@ -126,7 +126,7 @@ func TestDecision_StaleWhileRevalidate(t *testing.T) {
 	}
 
 	// Populate cache.
-	_, _, err = d.Do(ctx, "stale-key", nil, func() (*module.Decision, error) {
+	_, _, err = d.Do(ctx, "stale-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true, Status: 200}, nil
 	})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestDecision_StaleWhileRevalidate(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 
 	// Now authorizer returns upstream error — should get stale entry.
-	dec, hit, err := d.Do(ctx, "stale-key", nil, func() (*module.Decision, error) {
+	dec, hit, err := d.Do(ctx, "stale-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return nil, module.ErrUpstream
 	})
 	if err != nil {
@@ -165,14 +165,14 @@ func TestDecision_StaleNotServedWhenDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _ = d.Do(ctx, "no-stale-key", nil, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "no-stale-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
 
 	time.Sleep(60 * time.Millisecond)
 
 	// Upstream error should propagate.
-	_, _, err = d.Do(ctx, "no-stale-key", nil, func() (*module.Decision, error) {
+	_, _, err = d.Do(ctx, "no-stale-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return nil, module.ErrUpstream
 	})
 	if !errors.Is(err, module.ErrUpstream) {
@@ -195,14 +195,14 @@ func TestDecision_MaxStalenessRespected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, _ = d.Do(ctx, "max-stale-key", nil, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "max-stale-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
 
 	// Wait long enough that entry is past both freshUntil AND maxStaleness.
 	time.Sleep(100 * time.Millisecond)
 
-	_, _, err = d.Do(ctx, "max-stale-key", nil, func() (*module.Decision, error) {
+	_, _, err = d.Do(ctx, "max-stale-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return nil, module.ErrUpstream
 	})
 	if !errors.Is(err, module.ErrUpstream) {
@@ -226,7 +226,7 @@ func TestDecision_EvictionCleansTagIndex(t *testing.T) {
 
 	// Fill cache with 3 tagged entries.
 	for _, key := range []string{"k1", "k2", "k3"} {
-		_, _, _ = d.Do(ctx, key, []string{"tag:" + key}, func() (*module.Decision, error) {
+		_, _, _ = d.Do(ctx, key, []string{"tag:" + key}, func(_ context.Context) (*module.Decision, error) {
 			return &module.Decision{Allow: true}, nil
 		})
 	}
@@ -235,7 +235,7 @@ func TestDecision_EvictionCleansTagIndex(t *testing.T) {
 	}
 
 	// Add a 4th entry — should evict one LRU entry and clean its tag.
-	_, _, _ = d.Do(ctx, "k4", []string{"tag:k4"}, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "k4", []string{"tag:k4"}, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
 
@@ -261,14 +261,14 @@ func TestDecision_StaleServedCounter(t *testing.T) {
 	}
 
 	// Populate.
-	_, _, _ = d.Do(ctx, "metric-key", nil, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "metric-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return &module.Decision{Allow: true}, nil
 	})
 
 	time.Sleep(60 * time.Millisecond)
 
 	// Trigger stale serve.
-	_, _, _ = d.Do(ctx, "metric-key", nil, func() (*module.Decision, error) {
+	_, _, _ = d.Do(ctx, "metric-key", nil, func(_ context.Context) (*module.Decision, error) {
 		return nil, module.ErrUpstream
 	})
 

@@ -45,8 +45,15 @@ const deviceCodeGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 // handleDeviceStart asks the IdP for a fresh (device_code, user_code) pair.
 // The caller (typically a CLI) shows the user_code + verification_uri to
 // the human, then begins polling /oauth2/device/poll with the device_code.
+// handleDeviceStart requests a device_code from the IdP (RFC 8628 §3.1).
+//
+// RC-06 hardening: POST only (RFC 8628 §3.1 — "The client makes a POST
+// request to the device authorization endpoint"). Accepting GET would allow
+// cross-site GET navigations (SameSite=Lax sends cookies) to initiate device
+// authorization flows on the victim's behalf, potentially enabling session
+// fixation via device_code linkage.
 func (i *identifier) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

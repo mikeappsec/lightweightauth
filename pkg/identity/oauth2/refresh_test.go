@@ -74,7 +74,7 @@ func newRefreshIDP(t *testing.T, clientID string) *refreshIDP {
 				Subject("alice").
 				Audience([]string{idp.clientID}).
 				IssuedAt(time.Now()).
-				Expiration(time.Now().Add(5 * time.Minute)).
+				Expiration(time.Now().Add(5*time.Minute)).
 				Claim("email", "alice@example.com").
 				Claim("groups", []string{"admin"}).
 				Claim("kind", kind).
@@ -204,7 +204,7 @@ func TestOAuth2_RefreshOnUserInfo(t *testing.T) {
 	}
 
 	// Explicit /oauth2/refresh forces another rotation.
-	resp, err = cli.Get(lw.URL + "/oauth2/refresh")
+	resp, err = cli.Post(lw.URL+"/oauth2/refresh", "application/json", nil)
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}

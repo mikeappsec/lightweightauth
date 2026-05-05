@@ -99,7 +99,15 @@ func buildInput(r *module.Request, id *module.Identity) map[string]any {
 	}
 }
 
+var knownKeys = map[string]struct{}{
+	"rego":  {},
+	"query": {},
+}
+
 func factory(name string, raw map[string]any) (module.Authorizer, error) {
+	if err := module.CheckUnknownKeys("opa", name, raw, knownKeys); err != nil {
+		return nil, err
+	}
 	src, _ := raw["rego"].(string)
 	if src == "" {
 		return nil, fmt.Errorf("%w: opa %q: rego source is required", module.ErrConfig, name)

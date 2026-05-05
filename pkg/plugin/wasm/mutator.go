@@ -25,13 +25,19 @@ func (m *Mutator) Name() string { return m.mod.name }
 // Mutate calls the guest "mutate" export with the serialized request,
 // identity, and decision.
 func (m *Mutator) Mutate(ctx context.Context, r *module.Request, id *module.Identity, d *module.Decision) error {
+	var subject string
+	var claims map[string]any
+	if id != nil {
+		subject = id.Subject
+		claims = id.Claims
+	}
 	req := mutateRequest{
 		Method:          r.Method,
 		Host:            r.Host,
 		Path:            r.Path,
 		Headers:         r.Headers,
-		Subject:         id.Subject,
-		Claims:          id.Claims,
+		Subject:         subject,
+		Claims:          claims,
 		Allow:           d.Allow,
 		ResponseHeaders: d.ResponseHeaders,
 		UpstreamHeaders: d.UpstreamHeaders,
