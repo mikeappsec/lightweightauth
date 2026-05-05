@@ -2206,7 +2206,7 @@ G6. ~~**EXPLAIN-API-1 — Decision explainability API.**~~ ✅ Done
   structured JSON suitable for support tooling and incident response.
   Promotion trigger: D2 (policy versioning) for trace stamping.
 
-G7. **POL-SIM-1 — Policy simulation and impact analysis.**
+G7. ~~**POL-SIM-1 — Policy simulation and impact analysis.**~~ ✅ Done
   Reduces production-change risk. Replay last N hours of production
   audit events against a candidate policy; report percentage of
   decisions changed, top affected subjects/paths, deny reasons, and

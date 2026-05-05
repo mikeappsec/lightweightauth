@@ -231,3 +231,64 @@ func TestExplain_ACR_AMR(t *testing.T) {
 		t.Errorf("AMR = %q, want 'pwd otp'", result.Identity.AMR)
 	}
 }
+
+func TestSimEvaluate_Allow(t *testing.T) {
+	t.Parallel()
+	e, err := New(Options{
+		Identifiers: []module.Identifier{
+			&fakeID{name: "jwt", id: &module.Identity{Subject: "alice"}},
+		},
+		Authorizer: &fakeAZ{dec: &module.Decision{Allow: true}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	allow, reason := e.SimEvaluate(context.Background(), &module.Request{Method: "GET", Path: "/"})
+	if !allow {
+		t.Fatalf("expected allow, got deny: %s", reason)
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty", reason)
+	}
+}
+
+func TestSimEvaluate_Deny(t *testing.T) {
+	t.Parallel()
+	e, err := New(Options{
+		Identifiers: []module.Identifier{
+			&fakeID{name: "jwt", id: &module.Identity{Subject: "bob"}},
+		},
+		Authorizer: &fakeAZ{dec: &module.Decision{Allow: false, Reason: "not in admin"}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	allow, reason := e.SimEvaluate(context.Background(), &module.Request{Method: "DELETE", Path: "/admin"})
+	if allow {
+		t.Fatal("expected deny")
+	}
+	if reason != "not in admin" {
+		t.Errorf("reason = %q, want 'not in admin'", reason)
+	}
+}
+
+func TestSimEvaluate_IdentifyError(t *testing.T) {
+	t.Parallel()
+	e, err := New(Options{
+		Identifiers: []module.Identifier{
+			&fakeID{name: "jwt", err: module.ErrNoMatch},
+		},
+		Authorizer: &fakeAZ{dec: &module.Decision{Allow: true}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// No identity matched → identify returns ErrInvalidCredential → deny.
+	allow, reason := e.SimEvaluate(context.Background(), &module.Request{Method: "GET", Path: "/"})
+	if allow {
+		t.Fatal("expected deny when no identifier matches")
+	}
+	if reason == "" {
+		t.Error("expected non-empty reason")
+	}
+}
