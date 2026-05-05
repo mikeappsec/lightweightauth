@@ -2180,7 +2180,7 @@ G3. ~~**DATA-RES-1 — PII redaction and data residency.**~~ ✅ Done.
   data-residency policy attaches to `AuthConfig`. Promotion trigger:
   D4 (audit sinks) shipped.
 
-G4. **COMP-REPORT-1 — Compliance report generator.**
+G4. ~~**COMP-REPORT-1 — Compliance report generator.**~~ ✅ Done.
   Converts technical controls into procurement evidence. `lwauthctl
   compliance --framework {soc2|iso27001|pci-dss|hipaa|fedramp}` emits
   PDF and JSON evidence: who can access what, who changed policy when
