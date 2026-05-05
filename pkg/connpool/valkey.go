@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"sync"
@@ -42,12 +43,11 @@ type ValkeyConfig struct {
 // so different auth configs targeting different servers remain isolated.
 func valkeyKey(cfg ValkeyConfig) string {
 	h := sha256.New()
-	h.Write([]byte(cfg.Addr))
-	h.Write([]byte{0})
-	h.Write([]byte(cfg.Username))
-	h.Write([]byte{0})
-	h.Write([]byte(cfg.Password))
-	h.Write([]byte{0})
+	// Use length-prefixed encoding to prevent null-byte field confusion
+	// where field values containing \x00 could collide across boundaries.
+	hashField(h, []byte(cfg.Addr))
+	hashField(h, []byte(cfg.Username))
+	hashField(h, []byte(cfg.Password))
 	if cfg.TLS {
 		h.Write([]byte("tls"))
 	}
@@ -147,4 +147,13 @@ func ResetForTest() {
 		c.Close()
 		delete(valkeyPool.clients, k)
 	}
+}
+
+// hashField writes a length-prefixed field into a hash to prevent
+// boundary confusion when field values contain null bytes.
+func hashField(h interface{ Write([]byte) (int, error) }, data []byte) {
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], uint32(len(data)))
+	h.Write(buf[:])
+	h.Write(data)
 }

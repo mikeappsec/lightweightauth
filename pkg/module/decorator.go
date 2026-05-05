@@ -3,7 +3,10 @@
 
 package module
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // IdentifierDecorator wraps an Identifier with cross-cutting behavior
 // (observability, revocation checks, rotation tracking, etc.).
@@ -22,6 +25,7 @@ type MutatorDecorator func(ResponseMutator) ResponseMutator
 // automatically applied to every module built through it.
 type DecoratedRegistry[T any] struct {
 	*Registry[T]
+	mu         sync.RWMutex
 	decorators []func(T) T
 }
 
@@ -36,6 +40,8 @@ func NewDecoratedRegistry[T any](kind string) *DecoratedRegistry[T] {
 // by Build. Decorators are applied in the order they are added (first
 // added = innermost wrapper).
 func (r *DecoratedRegistry[T]) AddDecorator(d func(T) T) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.decorators = append(r.decorators, d)
 }
 
@@ -46,7 +52,10 @@ func (r *DecoratedRegistry[T]) Build(typeName, instanceName string, cfg map[stri
 	if err != nil {
 		return base, err
 	}
-	for _, d := range r.decorators {
+	r.mu.RLock()
+	decs := r.decorators
+	r.mu.RUnlock()
+	for _, d := range decs {
 		base = d(base)
 	}
 	return base, nil

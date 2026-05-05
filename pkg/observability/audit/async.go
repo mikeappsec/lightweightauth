@@ -6,6 +6,7 @@ package audit
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 )
 
@@ -17,6 +18,7 @@ type AsyncSink struct {
 	inner      Sink
 	ch         chan *Event
 	done       chan struct{}
+	closeOnce  sync.Once
 	dropped    atomic.Int64
 	loggedDrop atomic.Bool
 }
@@ -60,8 +62,10 @@ func (a *AsyncSink) Dropped() int64 {
 // Close signals the drain goroutine to flush and exit. Blocks until
 // all buffered events are delivered.
 func (a *AsyncSink) Close() {
-	close(a.ch)
-	<-a.done
+	a.closeOnce.Do(func() {
+		close(a.ch)
+		<-a.done
+	})
 }
 
 func (a *AsyncSink) drain() {

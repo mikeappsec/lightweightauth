@@ -35,7 +35,7 @@ func TestDecision_HitsPositive(t *testing.T) {
 	t.Parallel()
 	d := mkDec(t, time.Minute, 5*time.Second, "sub")
 	calls := atomic.Int32{}
-	fn := func() (*module.Decision, error) {
+	fn := func(_ context.Context) (*module.Decision, error) {
 		calls.Add(1)
 		return &module.Decision{Allow: true}, nil
 	}
@@ -58,7 +58,7 @@ func TestDecision_HitsNegative(t *testing.T) {
 	t.Parallel()
 	d := mkDec(t, time.Minute, time.Minute, "sub")
 	calls := atomic.Int32{}
-	fn := func() (*module.Decision, error) {
+	fn := func(_ context.Context) (*module.Decision, error) {
 		calls.Add(1)
 		return &module.Decision{Allow: false, Status: 403, Reason: "nope"}, nil
 	}
@@ -80,7 +80,7 @@ func TestDecision_UpstreamErrorNotCached(t *testing.T) {
 	t.Parallel()
 	d := mkDec(t, time.Minute, time.Minute, "sub")
 	calls := atomic.Int32{}
-	fn := func() (*module.Decision, error) {
+	fn := func(_ context.Context) (*module.Decision, error) {
 		calls.Add(1)
 		return nil, module.ErrUpstream
 	}
@@ -122,7 +122,7 @@ func TestDecision_SingleflightCoalesces(t *testing.T) {
 	d := mkDec(t, time.Minute, time.Minute, "sub")
 	calls := atomic.Int32{}
 	gate := make(chan struct{})
-	fn := func() (*module.Decision, error) {
+	fn := func(_ context.Context) (*module.Decision, error) {
 		calls.Add(1)
 		<-gate
 		return &module.Decision{Allow: true}, nil

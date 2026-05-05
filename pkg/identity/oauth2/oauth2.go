@@ -14,12 +14,12 @@
 //   - The module also implements [module.HTTPMounter] and exposes the
 //     interactive flow under "/oauth2/":
 //
-//       /oauth2/start?rd=/path  →  redirect to the IdP's authorize URL
-//                                  with PKCE (S256) + opaque state.
-//       /oauth2/callback        →  state check → token exchange → id_token
-//                                  verify → mint session → redirect to rd.
-//       /oauth2/logout          →  clear session cookie → 302 to rdAfterLogout.
-//       /oauth2/userinfo        →  JSON of the current session (debug / SPAs).
+//     /oauth2/start?rd=/path  →  redirect to the IdP's authorize URL
+//     with PKCE (S256) + opaque state.
+//     /oauth2/callback        →  state check → token exchange → id_token
+//     verify → mint session → redirect to rd.
+//     /oauth2/logout          →  clear session cookie → 302 to rdAfterLogout.
+//     /oauth2/userinfo        →  JSON of the current session (debug / SPAs).
 //
 // PKCE is mandatory (OAuth 2.1). The state and code_verifier travel in a
 // short-lived encrypted "flow" cookie keyed by the same secret as the
@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
@@ -145,17 +146,25 @@ type identifier struct {
 	httpClient       *http.Client
 	maxResponseBytes int64
 
+	// refreshSF coalesces concurrent refresh-token exchanges for the same
+	// session. Without this, concurrent requests that all see an expiring
+	// access token race to the IdP's token endpoint with the same
+	// refresh_token. IdPs with reuse detection (Auth0, Okta, Keycloak)
+	// revoke the entire grant on double-use, permanently killing the
+	// session (RC-01).
+	refreshSF singleflight.Group
+
 	jwtParseOpts []jwtlib.ParseOption
 }
 
 // Compile-time guards.
 var (
-	_ module.Identifier = (*identifier)(nil)
+	_ module.Identifier  = (*identifier)(nil)
 	_ module.HTTPMounter = (*identifier)(nil)
 )
 
-func (i *identifier) Name() string         { return i.name }
-func (i *identifier) MountPrefix() string  { return i.mountPrefix }
+func (i *identifier) Name() string        { return i.name }
+func (i *identifier) MountPrefix() string { return i.mountPrefix }
 
 // Identify resolves the encrypted session cookie. Absent / tampered
 // cookies translate to ErrNoMatch so other identifiers may still match.
@@ -254,14 +263,14 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 	}
 
 	return &identifier{
-		name:           name,
-		mountPrefix:    cfg.MountPrefix,
-		upstreamHeader: cfg.UpstreamHeader,
-		postLogin:      cfg.PostLoginPath,
-		postLogout:     cfg.PostLogoutPath,
-		endSessionURL:  cfg.EndSessionURL,
-		refreshLeeway:  leeway,
-		deviceAuthURL:  cfg.DeviceAuthURL,
+		name:                 name,
+		mountPrefix:          cfg.MountPrefix,
+		upstreamHeader:       cfg.UpstreamHeader,
+		postLogin:            cfg.PostLoginPath,
+		postLogout:           cfg.PostLogoutPath,
+		endSessionURL:        cfg.EndSessionURL,
+		refreshLeeway:        leeway,
+		deviceAuthURL:        cfg.DeviceAuthURL,
 		allowedRedirectHosts: buildAllowedHosts(cfg.AllowedRedirectHosts),
 		oauth: &oauth2.Config{
 			ClientID:     cfg.ClientID,

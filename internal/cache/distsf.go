@@ -149,6 +149,15 @@ func (d *DistSF) pollL2(ctx context.Context, key string) ([]byte, error) {
 			return nil, ctx.Err()
 		case <-timer.C:
 			if time.Now().After(deadline) {
+				// Final L2 check: the winner may have written between our
+				// last poll and this deadline expiry.
+				raw, ok, err := d.l2.Get(ctx, key)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					return raw, nil
+				}
 				return nil, ErrDistSFLost
 			}
 			raw, ok, err := d.l2.Get(ctx, key)

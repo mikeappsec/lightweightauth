@@ -8,6 +8,7 @@ package server
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
 )
@@ -29,5 +30,15 @@ func NewEngineHolder(eng *pipeline.Engine) *EngineHolder {
 // been initialized.
 func (h *EngineHolder) Load() *pipeline.Engine { return h.p.Load() }
 
-// Swap atomically installs a new Engine.
-func (h *EngineHolder) Swap(eng *pipeline.Engine) { h.p.Store(eng) }
+// Swap atomically installs a new Engine and closes the old one after a
+// grace period for in-flight requests to drain.
+func (h *EngineHolder) Swap(eng *pipeline.Engine) {
+	old := h.p.Swap(eng)
+	if old != nil {
+		go func() {
+			// Allow in-flight requests referencing the old engine to complete.
+			time.Sleep(30 * time.Second)
+			old.Close()
+		}()
+	}
+}

@@ -30,8 +30,8 @@ type HTTPConfig struct {
 
 func httpKey(cfg HTTPConfig) string {
 	h := sha256.New()
-	h.Write([]byte(cfg.BaseURL))
-	h.Write([]byte{0})
+	hashField(h, []byte(cfg.BaseURL))
+	hashField(h, []byte(cfg.Timeout.String()))
 	if cfg.TLS {
 		h.Write([]byte("tls"))
 	}

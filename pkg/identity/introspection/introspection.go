@@ -109,7 +109,12 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		}
 	}
 
-	v, err := i.sf.Do(key, func() (any, error) { return i.callIntrospection(ctx, tok) })
+	v, err := i.sf.Do(key, func() (any, error) {
+		// Use context.WithoutCancel so a single client disconnect doesn't
+		// fail all coalesced waiters sharing this singleflight slot.
+		sfCtx := context.WithoutCancel(ctx)
+		return i.callIntrospection(sfCtx, tok)
+	})
 	if err != nil {
 		// Cache ErrUpstream outcomes briefly so a flood of requests
 		// for the same token can't hammer a flapping IdP. We do NOT
@@ -122,7 +127,13 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		}
 		return nil, err
 	}
-	claims := v.(map[string]any)
+	shared := v.(map[string]any)
+	// Copy the claims map — singleflight returns the same reference to all
+	// coalesced waiters, and downstream stages may mutate Claims.
+	claims := make(map[string]any, len(shared))
+	for k, val := range shared {
+		claims[k] = val
+	}
 
 	active, _ := claims["active"].(bool)
 	if !active {

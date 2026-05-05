@@ -17,6 +17,7 @@ import (
 	"hash/fnv"
 	"log/slog"
 	rand2 "math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -162,6 +163,17 @@ func New(o Options) (*Engine, error) {
 		revocationStore:    o.RevocationStore,
 		revocationFailOpen: o.RevocationFailOpen,
 	}, nil
+}
+
+// Close releases resources held by the engine. Must be called on the old
+// engine after a hot-reload swap to prevent goroutine/connection leaks.
+func (e *Engine) Close() {
+	if e == nil {
+		return
+	}
+	if e.rateLimiter != nil {
+		e.rateLimiter.Close()
+	}
 }
 
 // DecisionCacheStats returns the live atomic counters of the engine's
@@ -435,20 +447,20 @@ func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Ident
 	}
 
 	audit.Default().Record(ctx, &audit.Event{
-		Timestamp:      time.Now().UTC(),
-		Tenant:         r.TenantID,
-		Subject:        subject,
-		IdentitySource: source,
-		Authorizer:     azName,
-		Decision:       outcome,
-		DenyReason:     denyReason,
-		HTTPStatus:     httpStatus,
-		Method:         r.Method,
-		Host:           r.Host,
-		Path:           r.Path,
-		LatencyMs:      float64(latency.Microseconds()) / 1000.0,
-		CacheHit:       cacheHit,
-		TraceID:        tracing.TraceIDFromContext(ctx),
+		Timestamp:          time.Now().UTC(),
+		Tenant:             r.TenantID,
+		Subject:            subject,
+		IdentitySource:     source,
+		Authorizer:         azName,
+		Decision:           outcome,
+		DenyReason:         denyReason,
+		HTTPStatus:         httpStatus,
+		Method:             r.Method,
+		Host:               r.Host,
+		Path:               r.Path,
+		LatencyMs:          float64(latency.Microseconds()) / 1000.0,
+		CacheHit:           cacheHit,
+		TraceID:            tracing.TraceIDFromContext(ctx),
 		PolicyVersion:      e.policyVersion,
 		ShadowDisagreement: shadowDisagreement,
 		CanaryAgreement:    canaryAgreement,
@@ -473,8 +485,8 @@ func (e *Engine) runAuthorize(ctx context.Context, r *module.Request, id *module
 	}
 	key := e.decisionCache.Key(r, id)
 	tags := e.deriveCacheTags(r, id)
-	return e.decisionCache.Do(ctx, key, tags, func() (*module.Decision, error) {
-		return e.authorizer.Authorize(ctx, r, id)
+	return e.decisionCache.Do(ctx, key, tags, func(sfCtx context.Context) (*module.Decision, error) {
+		return e.authorizer.Authorize(sfCtx, r, id)
 	})
 }
 
@@ -610,7 +622,8 @@ func (e *Engine) shouldCanary(r *module.Request, id *module.Identity) bool {
 	switch {
 	case e.canarySample != "" && len(e.canarySample) > 7 && e.canarySample[:7] == "header:":
 		// Route requests carrying the named header to canary.
-		hdr := e.canarySample[7:]
+		// r.Headers keys are always lowercase (module.Request invariant).
+		hdr := strings.ToLower(e.canarySample[7:])
 		_, ok := r.Headers[hdr]
 		return ok
 	case e.canarySample == "hash:sub" && id != nil && id.Subject != "":
@@ -646,7 +659,8 @@ func (e *Engine) classifyAgreement(prodDec *module.Decision, prodErr error, cana
 // that implement module.HTTPMounter. Used by the HTTP server to expose
 // flow endpoints like /oauth2/start. Each prefix appears at most once;
 // duplicates are caller-visible (returned as-is) so the server can warn.
-func (e *Engine) HTTPMounts() []module.HTTPMounter {	var out []module.HTTPMounter
+func (e *Engine) HTTPMounts() []module.HTTPMounter {
+	var out []module.HTTPMounter
 	walk := func(v any) {
 		if m, ok := v.(module.HTTPMounter); ok {
 			out = append(out, m)

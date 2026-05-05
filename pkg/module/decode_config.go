@@ -4,6 +4,7 @@
 package module
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -50,12 +51,15 @@ func DecodeConfig(raw map[string]any, dest any) error {
 
 	// JSON round-trip: map[string]any → JSON bytes → typed struct.
 	// This handles all the numeric/bool/string coercions that YAML
-	// parsing produces.
+	// parsing produces. DisallowUnknownFields catches typos in nested
+	// struct fields that the top-level check cannot see.
 	b, err := json.Marshal(raw)
 	if err != nil {
 		return fmt.Errorf("%w: marshal config: %v", ErrConfig, err)
 	}
-	if err := json.Unmarshal(b, dest); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dest); err != nil {
 		return fmt.Errorf("%w: decode config: %v", ErrConfig, err)
 	}
 	return nil

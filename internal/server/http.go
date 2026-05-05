@@ -115,6 +115,8 @@ func NewHTTPHandlerWithOptions(h *EngineHolder, o HTTPHandlerOptions) http.Handl
 		mux.Handle("/openapi.json", readOnly(http.HandlerFunc(openAPIJSONHandler)))
 		mux.Handle("/openapi.yaml", readOnly(http.HandlerFunc(openAPIYAMLHandler)))
 	}
+	// Register module HTTP mounts dynamically so that hot-reloads pick
+	// up new module instances without rebuilding the mux.
 	if eng := h.Load(); eng != nil {
 		seen := map[string]bool{}
 		for _, m := range eng.HTTPMounts() {
@@ -123,7 +125,21 @@ func NewHTTPHandlerWithOptions(h *EngineHolder, o HTTPHandlerOptions) http.Handl
 				continue
 			}
 			seen[p] = true
-			mux.Handle(p, m.HTTPHandler())
+			prefix := p // capture for closure
+			mux.Handle(prefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cur := h.Load()
+				if cur == nil {
+					writeError(w, r, http.StatusServiceUnavailable, "no engine loaded")
+					return
+				}
+				for _, mount := range cur.HTTPMounts() {
+					if mount.MountPrefix() == prefix {
+						mount.HTTPHandler().ServeHTTP(w, r)
+						return
+					}
+				}
+				http.NotFound(w, r)
+			}))
 		}
 	}
 	return mux

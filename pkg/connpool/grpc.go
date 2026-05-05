@@ -38,16 +38,11 @@ type GRPCConfig struct {
 
 func grpcKey(cfg GRPCConfig) string {
 	h := sha256.New()
-	h.Write([]byte(cfg.Address))
-	h.Write([]byte{0})
-	h.Write([]byte(cfg.TLSCAFile))
-	h.Write([]byte{0})
-	h.Write([]byte(cfg.TLSCertFile))
-	h.Write([]byte{0})
-	h.Write([]byte(cfg.TLSKeyFile))
-	h.Write([]byte{0})
-	h.Write([]byte(cfg.ServerName))
-	h.Write([]byte{0})
+	hashField(h, []byte(cfg.Address))
+	hashField(h, []byte(cfg.TLSCAFile))
+	hashField(h, []byte(cfg.TLSCertFile))
+	hashField(h, []byte(cfg.TLSKeyFile))
+	hashField(h, []byte(cfg.ServerName))
 	if cfg.Insecure {
 		h.Write([]byte("insecure"))
 	}
