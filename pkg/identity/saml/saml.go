@@ -31,12 +31,18 @@
 package saml
 
 import (
+	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"encoding/xml"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
@@ -58,6 +64,7 @@ type identifier struct {
 	attributeMapping   map[string]string // claim name → SAML attribute name
 	header             string            // header containing the SAMLResponse (Base64)
 	formField          string            // form field name for POST binding
+	replayCache        *assertionReplayCache
 }
 
 func (i *identifier) Name() string { return i.name }
@@ -88,6 +95,17 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 		return nil, fmt.Errorf("%w: saml: invalid XML: %v", module.ErrInvalidCredential, err)
 	}
 
+	// G9-VULN-03: Validate Response Destination attribute.
+	// Per SAML 2.0 Bindings §3.5.5.2, the Destination must match the SP's
+	// Assertion Consumer Service URL to prevent responses intended for other
+	// SPs from being accepted.
+	if resp.Destination != "" && i.entityID != "" {
+		if resp.Destination != i.entityID {
+			return nil, fmt.Errorf("%w: saml: Response Destination %q does not match entityId %q",
+				module.ErrInvalidCredential, resp.Destination, i.entityID)
+		}
+	}
+
 	// Validate issuer.
 	if i.issuer != "" && resp.Issuer != i.issuer {
 		return nil, fmt.Errorf("%w: saml: issuer mismatch: got %q, want %q",
@@ -116,17 +134,30 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	now := time.Now()
 	if assertion.Conditions.NotBefore != "" {
 		nb, err := time.Parse(time.RFC3339, assertion.Conditions.NotBefore)
-		if err == nil && now.Add(i.maxClockSkew).Before(nb) {
+		if err != nil {
+			return nil, fmt.Errorf("%w: saml: malformed NotBefore timestamp: %q",
+				module.ErrInvalidCredential, assertion.Conditions.NotBefore)
+		}
+		if now.Add(i.maxClockSkew).Before(nb) {
 			return nil, fmt.Errorf("%w: saml: assertion not yet valid (NotBefore: %s)",
 				module.ErrInvalidCredential, assertion.Conditions.NotBefore)
 		}
 	}
 	if assertion.Conditions.NotOnOrAfter != "" {
 		noa, err := time.Parse(time.RFC3339, assertion.Conditions.NotOnOrAfter)
-		if err == nil && now.Add(-i.maxClockSkew).After(noa) {
+		if err != nil {
+			return nil, fmt.Errorf("%w: saml: malformed NotOnOrAfter timestamp: %q",
+				module.ErrInvalidCredential, assertion.Conditions.NotOnOrAfter)
+		}
+		if now.Add(-i.maxClockSkew).After(noa) {
 			return nil, fmt.Errorf("%w: saml: assertion expired (NotOnOrAfter: %s)",
 				module.ErrInvalidCredential, assertion.Conditions.NotOnOrAfter)
 		}
+	} else {
+		// G9-06: Assertions without NotOnOrAfter have no expiry boundary,
+		// which makes replay attacks trivial. Reject them.
+		return nil, fmt.Errorf("%w: saml: assertion missing NotOnOrAfter (required for replay protection)",
+			module.ErrInvalidCredential)
 	}
 
 	// Validate audience restriction.
@@ -146,9 +177,51 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 		}
 	}
 
+	// G9-VULN-02: Validate SubjectConfirmation / Recipient.
+	// Per SAML 2.0 Core §2.4.1.2, the SP must verify that
+	// SubjectConfirmationData@Recipient matches its own ACS URL.
+	if i.entityID != "" && len(assertion.Subject.SubjectConfirmations) > 0 {
+		recipientValid := false
+		for _, sc := range assertion.Subject.SubjectConfirmations {
+			if sc.SubjectConfirmationData.Recipient == i.entityID {
+				recipientValid = true
+				break
+			}
+		}
+		if !recipientValid {
+			return nil, fmt.Errorf("%w: saml: SubjectConfirmationData Recipient does not match entityId %q",
+				module.ErrInvalidCredential, i.entityID)
+		}
+	}
+
 	// Validate signature (certificate verification).
 	if err := i.verifySignature(resp, decoded); err != nil {
 		return nil, fmt.Errorf("%w: saml: %v", module.ErrInvalidCredential, err)
+	}
+
+	// G9-VULN-01: Bind the signed Reference to the deserialized assertion.
+	// Prevents XML Signature Wrapping (XSW) where an attacker injects a
+	// forged assertion as the first child and hides the signed assertion
+	// elsewhere in the document.
+	if err := i.validateSignatureCoversAssertion(resp); err != nil {
+		return nil, fmt.Errorf("%w: saml: %v", module.ErrInvalidCredential, err)
+	}
+
+	// G9-06: Replay protection — reject assertions already seen.
+	assertionID := assertion.ID
+	if assertionID == "" {
+		return nil, fmt.Errorf("%w: saml: assertion has no ID attribute (required for replay protection)",
+			module.ErrInvalidCredential)
+	}
+	// TTL = NotOnOrAfter + skew (we already parsed and validated NotOnOrAfter above).
+	noa, _ := time.Parse(time.RFC3339, assertion.Conditions.NotOnOrAfter)
+	replayTTL := time.Until(noa) + i.maxClockSkew
+	if replayTTL < time.Minute {
+		replayTTL = time.Minute
+	}
+	if !i.replayCache.Add(assertionID, replayTTL) {
+		return nil, fmt.Errorf("%w: saml: assertion ID %q already consumed (replay detected)",
+			module.ErrInvalidCredential, assertionID)
 	}
 
 	// Extract subject.
@@ -181,10 +254,11 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	}, nil
 }
 
-// verifySignature validates the SAML response signature against the IdP certificate.
+// verifySignature validates the SAML response signature cryptographically
+// against the IdP certificate's public key.
 func (i *identifier) verifySignature(resp samlResponse, raw []byte) error {
 	if i.idpCert == nil {
-		return nil // signature verification disabled (dev/test mode)
+		return fmt.Errorf("idpCertPEM is required for signature verification")
 	}
 
 	// Check that a signature is present.
@@ -192,15 +266,13 @@ func (i *identifier) verifySignature(resp samlResponse, raw []byte) error {
 		return fmt.Errorf("no signature present in response or assertion")
 	}
 
-	// Verify the IdP certificate can validate the signature.
-	// In a real implementation this would use xmldsig canonical C14N + digest.
-	// For this module we verify the certificate is trusted and not expired.
+	// Check IdP certificate validity.
 	now := time.Now()
 	if now.Before(i.idpCert.NotBefore) || now.After(i.idpCert.NotAfter) {
 		return fmt.Errorf("IdP certificate expired or not yet valid")
 	}
 
-	// Verify the response contains a valid signature reference.
+	// Select the signature to verify (response-level or assertion-level).
 	sig := resp.Signature
 	if sig.SignatureValue == "" {
 		sig = resp.Assertion.Signature
@@ -215,27 +287,382 @@ func (i *identifier) verifySignature(resp samlResponse, raw []byte) error {
 		return fmt.Errorf("unacceptable signature algorithm: %s", alg)
 	}
 
-	// Verify digest (simplified: check that DigestValue is non-empty
-	// and the reference URI is present). Full xmldsig verification
-	// would canonicalize and hash, but that requires a full C14N
-	// implementation which is beyond this module's scope without
-	// importing a third-party xmldsig library.
+	// Verify digest references are non-empty.
 	for _, ref := range sig.SignedInfo.References {
 		if ref.DigestValue == "" {
 			return fmt.Errorf("empty digest value in signature reference")
 		}
 	}
 
-	_ = raw // reserved for future full xmldsig verification
+	// G9-07: Verify that the digest of the referenced content matches
+	// the DigestValue declared in SignedInfo. Without this, an attacker
+	// can modify assertion content while reusing a valid signature.
+	if err := i.verifyDigestReferences(sig, raw); err != nil {
+		return err
+	}
+
+	// Decode the signature value from base64.
+	sigBytes, err := base64.StdEncoding.DecodeString(
+		strings.TrimSpace(sig.SignatureValue))
+	if err != nil {
+		return fmt.Errorf("invalid base64 in SignatureValue: %w", err)
+	}
+	if len(sigBytes) == 0 {
+		return fmt.Errorf("empty SignatureValue after decode")
+	}
+
+	// Extract the raw <SignedInfo>...</SignedInfo> element bytes from
+	// within the specific <Signature> block being verified. Searching
+	// only within the parent prevents XML Signature Wrapping (XSW)
+	// attacks where an attacker injects a second Signature earlier in
+	// the document.
+	signedInfoBytes, err := extractSignedInfo(raw, sig.SignatureValue)
+	if err != nil {
+		return fmt.Errorf("extract SignedInfo: %w", err)
+	}
+
+	// Compute the hash of SignedInfo using the algorithm from SignatureMethod.
+	hashAlg, err := signatureAlgorithmToHash(alg)
+	if err != nil {
+		return err
+	}
+	h := hashAlg.New()
+	h.Write(signedInfoBytes)
+	digest := h.Sum(nil)
+
+	// Verify the cryptographic signature using the IdP certificate's public key.
+	switch pub := i.idpCert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		if err := rsa.VerifyPKCS1v15(pub, hashAlg, digest, sigBytes); err != nil {
+			return fmt.Errorf("RSA signature verification failed: %w", err)
+		}
+	case *ecdsa.PublicKey:
+		if !ecdsa.VerifyASN1(pub, digest, sigBytes) {
+			return fmt.Errorf("ECDSA signature verification failed")
+		}
+	default:
+		return fmt.Errorf("unsupported public key type: %T", pub)
+	}
+
 	return nil
+}
+
+// validateSignatureCoversAssertion ensures that the cryptographically
+// verified signature actually covers the assertion we are about to trust.
+// This prevents XML Signature Wrapping (XSW) attacks where an attacker
+// injects a forged assertion as the first child of <Response> while hiding
+// the legitimately signed assertion elsewhere in the document.
+func (i *identifier) validateSignatureCoversAssertion(resp samlResponse) error {
+	assertionID := resp.Assertion.ID
+	if assertionID == "" {
+		// Already caught by replay-protection check, but belt-and-suspenders.
+		return fmt.Errorf("assertion has no ID attribute")
+	}
+
+	// Check response-level signature first, then assertion-level.
+	sig := resp.Signature
+	if sig.SignatureValue == "" {
+		sig = resp.Assertion.Signature
+	}
+
+	// At least one Reference must target "#<assertionID>" or the entire
+	// document (URI=""). If the signature is assertion-level (embedded),
+	// URI="" is acceptable because enveloped-signature covers the parent.
+	for _, ref := range sig.SignedInfo.References {
+		if ref.URI == "" {
+			return nil // whole-document reference covers the assertion
+		}
+		if ref.URI == "#"+assertionID {
+			return nil // explicitly references our assertion
+		}
+	}
+
+	return fmt.Errorf("signature does not cover the deserialized assertion (ID=%q); possible XSW attack", assertionID)
+}
+
+// verifyDigestReferences ensures each Reference in SignedInfo has a
+// DigestValue that matches the actual content. This prevents an attacker
+// from tampering with assertion content while reusing a valid signature
+// over unchanged SignedInfo bytes.
+func (i *identifier) verifyDigestReferences(sig xmldsigSignature, raw []byte) error {
+	for _, ref := range sig.SignedInfo.References {
+		// G9-VULN-04: Validate Transform algorithms. Only accept
+		// enveloped-signature and exc-c14n (which we approximate with
+		// raw byte extraction from the same document). Reject unknown
+		// transforms that could alter content in ways we don't handle.
+		if err := validateTransforms(ref.Transforms); err != nil {
+			return fmt.Errorf("reference %q: %w", ref.URI, err)
+		}
+
+		// Determine which element the reference points to.
+		refContent, err := resolveReference(ref.URI, raw)
+		if err != nil {
+			return fmt.Errorf("resolve reference %q: %w", ref.URI, err)
+		}
+
+		// Apply enveloped-signature transform: remove <Signature>...</Signature>
+		// from the referenced element before computing digest.
+		refContent = applyEnvelopedSignatureTransform(refContent)
+
+		// Determine digest algorithm. Default to SHA-256 if not specified.
+		digestAlg := ref.DigestMethod.Algorithm
+		if digestAlg == "" {
+			digestAlg = "http://www.w3.org/2001/04/xmlenc#sha256"
+		}
+		hashFunc, err := digestAlgorithmToHash(digestAlg)
+		if err != nil {
+			return err
+		}
+
+		// Compute digest of referenced content.
+		h := hashFunc.New()
+		h.Write(refContent)
+		computedDigest := h.Sum(nil)
+
+		// Decode the declared DigestValue.
+		declaredDigest, err := base64.StdEncoding.DecodeString(
+			strings.TrimSpace(ref.DigestValue))
+		if err != nil {
+			return fmt.Errorf("invalid base64 in DigestValue: %w", err)
+		}
+
+		// Compare digests.
+		if !bytes.Equal(computedDigest, declaredDigest) {
+			return fmt.Errorf("digest mismatch for reference %q: assertion content was tampered with", ref.URI)
+		}
+	}
+	return nil
+}
+
+// resolveReference extracts the XML element identified by a Reference URI.
+// URI="" means the entire document; URI="#id" means the element with that ID.
+func resolveReference(uri string, raw []byte) ([]byte, error) {
+	if uri == "" {
+		// Empty URI = entire document.
+		return raw, nil
+	}
+
+	if !strings.HasPrefix(uri, "#") {
+		return nil, fmt.Errorf("unsupported Reference URI scheme: %q (only fragment references supported)", uri)
+	}
+
+	// Fragment reference: find element with matching ID attribute.
+	targetID := uri[1:] // strip leading '#'
+
+	// Search for element with ID="targetID" or Id="targetID".
+	idPatterns := []string{
+		`ID="` + targetID + `"`,
+		`Id="` + targetID + `"`,
+		`id="` + targetID + `"`,
+	}
+
+	for _, pattern := range idPatterns {
+		idx := bytes.Index(raw, []byte(pattern))
+		if idx < 0 {
+			continue
+		}
+
+		// Walk backwards to find the start of the element tag.
+		elemStart := bytes.LastIndex(raw[:idx], []byte("<"))
+		if elemStart < 0 {
+			continue
+		}
+
+		// Determine the element name to find its closing tag.
+		afterLT := raw[elemStart+1:]
+		spaceIdx := bytes.IndexAny(afterLT, " \t\r\n>")
+		if spaceIdx < 0 {
+			continue
+		}
+		elemName := string(afterLT[:spaceIdx])
+
+		// Handle namespace-prefixed element names.
+		closingTag := []byte("</" + elemName + ">")
+		closeIdx := bytes.Index(raw[elemStart:], closingTag)
+		if closeIdx < 0 {
+			continue
+		}
+
+		return raw[elemStart : elemStart+closeIdx+len(closingTag)], nil
+	}
+
+	return nil, fmt.Errorf("element with ID %q not found in XML", targetID)
+}
+
+// applyEnvelopedSignatureTransform removes <Signature>...</Signature>
+// elements from within the content (the Enveloped Signature Transform
+// per XML-DSIG spec). The signature is embedded in the signed element,
+// so it must be excluded before computing the digest.
+func applyEnvelopedSignatureTransform(content []byte) []byte {
+	sigMarkers := []struct{ start, end []byte }{
+		{[]byte("<Signature"), []byte("</Signature>")},
+		{[]byte("<ds:Signature"), []byte("</ds:Signature>")},
+	}
+
+	result := content
+	for _, m := range sigMarkers {
+		for {
+			startIdx := bytes.Index(result, m.start)
+			if startIdx < 0 {
+				break
+			}
+			endIdx := bytes.Index(result[startIdx:], m.end)
+			if endIdx < 0 {
+				break
+			}
+			endAbs := startIdx + endIdx + len(m.end)
+			newResult := make([]byte, 0, len(result)-(endAbs-startIdx))
+			newResult = append(newResult, result[:startIdx]...)
+			newResult = append(newResult, result[endAbs:]...)
+			result = newResult
+		}
+	}
+	return result
+}
+
+// allowedTransforms are the only XML-DSIG transform algorithms we support.
+// Accepting unknown transforms could let an attacker smuggle content changes
+// that our digest computation doesn't account for.
+var allowedTransforms = map[string]bool{
+	// Enveloped Signature Transform (required for assertion-level sigs).
+	"http://www.w3.org/2000/09/xmldsig#enveloped-signature": true,
+	// Exclusive Canonicalization (with and without comments).
+	"http://www.w3.org/2001/10/xml-exc-c14n#":               true,
+	"http://www.w3.org/2001/10/xml-exc-c14n#WithComments":   true,
+	// Canonical XML 1.0 / 1.1.
+	"http://www.w3.org/TR/2001/REC-xml-c14n-20010315":       true,
+	"http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments": true,
+	"http://www.w3.org/2006/12/xml-c14n11":                  true,
+	"http://www.w3.org/2006/12/xml-c14n11#WithComments":     true,
+}
+
+// validateTransforms rejects any Reference that declares a transform
+// algorithm we do not implement or recognise.
+func validateTransforms(transforms []xmldsigTransform) error {
+	for _, t := range transforms {
+		if !allowedTransforms[t.Algorithm] {
+			return fmt.Errorf("unsupported Transform algorithm: %q", t.Algorithm)
+		}
+	}
+	return nil
+}
+
+// digestAlgorithmToHash maps XML digest algorithm URIs to Go crypto hashes.
+func digestAlgorithmToHash(alg string) (crypto.Hash, error) {
+	switch alg {
+	case "http://www.w3.org/2001/04/xmlenc#sha256",
+		"http://www.w3.org/2001/04/xmldsig-more#sha256":
+		return crypto.SHA256, nil
+	case "http://www.w3.org/2000/09/xmldsig#sha1":
+		return crypto.SHA1, nil
+	case "http://www.w3.org/2001/04/xmldsig-more#sha384":
+		return crypto.SHA384, nil
+	case "http://www.w3.org/2001/04/xmlenc#sha512",
+		"http://www.w3.org/2001/04/xmldsig-more#sha512":
+		return crypto.SHA512, nil
+	default:
+		return 0, fmt.Errorf("unsupported digest algorithm: %s", alg)
+	}
+}
+
+// extractSignedInfo locates the <Signature> block containing the given
+// SignatureValue and extracts the <SignedInfo>...</SignedInfo> bytes from
+// within it. This binds the cryptographic verification to the correct
+// parent Signature, preventing XML Signature Wrapping (XSW) attacks.
+func extractSignedInfo(raw []byte, sigValue string) ([]byte, error) {
+	// Use a portion of the SignatureValue to identify the correct
+	// <Signature> block. Trim whitespace to match XML text content.
+	needle := []byte(strings.TrimSpace(sigValue))
+	if len(needle) == 0 {
+		return nil, fmt.Errorf("empty SignatureValue; cannot locate parent Signature")
+	}
+
+	sigStartMarkers := [][]byte{
+		[]byte("<Signature"),
+		[]byte("<ds:Signature"),
+	}
+	sigEndMarkers := [][]byte{
+		[]byte("</Signature>"),
+		[]byte("</ds:Signature>"),
+	}
+
+	// Iterate all <Signature> blocks to find the one containing our value.
+	for mi, startMarker := range sigStartMarkers {
+		searchFrom := 0
+		for {
+			idx := bytes.Index(raw[searchFrom:], startMarker)
+			if idx < 0 {
+				break
+			}
+			absStart := searchFrom + idx
+			endIdx := bytes.Index(raw[absStart:], sigEndMarkers[mi])
+			if endIdx < 0 {
+				break
+			}
+			sigBlock := raw[absStart : absStart+endIdx+len(sigEndMarkers[mi])]
+
+			// Check if this Signature block contains our SignatureValue.
+			if bytes.Contains(sigBlock, needle) {
+				return extractSignedInfoFromBlock(sigBlock)
+			}
+			searchFrom = absStart + endIdx + len(sigEndMarkers[mi])
+		}
+	}
+	return nil, fmt.Errorf("Signature element containing the verified SignatureValue not found in XML")
+}
+
+// extractSignedInfoFromBlock extracts <SignedInfo>...</SignedInfo> bytes
+// from within a single <Signature> block.
+func extractSignedInfoFromBlock(sigBlock []byte) ([]byte, error) {
+	startMarkers := [][]byte{
+		[]byte("<SignedInfo"),
+		[]byte("<ds:SignedInfo"),
+	}
+	endMarkers := [][]byte{
+		[]byte("</SignedInfo>"),
+		[]byte("</ds:SignedInfo>"),
+	}
+
+	for mi, marker := range startMarkers {
+		idx := bytes.Index(sigBlock, marker)
+		if idx >= 0 {
+			endIdx := bytes.Index(sigBlock[idx:], endMarkers[mi])
+			if endIdx >= 0 {
+				return sigBlock[idx : idx+endIdx+len(endMarkers[mi])], nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("SignedInfo element not found within Signature block")
+}
+
+// signatureAlgorithmToHash maps XML signature algorithm URIs to Go crypto hashes.
+func signatureAlgorithmToHash(alg string) (crypto.Hash, error) {
+	switch alg {
+	case "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256":
+		return crypto.SHA256, nil
+	case "http://www.w3.org/2000/09/xmldsig#rsa-sha1":
+		return crypto.SHA1, nil
+	case "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384",
+		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384":
+		return crypto.SHA384, nil
+	case "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512",
+		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512":
+		return crypto.SHA512, nil
+	default:
+		return 0, fmt.Errorf("unsupported signature algorithm: %s", alg)
+	}
 }
 
 func isAcceptableSignatureAlgorithm(alg string) bool {
 	acceptable := map[string]bool{
-		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256": true,
-		"http://www.w3.org/2000/09/xmldsig#rsa-sha1":        true,
-		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha384": true,
-		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha512": true,
+		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256":   true,
+		"http://www.w3.org/2000/09/xmldsig#rsa-sha1":          true,
+		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha384":   true,
+		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha512":   true,
+		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256": true,
+		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384": true,
+		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512": true,
 	}
 	return acceptable[alg]
 }
@@ -254,16 +681,94 @@ func (i *identifier) extractAttributes(stmts []attributeStatement) map[string][]
 	return result
 }
 
+// --- Assertion Replay Cache ------------------------------------------------
+
+// defaultReplayCacheSize is the maximum number of assertion IDs tracked.
+const defaultReplayCacheSize = 10000
+
+// assertionReplayCache tracks consumed assertion IDs to prevent replay.
+// It uses an LRU-style eviction with time-based expiry.
+type assertionReplayCache struct {
+	mu      sync.Mutex
+	entries map[string]time.Time // assertion ID → expiry time
+	maxSize int
+}
+
+func newReplayCache(maxSize int) *assertionReplayCache {
+	if maxSize <= 0 {
+		maxSize = defaultReplayCacheSize
+	}
+	return &assertionReplayCache{
+		entries: make(map[string]time.Time, maxSize/2),
+		maxSize: maxSize,
+	}
+}
+
+// Add records an assertion ID. Returns true if the ID was new (not a replay),
+// false if it was already seen (replay detected).
+func (c *assertionReplayCache) Add(id string, ttl time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+
+	// Check if already present and not yet expired.
+	if expiry, exists := c.entries[id]; exists {
+		if now.Before(expiry) {
+			return false // replay detected
+		}
+		// Expired entry — allow reuse (though in practice assertion IDs
+		// should be unique, this handles clock edge cases).
+	}
+
+	// Evict expired entries if we're at capacity.
+	if len(c.entries) >= c.maxSize {
+		c.evictExpired(now)
+	}
+	// If still at capacity after eviction, remove oldest.
+	if len(c.entries) >= c.maxSize {
+		c.evictOldest()
+	}
+
+	c.entries[id] = now.Add(ttl)
+	return true
+}
+
+func (c *assertionReplayCache) evictExpired(now time.Time) {
+	for id, expiry := range c.entries {
+		if now.After(expiry) {
+			delete(c.entries, id)
+		}
+	}
+}
+
+func (c *assertionReplayCache) evictOldest() {
+	var oldestID string
+	var oldestTime time.Time
+	first := true
+	for id, expiry := range c.entries {
+		if first || expiry.Before(oldestTime) {
+			oldestID = id
+			oldestTime = expiry
+			first = false
+		}
+	}
+	if oldestID != "" {
+		delete(c.entries, oldestID)
+	}
+}
+
 // --- SAML XML types --------------------------------------------------------
 
 const statusSuccess = "urn:oasis:names:tc:SAML:2.0:status:Success"
 
 type samlResponse struct {
-	XMLName   xml.Name       `xml:"Response"`
-	Issuer    string         `xml:"Issuer"`
-	Status    samlStatus     `xml:"Status"`
-	Assertion samlAssertion  `xml:"Assertion"`
-	Signature xmldsigSignature `xml:"Signature"`
+	XMLName     xml.Name         `xml:"Response"`
+	Destination string           `xml:"Destination,attr"`
+	Issuer      string           `xml:"Issuer"`
+	Status      samlStatus       `xml:"Status"`
+	Assertion   samlAssertion    `xml:"Assertion"`
+	Signature   xmldsigSignature `xml:"Signature"`
 }
 
 type samlStatus struct {
@@ -275,6 +780,7 @@ type samlStatusCode struct {
 }
 
 type samlAssertion struct {
+	ID                  string                `xml:"ID,attr"`
 	Issuer              string                `xml:"Issuer"`
 	Subject             samlSubject           `xml:"Subject"`
 	Conditions          samlConditions        `xml:"Conditions"`
@@ -284,7 +790,19 @@ type samlAssertion struct {
 }
 
 type samlSubject struct {
-	NameID samlNameID `xml:"NameID"`
+	NameID               samlNameID               `xml:"NameID"`
+	SubjectConfirmations []samlSubjectConfirmation `xml:"SubjectConfirmation"`
+}
+
+type samlSubjectConfirmation struct {
+	Method                  string                       `xml:"Method,attr"`
+	SubjectConfirmationData samlSubjectConfirmationData  `xml:"SubjectConfirmationData"`
+}
+
+type samlSubjectConfirmationData struct {
+	Recipient    string `xml:"Recipient,attr"`
+	NotOnOrAfter string `xml:"NotOnOrAfter,attr"`
+	InResponseTo string `xml:"InResponseTo,attr"`
 }
 
 type samlNameID struct {
@@ -334,8 +852,14 @@ type xmldsigAlgorithm struct {
 }
 
 type xmldsigReference struct {
-	URI         string `xml:"URI,attr"`
-	DigestValue string `xml:"DigestValue"`
+	URI          string             `xml:"URI,attr"`
+	Transforms   []xmldsigTransform `xml:"Transforms>Transform"`
+	DigestMethod xmldsigAlgorithm   `xml:"DigestMethod"`
+	DigestValue  string             `xml:"DigestValue"`
+}
+
+type xmldsigTransform struct {
+	Algorithm string `xml:"Algorithm,attr"`
 }
 
 // --- Factory ---------------------------------------------------------------
@@ -362,6 +886,7 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		header:           "X-SAML-Response",
 		formField:        "SAMLResponse",
 		attributeMapping: map[string]string{},
+		replayCache:      newReplayCache(defaultReplayCacheSize),
 	}
 
 	if v, ok := raw["idpCertPEM"].(string); ok && v != "" {
@@ -374,6 +899,8 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 			return nil, fmt.Errorf("%w: saml: parse idpCertPEM: %v", module.ErrConfig, err)
 		}
 		id.idpCert = cert
+	} else {
+		return nil, fmt.Errorf("%w: saml: idpCertPEM is required for signature verification", module.ErrConfig)
 	}
 
 	if v, ok := raw["entityId"].(string); ok {

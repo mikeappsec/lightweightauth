@@ -223,3 +223,50 @@ func TestIdentify_InvalidJSON(t *testing.T) {
 		t.Errorf("Subject = %q, want scim-provisioner", identity.Subject)
 	}
 }
+
+func TestIdentify_BodyTooLarge(t *testing.T) {
+	// G9-VULN-05: Oversized body must be rejected to prevent OOM.
+	id, _ := factory("test", map[string]any{"bearerToken": "tok"})
+	largeBody := make([]byte, maxSCIMBodySize+1)
+	for i := range largeBody {
+		largeBody[i] = 'A'
+	}
+	r := &module.Request{
+		Headers: map[string][]string{
+			"Authorization": {"Bearer tok"},
+		},
+		Body: largeBody,
+	}
+	_, err := id.Identify(nil, r)
+	if err == nil {
+		t.Fatal("expected rejection for oversized body")
+	}
+}
+
+func TestIdentify_BodyAtLimit(t *testing.T) {
+	// Body exactly at the limit should be accepted.
+	id, _ := factory("test", map[string]any{"bearerToken": "tok"})
+	// Build valid JSON that is exactly at the size limit.
+	prefix := `{"userName":"alice","padding":"`
+	suffix := `"}`
+	padLen := maxSCIMBodySize - len(prefix) - len(suffix)
+	body := make([]byte, 0, maxSCIMBodySize)
+	body = append(body, []byte(prefix)...)
+	for i := 0; i < padLen; i++ {
+		body = append(body, 'x')
+	}
+	body = append(body, []byte(suffix)...)
+	r := &module.Request{
+		Headers: map[string][]string{
+			"Authorization": {"Bearer tok"},
+		},
+		Body: body,
+	}
+	identity, err := id.Identify(nil, r)
+	if err != nil {
+		t.Fatalf("Identify at limit: %v", err)
+	}
+	if identity.Subject != "alice" {
+		t.Errorf("Subject = %q, want alice", identity.Subject)
+	}
+}

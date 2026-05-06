@@ -2324,6 +2324,20 @@ G19. **STATE-PERSIST-1 — Embedded persistent storage for identifiers
   Promotion trigger: E2 (revocation) design finalised — the
   revocation store is the first consumer of persistent state.
 
+G20. **ID-ROTATE-1 — SAML IdP certificate rollover and SCIM token rotation.**
+  Adds `Rotatable` support to the SAML and SCIM identity modules via
+  `pkg/keyrotation`. SAML: accept multiple IdP certificates
+  simultaneously during cert rollover (trust both old and new until the
+  old expires or is explicitly retired); expose `KeyStates()` with each
+  cert's KID, validity window, and lifecycle state. SCIM: support
+  multiple concurrent bearer tokens with overlap-based rotation so the
+  IdP can be updated without downtime; track token KIDs in the same
+  `KeySet` lifecycle used by API keys and DPoP. Both modules emit
+  rotation metrics (`lwauth_key_rotation_state`) and surface status
+  conditions on their `IdentityProvider` CRD objects.
+  Promotion trigger: G9 (SAML/SCIM) shipped + D1 (key rotation)
+  infrastructure stable.
+
 ### Prioritization rationale
 
 The reorder follows a single rule: **never ship a new feature on top of

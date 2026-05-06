@@ -23,6 +23,7 @@ package scim
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -31,6 +32,10 @@ import (
 )
 
 func init() { module.RegisterIdentifier("scim", factory) }
+
+// maxSCIMBodySize is the maximum allowed SCIM request body size (1 MiB).
+// This prevents memory exhaustion from oversized payloads.
+const maxSCIMBodySize = 1 << 20 // 1 MiB
 
 // Compile-time guard.
 var _ module.Identifier = (*identifier)(nil)
@@ -65,16 +70,22 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 		return nil, module.ErrNoMatch
 	}
 
-	// Validate the provisioning bearer token.
-	if token != i.bearerToken {
+	// Validate the provisioning bearer token (constant-time to prevent timing attacks).
+	if subtle.ConstantTimeCompare([]byte(token), []byte(i.bearerToken)) != 1 {
 		return nil, fmt.Errorf("%w: scim: invalid provisioning token", module.ErrInvalidCredential)
 	}
 
 	// Try to extract user identity from request body (SCIM User payload).
+	// G9-VULN-05: Enforce maximum body size to prevent memory exhaustion.
 	claims := map[string]any{
 		"provisioning": true,
 	}
 	subject := "scim-provisioner"
+
+	if len(r.Body) > maxSCIMBodySize {
+		return nil, fmt.Errorf("%w: scim: request body exceeds maximum size (%d bytes)",
+			module.ErrInvalidCredential, maxSCIMBodySize)
+	}
 
 	if len(r.Body) > 0 {
 		var payload map[string]any
