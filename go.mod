@@ -3,7 +3,7 @@ module github.com/mikeappsec/lightweightauth
 go 1.26.2
 
 require (
-	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/authzed/authzed-go v1.9.0
 	github.com/authzed/grpcutil v0.0.0-20260105210157-e237581949c2
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0
