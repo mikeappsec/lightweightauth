@@ -129,7 +129,6 @@ func NewHealthChecker(registry *Registry) *HealthChecker {
 
 // Run starts the periodic health check loop. Blocks until ctx is cancelled.
 func (hc *HealthChecker) Run(ctx context.Context) {
-	logger := log.FromContext(ctx).WithName("health-checker")
 	ticker := time.NewTicker(hc.Interval)
 	defer ticker.Stop()
 
@@ -144,7 +143,6 @@ func (hc *HealthChecker) Run(ctx context.Context) {
 			hc.checkAll(ctx)
 		}
 	}
-	_ = logger // suppress unused if logging is removed
 }
 
 func (hc *HealthChecker) checkAll(ctx context.Context) {
