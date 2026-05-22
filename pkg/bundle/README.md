@@ -80,3 +80,7 @@ my-bundle/
 2. **Push**: Packs the bundle, uploads as a single-layer OCI artifact with the lwauth media type.
 3. **Pull**: Downloads the OCI artifact, unpacks into the destination directory with full path traversal protection.
 4. **LoadMetadata**: Reads and validates `bundle.yaml` from a bundle directory.
+
+## Thread Safety
+
+All exported functions (`Pack`, `Push`, `Pull`, `LoadMetadata`) are safe for concurrent use. The package is entirely stateless — each call operates on its own local buffers and I/O handles with no shared mutable state.

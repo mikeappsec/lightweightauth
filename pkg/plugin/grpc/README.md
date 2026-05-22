@@ -79,3 +79,13 @@ authorizers:
 3. On each request, translates `module.Request` + `module.Identity` to proto, calls the plugin.
 4. If signing is enabled, verifies the HMAC-SHA256 signature on the response before processing.
 5. Translates the proto response back to `module.Identity` / `module.Decision` / mutation.
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Identifier` | ✅ Yes | Immutable config + gRPC `ClientConn` (goroutine-safe) |
+| `Authorizer` | ✅ Yes | Immutable config + gRPC `ClientConn` (goroutine-safe) |
+| `Mutator` | ✅ Yes | Immutable config + gRPC `ClientConn` (goroutine-safe) |
+
+Internally, the connection pool (`sync.Mutex`) and supervisor pool (`sync.Mutex`) are process-wide singletons with mutex protection. Signing verification is stateless per-call — keys are read-only after construction.

@@ -92,3 +92,7 @@ exposes one inline `AuthConfig` via `config.inline` (file mode) and
 optionally a CRD-watching controller via `controller.enabled` (CRD mode).
 Each module's `config:` block from this directory drops directly into one
 of those two surfaces — every example below shows both.
+
+## Thread Safety
+
+All modules (identifiers, authorizers, mutators) returned by their factory functions are safe for concurrent use from the pipeline hot path. The pipeline dispatches requests to modules from multiple goroutines simultaneously — no external synchronization is required by the caller. See each package's README under `pkg/` for detailed per-type thread-safety guarantees.

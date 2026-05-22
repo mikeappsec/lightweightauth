@@ -44,6 +44,7 @@ identifiers:
 - Argon2id hashing (RFC 9106 interactive profile: time=2, memory=64KB, threads=1)
 - Constant-time comparison via `subtle.ConstantTimeCompare`
 - Multiple backends: static (dev), hashed file, hashed directory, inline entries
+- Empty subjects rejected at configuration time across all backends (APIKEY-VULN-01 fix)
 - Key rotation support via `keyrotation.KeySet`
 - Revocation key derivation from keyId and subject
 - Production warning when plaintext static backend is loaded

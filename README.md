@@ -139,3 +139,14 @@ The IdP lives in its own sibling repo and is *not* in this tree.
 
 Apache-2.0. The current `LICENSE` file is a placeholder; the full Apache-2.0
 text will replace it before the first tagged release.
+
+## Thread Safety
+
+LightweightAuth is designed for high-concurrency server workloads. The following guarantees apply:
+
+- **All module interfaces** (`Identifier`, `Authorizer`, `Mutator`) are safe for concurrent use after construction. The pipeline calls them from multiple goroutines simultaneously.
+- **Configuration is immutable** — once a module is built via its factory, no fields change. Hot-reload swaps the entire compiled engine atomically via `configstream.Broker`.
+- **Shared infrastructure** (rate limiter, circuit breaker, replay caches, session stores) is internally synchronized with mutexes or atomic operations.
+- **Plain value types** (`module.Request`, `module.Identity`, `module.Decision`) are caller-owned per-call and not shared.
+
+See each package's README for per-type thread-safety tables.

@@ -75,3 +75,14 @@ rateLimit:
 ## Benchmark
 
 Per-tenant `Allow()` cost: ~50ns single-tenant, ~100ns with concurrent access (bucket lock contention). Distributed mode adds one Valkey RTT (~0.2ms in-cluster).
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Limiter` | ✅ Yes | `sync.Mutex` protects bucket map; per-bucket `sync.Mutex` for token accounting |
+| `Spec` | ✅ Yes | Plain value type; immutable after construction |
+| `Bucket` | ✅ Yes | Plain value type (config); internal bucket state is mutex-protected |
+| `DistributedBackend` (interface) | ✅ Yes | Contract requires `Allow` be atomic per (key, window) |
+
+Nil `*Limiter` is documented as a no-op (always allows). The reaper goroutine bounds memory from transient tenants and is stopped on `Close()`.

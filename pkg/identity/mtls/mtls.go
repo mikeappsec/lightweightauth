@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
@@ -84,6 +85,25 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 		}
 		if _, err := cert.Verify(opts); err != nil {
 			return nil, fmt.Errorf("%w: mtls: xfcc chain verify: %v", module.ErrInvalidCredential, err)
+		}
+	}
+
+	// MTLS-VULN-01: When the XFCC cert is NOT chain-verified (trustedRoots
+	// is nil), Go's x509.Verify is never called, which means NotBefore /
+	// NotAfter are never enforced. An attacker with access to an expired or
+	// not-yet-valid certificate could still authenticate. Validate temporal
+	// bounds explicitly on the XFCC path whenever chain verification was
+	// skipped. (PeerCerts path is fine — the TLS stack already rejected
+	// expired/future certs during the handshake.)
+	if fromXFCC && i.trustedRoots == nil {
+		now := time.Now()
+		if now.Before(cert.NotBefore) {
+			return nil, fmt.Errorf("%w: mtls: xfcc certificate not yet valid (NotBefore: %s)",
+				module.ErrInvalidCredential, cert.NotBefore.Format(time.RFC3339))
+		}
+		if now.After(cert.NotAfter) {
+			return nil, fmt.Errorf("%w: mtls: xfcc certificate expired (NotAfter: %s)",
+				module.ErrInvalidCredential, cert.NotAfter.Format(time.RFC3339))
 		}
 	}
 
@@ -266,8 +286,18 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		}
 	}
 
-	if cfg.TrustForwardedClientCert && pool == nil && len(trusted) == 0 {
-		return nil, fmt.Errorf("mtls: trustForwardedClientCert: true requires at least one anchor (trustedCAFiles, trustedCAs, or trustedIssuers)")
+	// MTLS-VULN-02: trustedIssuers alone is NOT a cryptographic trust anchor.
+	// The Issuer field in an X.509 certificate is self-declared — an attacker
+	// can create a self-signed cert with any Issuer DN they choose. Previously
+	// the factory accepted trustedIssuers as a sole anchor, but this gave
+	// operators false confidence: any attacker who could bypass the trusted
+	// proxy and reach the auth endpoint could forge XFCC with a cert carrying
+	// the expected Issuer DN. Now we require a CA pool (trustedCAFiles or
+	// trustedCAs) whenever trustForwardedClientCert is enabled. trustedIssuers
+	// remains as an additional filter on top of chain verification, but cannot
+	// serve as the sole trust boundary.
+	if cfg.TrustForwardedClientCert && pool == nil {
+		return nil, fmt.Errorf("%w: mtls: trustForwardedClientCert: true requires a CA bundle (trustedCAFiles or trustedCAs) for cryptographic chain verification; trustedIssuers alone is not a trust anchor because the Issuer DN is self-declared and trivially forgeable", module.ErrConfig)
 	}
 	return &identifier{
 		name:           name,

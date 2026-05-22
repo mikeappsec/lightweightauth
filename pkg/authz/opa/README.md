@@ -68,3 +68,7 @@ authorizers:
 2. On each request, builds the `input` document from identity, request, and context.
 3. Evaluates the prepared query — expects a boolean result.
 4. `true` → allow; `false` → deny (403); evaluation error → 503.
+
+## Thread Safety
+
+The `Authorizer` returned by this package is safe for concurrent use. OPA's `rego.PreparedEvalQuery` is documented as safe for concurrent evaluation. Each `Authorize` call builds a fresh input map — no shared mutable state.

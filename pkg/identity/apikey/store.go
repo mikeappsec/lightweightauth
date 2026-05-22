@@ -43,11 +43,11 @@ type HashedStore struct {
 }
 
 type hashedEntry struct {
-	id    string
-	salt  []byte
-	digest []byte
+	id      string
+	salt    []byte
+	digest  []byte
 	subject string
-	roles []string
+	roles   []string
 }
 
 // argon2id parameters (interactive profile from RFC 9106 §4):
@@ -142,6 +142,9 @@ func LoadHashedStoreFromFile(path string) (*HashedStore, error) {
 			return nil, fmt.Errorf("apikey: %s:%d: expected `id hash subject [roles]`", path, line)
 		}
 		id, encoded, subject := fields[0], fields[1], fields[2]
+		if subject == "" {
+			return nil, fmt.Errorf("apikey: %s:%d: subject is required (empty subject defeats RBAC and audit)", path, line)
+		}
 		var roles []string
 		if len(fields) > 3 {
 			roles = strings.Split(fields[3], ",")
@@ -183,6 +186,9 @@ func LoadHashedStoreFromDir(dir string) (*HashedStore, error) {
 		var roles []string
 		if len(lines) > 2 {
 			roles = strings.Split(lines[2], ",")
+		}
+		if strings.TrimSpace(lines[1]) == "" {
+			return nil, fmt.Errorf("apikey: %s: subject (line 2) is required (empty subject defeats RBAC and audit)", ent.Name())
 		}
 		if err := store.AddHashed(ent.Name(), lines[0], lines[1], roles); err != nil {
 			return nil, fmt.Errorf("apikey: %s: %w", ent.Name(), err)

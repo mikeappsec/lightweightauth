@@ -65,3 +65,56 @@ func TestApiKey_RejectsUnknownConfigKey(t *testing.T) {
 		t.Errorf("error = %v, want ErrConfig wrapper", err)
 	}
 }
+
+// TestApiKey_RejectsEmptySubjectStatic verifies APIKEY-VULN-01: a static
+// entry with empty subject is rejected at config time. Empty subjects
+// defeat per-user RBAC, audit attribution, and revocation.
+func TestApiKey_RejectsEmptySubjectStatic(t *testing.T) {
+	t.Parallel()
+
+	// String-form: the value IS the subject.
+	_, err := factory("ak", map[string]any{
+		"static": map[string]any{"key1": ""},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty subject (string form), got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+
+	// Map-form: explicit subject field missing.
+	_, err = factory("ak", map[string]any{
+		"static": map[string]any{"key1": map[string]any{"roles": []any{"admin"}}},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty subject (map form), got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}
+
+// TestApiKey_RejectsEmptySubjectHashedEntries verifies APIKEY-VULN-01
+// for the hashed.entries backend.
+func TestApiKey_RejectsEmptySubjectHashedEntries(t *testing.T) {
+	t.Parallel()
+	hash, _ := HashKey("some-key")
+	_, err := factory("ak", map[string]any{
+		"hashed": map[string]any{
+			"entries": map[string]any{
+				"k1": map[string]any{
+					"hash":  hash,
+					"roles": []any{"admin"},
+					// no "subject" → empty
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty subject in hashed.entries, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}

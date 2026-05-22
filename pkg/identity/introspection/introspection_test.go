@@ -269,6 +269,51 @@ func TestIntrospection_ErrorCacheKeyHashed(t *testing.T) {
 	}
 }
 
+// TestIntrospection_RejectsActiveTokenWithoutSubject verifies INTROSPECT-VULN-01:
+// an active token whose introspection response lacks sub, username, and client_id
+// is rejected. Without this, the identity would have Subject="" which defeats
+// per-user RBAC, audit attribution, and revocation.
+func TestIntrospection_RejectsActiveTokenWithoutSubject(t *testing.T) {
+	t.Parallel()
+	hits := &atomic.Int32{}
+	// IdP returns active=true but no identity fields.
+	srv := mkServer(t, hits, map[string]any{
+		"active": true,
+		"scope":  "read write",
+		"exp":    float64(time.Now().Add(time.Hour).Unix()),
+	})
+	defer srv.Close()
+	id := mkIdentifier(t, srv.URL)
+
+	_, err := id.Identify(t.Context(), req("anonymous-token"))
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (token without subject must be rejected)", err)
+	}
+}
+
+// TestIntrospection_AcceptsClientIDAsSubject verifies the client_id fallback:
+// M2M tokens often have no `sub` but carry `client_id`. These should be
+// accepted with client_id as the identity subject.
+func TestIntrospection_AcceptsClientIDAsSubject(t *testing.T) {
+	t.Parallel()
+	hits := &atomic.Int32{}
+	srv := mkServer(t, hits, map[string]any{
+		"active":    true,
+		"client_id": "batch-service",
+		"exp":       float64(time.Now().Add(time.Hour).Unix()),
+	})
+	defer srv.Close()
+	id := mkIdentifier(t, srv.URL)
+
+	got, err := id.Identify(t.Context(), req("m2m-token"))
+	if err != nil {
+		t.Fatalf("Identify: %v", err)
+	}
+	if got.Subject != "batch-service" {
+		t.Errorf("Subject = %q, want batch-service", got.Subject)
+	}
+}
+
 func TestIntrospection_RejectsUnknownConfigKey(t *testing.T) {
 	t.Parallel()
 	_, err := factory("intro", map[string]any{

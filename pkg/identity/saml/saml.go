@@ -6,12 +6,20 @@
 // It validates SAML Response assertions posted by IdPs (SP-initiated and
 // IdP-initiated flows) with:
 //
-//   - XML digital signature verification (RSA-SHA256, RSA-SHA1)
+//   - XML digital signature verification (RSA-SHA256, RSA-SHA384, RSA-SHA512)
 //   - NotBefore / NotOnOrAfter temporal validation
 //   - Audience restriction validation
 //   - Issuer pinning
+//   - SubjectConfirmation enforcement (Method=bearer, Recipient, NotOnOrAfter)
+//   - Response Destination validation against entityId
 //   - Subject extraction from NameID
 //   - Attribute statement → claims mapping
+//
+// Security invariants:
+//   - entityId is REQUIRED at config time; without it, Destination and
+//     Recipient checks are neutered (SAML-VULN-02 fix).
+//   - At least one SubjectConfirmation with Method=bearer MUST be present
+//     per SAML 2.0 Profiles §4.1.4.2 (SAML-VULN-01 fix).
 //
 // Configuration:
 //
@@ -44,34 +52,54 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
 func init() { module.RegisterIdentifier("saml", factory) }
 
+// maxAllowedClockSkew is the upper bound for the configurable clock skew.
+// SAML-VULN-03: Without a cap, operators could misconfigure a skew that
+// effectively disables temporal validation (e.g. "87600h" = 10 years).
+// 10 minutes is generous for any reasonable clock drift scenario.
+const maxAllowedClockSkew = 10 * time.Minute
+
+// maxNameIDLen is the maximum allowed length of a NameID subject value.
+// SAML-VULN-06: Without this limit, a signed assertion with a megabyte-sized
+// NameID could exhaust memory in identity caches, log storage, and downstream
+// authorization systems.
+const maxNameIDLen = 1024
+
 // Compile-time guard.
 var _ module.Identifier = (*identifier)(nil)
 
 // identifier is the runtime SAML SP assertion validator.
+//
+// All fields are set at construction time by factory and are immutable
+// thereafter. All methods are safe for concurrent use by multiple
+// goroutines.
 type identifier struct {
-	name               string
-	idpCert            *x509.Certificate
-	entityID           string
-	issuer             string
+	name                string
+	idpCert             *x509.Certificate
+	entityID            string
+	issuer              string
 	audienceRestriction string
-	maxClockSkew       time.Duration
-	attributeMapping   map[string]string // claim name → SAML attribute name
-	header             string            // header containing the SAMLResponse (Base64)
-	formField          string            // form field name for POST binding
-	replayCache        *assertionReplayCache
+	maxClockSkew        time.Duration
+	attributeMapping    map[string]string // claim name → SAML attribute name
+	header              string            // header containing the SAMLResponse (Base64)
+	formField           string            // form field name for POST binding
+	replayCache         *assertionReplayCache
 }
 
+// Name returns the configured identifier name. Safe for concurrent use.
 func (i *identifier) Name() string { return i.name }
 
 // Identify extracts a SAML Response from the request (either from a header
 // or POST form field), validates the assertion signature and temporal
 // constraints, and returns the extracted Identity.
+//
+// Safe for concurrent use.
 func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Identity, error) {
 	// Try header first, then check for encoded response in a well-known header.
 	raw := r.Header(i.header)
@@ -95,10 +123,11 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 		return nil, fmt.Errorf("%w: saml: invalid XML: %v", module.ErrInvalidCredential, err)
 	}
 
-	// G9-VULN-03: Validate Response Destination attribute.
-	// Per SAML 2.0 Bindings §3.5.5.2, the Destination must match the SP's
-	// Assertion Consumer Service URL to prevent responses intended for other
-	// SPs from being accepted.
+	// G9-VULN-03: Validate Response Destination attribute when present.
+	// Per SAML 2.0 Core §3.2.2, Destination is OPTIONAL in the schema but
+	// REQUIRED for signed messages over HTTP-POST binding (Bindings §3.5.5.2).
+	// For HTTP-Redirect or IdP-initiated flows it may be absent. When present
+	// it MUST match the SP's entityId to prevent cross-SP replay.
 	if resp.Destination != "" && i.entityID != "" {
 		if resp.Destination != i.entityID {
 			return nil, fmt.Errorf("%w: saml: Response Destination %q does not match entityId %q",
@@ -122,6 +151,17 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	assertion := resp.Assertion
 	if assertion.Subject.NameID.Value == "" {
 		return nil, fmt.Errorf("%w: saml: no NameID in assertion", module.ErrInvalidCredential)
+	}
+
+	// SAML-VULN-06: Validate NameID value to prevent log injection and
+	// memory exhaustion from oversized or malicious subjects.
+	if len(assertion.Subject.NameID.Value) > maxNameIDLen {
+		return nil, fmt.Errorf("%w: saml: NameID exceeds maximum length (%d chars)",
+			module.ErrInvalidCredential, maxNameIDLen)
+	}
+	if containsControlChar(assertion.Subject.NameID.Value) {
+		return nil, fmt.Errorf("%w: saml: NameID contains invalid control characters",
+			module.ErrInvalidCredential)
 	}
 
 	// Validate assertion issuer.
@@ -161,7 +201,13 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	}
 
 	// Validate audience restriction.
-	if i.audienceRestriction != "" && len(assertion.Conditions.AudienceRestrictions) > 0 {
+	// SAML-VULN-04: Always enforce audience when configured — also require
+	// the assertion to carry at least one AudienceRestriction element.
+	if i.audienceRestriction != "" {
+		if len(assertion.Conditions.AudienceRestrictions) == 0 {
+			return nil, fmt.Errorf("%w: saml: assertion has no AudienceRestriction (required when audienceRestriction is configured)",
+				module.ErrInvalidCredential)
+		}
 		found := false
 		for _, ar := range assertion.Conditions.AudienceRestrictions {
 			for _, aud := range ar.Audiences {
@@ -180,17 +226,47 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	// G9-VULN-02: Validate SubjectConfirmation / Recipient.
 	// Per SAML 2.0 Core §2.4.1.2, the SP must verify that
 	// SubjectConfirmationData@Recipient matches its own ACS URL.
-	if i.entityID != "" && len(assertion.Subject.SubjectConfirmations) > 0 {
-		recipientValid := false
+	// G9-VULN-12: Validate SubjectConfirmation Method is bearer.
+	// G9-VULN-11: Validate SubjectConfirmationData@NotOnOrAfter has not passed.
+	// SAML-VULN-01: SubjectConfirmation MUST be present per SAML 2.0
+	// Profiles §4.1.4.2. Without it, there is no proof the assertion was
+	// intended for this SP, enabling cross-SP replay.
+	if len(assertion.Subject.SubjectConfirmations) == 0 {
+		return nil, fmt.Errorf("%w: saml: assertion has no SubjectConfirmation (required per SAML 2.0 Profiles §4.1.4.2)",
+			module.ErrInvalidCredential)
+	}
+	{
+		validConfirmation := false
 		for _, sc := range assertion.Subject.SubjectConfirmations {
-			if sc.SubjectConfirmationData.Recipient == i.entityID {
-				recipientValid = true
-				break
+			// G9-VULN-12: Only accept bearer confirmation method.
+			// Per SAML 2.0 Profiles §4.1.4.2, the SP must verify that the
+			// Method is urn:oasis:names:tc:SAML:2.0:cm:bearer for Web Browser SSO.
+			if sc.Method != "urn:oasis:names:tc:SAML:2.0:cm:bearer" {
+				continue
 			}
+			// G9-VULN-02: Validate Recipient matches entityId.
+			if i.entityID != "" && sc.SubjectConfirmationData.Recipient != "" && sc.SubjectConfirmationData.Recipient != i.entityID {
+				continue
+			}
+			// G9-VULN-11: Validate NotOnOrAfter is present and not expired.
+			// Per SAML 2.0 Core §2.4.1.2, the SP MUST verify that the current
+			// time is before NotOnOrAfter on SubjectConfirmationData.
+			if sc.SubjectConfirmationData.NotOnOrAfter == "" {
+				continue
+			}
+			scNOA, err := time.Parse(time.RFC3339, sc.SubjectConfirmationData.NotOnOrAfter)
+			if err != nil {
+				continue
+			}
+			if now.Add(-i.maxClockSkew).After(scNOA) {
+				continue
+			}
+			validConfirmation = true
+			break
 		}
-		if !recipientValid {
-			return nil, fmt.Errorf("%w: saml: SubjectConfirmationData Recipient does not match entityId %q",
-				module.ErrInvalidCredential, i.entityID)
+		if !validConfirmation {
+			return nil, fmt.Errorf("%w: saml: no valid SubjectConfirmation: requires Method=bearer, valid Recipient, and unexpired NotOnOrAfter",
+				module.ErrInvalidCredential)
 		}
 	}
 
@@ -256,6 +332,8 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 
 // verifySignature validates the SAML response signature cryptographically
 // against the IdP certificate's public key.
+//
+// Safe for concurrent use (reads only immutable fields).
 func (i *identifier) verifySignature(resp samlResponse, raw []byte) error {
 	if i.idpCert == nil {
 		return fmt.Errorf("idpCertPEM is required for signature verification")
@@ -352,6 +430,8 @@ func (i *identifier) verifySignature(resp samlResponse, raw []byte) error {
 // This prevents XML Signature Wrapping (XSW) attacks where an attacker
 // injects a forged assertion as the first child of <Response> while hiding
 // the legitimately signed assertion elsewhere in the document.
+//
+// Safe for concurrent use (reads only immutable fields).
 func (i *identifier) validateSignatureCoversAssertion(resp samlResponse) error {
 	assertionID := resp.Assertion.ID
 	if assertionID == "" {
@@ -384,6 +464,8 @@ func (i *identifier) validateSignatureCoversAssertion(resp samlResponse) error {
 // DigestValue that matches the actual content. This prevents an attacker
 // from tampering with assertion content while reusing a valid signature
 // over unchanged SignedInfo bytes.
+//
+// Safe for concurrent use (reads only immutable fields).
 func (i *identifier) verifyDigestReferences(sig xmldsigSignature, raw []byte) error {
 	for _, ref := range sig.SignedInfo.References {
 		// G9-VULN-04: Validate Transform algorithms. Only accept
@@ -457,36 +539,77 @@ func resolveReference(uri string, raw []byte) ([]byte, error) {
 	}
 
 	for _, pattern := range idPatterns {
-		idx := bytes.Index(raw, []byte(pattern))
-		if idx < 0 {
-			continue
-		}
+		patBytes := []byte(pattern)
+		searchFrom := 0
+		for {
+			idx := bytes.Index(raw[searchFrom:], patBytes)
+			if idx < 0 {
+				break
+			}
+			absIdx := searchFrom + idx
+			searchFrom = absIdx + len(patBytes)
 
-		// Walk backwards to find the start of the element tag.
-		elemStart := bytes.LastIndex(raw[:idx], []byte("<"))
-		if elemStart < 0 {
-			continue
-		}
+			// G9-VULN-09: Ensure the match is inside an element tag, not
+			// inside an XML comment (<!-- ... -->) or CDATA (<![CDATA[...]]>)
+			// section, which an attacker could inject to poison the search.
+			if isInsideCommentOrCDATA(raw, absIdx) {
+				continue
+			}
 
-		// Determine the element name to find its closing tag.
-		afterLT := raw[elemStart+1:]
-		spaceIdx := bytes.IndexAny(afterLT, " \t\r\n>")
-		if spaceIdx < 0 {
-			continue
-		}
-		elemName := string(afterLT[:spaceIdx])
+			// Walk backwards to find the start of the element tag.
+			elemStart := bytes.LastIndex(raw[:absIdx], []byte("<"))
+			if elemStart < 0 {
+				continue
+			}
 
-		// Handle namespace-prefixed element names.
-		closingTag := []byte("</" + elemName + ">")
-		closeIdx := bytes.Index(raw[elemStart:], closingTag)
-		if closeIdx < 0 {
-			continue
-		}
+			// Determine the element name to find its closing tag.
+			afterLT := raw[elemStart+1:]
+			spaceIdx := bytes.IndexAny(afterLT, " \t\r\n>")
+			if spaceIdx < 0 {
+				continue
+			}
+			elemName := string(afterLT[:spaceIdx])
 
-		return raw[elemStart : elemStart+closeIdx+len(closingTag)], nil
+			// Handle namespace-prefixed element names.
+			closingTag := []byte("</" + elemName + ">")
+			closeIdx := bytes.Index(raw[elemStart:], closingTag)
+			if closeIdx < 0 {
+				continue
+			}
+
+			return raw[elemStart : elemStart+closeIdx+len(closingTag)], nil
+		}
 	}
 
 	return nil, fmt.Errorf("element with ID %q not found in XML", targetID)
+}
+
+// isInsideCommentOrCDATA checks whether the byte position `pos` falls
+// inside an XML comment (<!-- ... -->) or CDATA section (<![CDATA[...]]>).
+// An attacker could inject ID="target" inside a comment to misdirect
+// resolveReference's byte search.
+func isInsideCommentOrCDATA(raw []byte, pos int) bool {
+	// Check for comment: find the last "<!--" before pos and see if
+	// there's no corresponding "-->" between it and pos.
+	prefix := raw[:pos]
+	commentStart := bytes.LastIndex(prefix, []byte("<!--"))
+	if commentStart >= 0 {
+		commentEnd := bytes.Index(raw[commentStart:pos], []byte("-->"))
+		if commentEnd < 0 {
+			return true // inside an unclosed comment
+		}
+	}
+
+	// Check for CDATA: find the last "<![CDATA[" before pos.
+	cdataStart := bytes.LastIndex(prefix, []byte("<![CDATA["))
+	if cdataStart >= 0 {
+		cdataEnd := bytes.Index(raw[cdataStart:pos], []byte("]]>"))
+		if cdataEnd < 0 {
+			return true // inside an unclosed CDATA
+		}
+	}
+
+	return false
 }
 
 // applyEnvelopedSignatureTransform removes <Signature>...</Signature>
@@ -527,13 +650,13 @@ var allowedTransforms = map[string]bool{
 	// Enveloped Signature Transform (required for assertion-level sigs).
 	"http://www.w3.org/2000/09/xmldsig#enveloped-signature": true,
 	// Exclusive Canonicalization (with and without comments).
-	"http://www.w3.org/2001/10/xml-exc-c14n#":               true,
-	"http://www.w3.org/2001/10/xml-exc-c14n#WithComments":   true,
+	"http://www.w3.org/2001/10/xml-exc-c14n#":             true,
+	"http://www.w3.org/2001/10/xml-exc-c14n#WithComments": true,
 	// Canonical XML 1.0 / 1.1.
-	"http://www.w3.org/TR/2001/REC-xml-c14n-20010315":       true,
+	"http://www.w3.org/TR/2001/REC-xml-c14n-20010315":              true,
 	"http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments": true,
-	"http://www.w3.org/2006/12/xml-c14n11":                  true,
-	"http://www.w3.org/2006/12/xml-c14n11#WithComments":     true,
+	"http://www.w3.org/2006/12/xml-c14n11":                         true,
+	"http://www.w3.org/2006/12/xml-c14n11#WithComments":            true,
 }
 
 // validateTransforms rejects any Reference that declares a transform
@@ -548,13 +671,12 @@ func validateTransforms(transforms []xmldsigTransform) error {
 }
 
 // digestAlgorithmToHash maps XML digest algorithm URIs to Go crypto hashes.
+// G9-VULN-06: SHA-1 removed — only SHA-256+ accepted.
 func digestAlgorithmToHash(alg string) (crypto.Hash, error) {
 	switch alg {
 	case "http://www.w3.org/2001/04/xmlenc#sha256",
 		"http://www.w3.org/2001/04/xmldsig-more#sha256":
 		return crypto.SHA256, nil
-	case "http://www.w3.org/2000/09/xmldsig#sha1":
-		return crypto.SHA1, nil
 	case "http://www.w3.org/2001/04/xmldsig-more#sha384":
 		return crypto.SHA384, nil
 	case "http://www.w3.org/2001/04/xmlenc#sha512",
@@ -636,13 +758,12 @@ func extractSignedInfoFromBlock(sigBlock []byte) ([]byte, error) {
 }
 
 // signatureAlgorithmToHash maps XML signature algorithm URIs to Go crypto hashes.
+// G9-VULN-06: SHA-1 removed — only SHA-256+ accepted.
 func signatureAlgorithmToHash(alg string) (crypto.Hash, error) {
 	switch alg {
 	case "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
 		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256":
 		return crypto.SHA256, nil
-	case "http://www.w3.org/2000/09/xmldsig#rsa-sha1":
-		return crypto.SHA1, nil
 	case "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384",
 		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384":
 		return crypto.SHA384, nil
@@ -655,9 +776,10 @@ func signatureAlgorithmToHash(alg string) (crypto.Hash, error) {
 }
 
 func isAcceptableSignatureAlgorithm(alg string) bool {
+	// G9-VULN-06: SHA-1 is deprecated due to demonstrated collision attacks
+	// (SHAttered, 2017). Only SHA-256+ algorithms are accepted.
 	acceptable := map[string]bool{
 		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256":   true,
-		"http://www.w3.org/2000/09/xmldsig#rsa-sha1":          true,
 		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha384":   true,
 		"http://www.w3.org/2001/04/xmldsig-more#rsa-sha512":   true,
 		"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256": true,
@@ -688,6 +810,9 @@ const defaultReplayCacheSize = 10000
 
 // assertionReplayCache tracks consumed assertion IDs to prevent replay.
 // It uses an LRU-style eviction with time-based expiry.
+//
+// All exported methods are safe for concurrent use; internal helpers
+// (evictExpired, evictOldest) must only be called while holding mu.
 type assertionReplayCache struct {
 	mu      sync.Mutex
 	entries map[string]time.Time // assertion ID → expiry time
@@ -706,6 +831,8 @@ func newReplayCache(maxSize int) *assertionReplayCache {
 
 // Add records an assertion ID. Returns true if the ID was new (not a replay),
 // false if it was already seen (replay detected).
+//
+// Safe for concurrent use.
 func (c *assertionReplayCache) Add(id string, ttl time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -725,15 +852,19 @@ func (c *assertionReplayCache) Add(id string, ttl time.Duration) bool {
 	if len(c.entries) >= c.maxSize {
 		c.evictExpired(now)
 	}
-	// If still at capacity after eviction, remove oldest.
+	// G9-VULN-07: If still at capacity after eviction, reject the new
+	// assertion rather than evicting unexpired entries. Evicting live
+	// entries under a flood attack would open a bounded replay window.
 	if len(c.entries) >= c.maxSize {
-		c.evictOldest()
+		return false
 	}
 
 	c.entries[id] = now.Add(ttl)
 	return true
 }
 
+// evictExpired removes all entries whose expiry has passed.
+// NOT safe for concurrent use; must be called while holding c.mu.
 func (c *assertionReplayCache) evictExpired(now time.Time) {
 	for id, expiry := range c.entries {
 		if now.After(expiry) {
@@ -742,6 +873,8 @@ func (c *assertionReplayCache) evictExpired(now time.Time) {
 	}
 }
 
+// evictOldest removes the entry with the earliest expiry time.
+// NOT safe for concurrent use; must be called while holding c.mu.
 func (c *assertionReplayCache) evictOldest() {
 	var oldestID string
 	var oldestTime time.Time
@@ -762,8 +895,10 @@ func (c *assertionReplayCache) evictOldest() {
 
 const statusSuccess = "urn:oasis:names:tc:SAML:2.0:status:Success"
 
+// G9-VULN-08: Pin the SAML protocol namespace to reject responses from
+// non-SAML XML documents that happen to have a <Response> root element.
 type samlResponse struct {
-	XMLName     xml.Name         `xml:"Response"`
+	XMLName     xml.Name         `xml:"urn:oasis:names:tc:SAML:2.0:protocol Response"`
 	Destination string           `xml:"Destination,attr"`
 	Issuer      string           `xml:"Issuer"`
 	Status      samlStatus       `xml:"Status"`
@@ -780,23 +915,23 @@ type samlStatusCode struct {
 }
 
 type samlAssertion struct {
-	ID                  string                `xml:"ID,attr"`
-	Issuer              string                `xml:"Issuer"`
-	Subject             samlSubject           `xml:"Subject"`
-	Conditions          samlConditions        `xml:"Conditions"`
-	AuthnStatement      samlAuthnStatement    `xml:"AuthnStatement"`
-	AttributeStatements []attributeStatement  `xml:"AttributeStatement"`
-	Signature           xmldsigSignature      `xml:"Signature"`
+	ID                  string               `xml:"ID,attr"`
+	Issuer              string               `xml:"Issuer"`
+	Subject             samlSubject          `xml:"Subject"`
+	Conditions          samlConditions       `xml:"Conditions"`
+	AuthnStatement      samlAuthnStatement   `xml:"AuthnStatement"`
+	AttributeStatements []attributeStatement `xml:"AttributeStatement"`
+	Signature           xmldsigSignature     `xml:"Signature"`
 }
 
 type samlSubject struct {
-	NameID               samlNameID               `xml:"NameID"`
+	NameID               samlNameID                `xml:"NameID"`
 	SubjectConfirmations []samlSubjectConfirmation `xml:"SubjectConfirmation"`
 }
 
 type samlSubjectConfirmation struct {
-	Method                  string                       `xml:"Method,attr"`
-	SubjectConfirmationData samlSubjectConfirmationData  `xml:"SubjectConfirmationData"`
+	Method                  string                      `xml:"Method,attr"`
+	SubjectConfirmationData samlSubjectConfirmationData `xml:"SubjectConfirmationData"`
 }
 
 type samlSubjectConfirmationData struct {
@@ -829,8 +964,8 @@ type attributeStatement struct {
 }
 
 type samlAttribute struct {
-	Name   string           `xml:"Name,attr"`
-	Values []samlAttrValue  `xml:"AttributeValue"`
+	Name   string          `xml:"Name,attr"`
+	Values []samlAttrValue `xml:"AttributeValue"`
 }
 
 type samlAttrValue struct {
@@ -838,13 +973,13 @@ type samlAttrValue struct {
 }
 
 type xmldsigSignature struct {
-	SignedInfo      xmldsigSignedInfo `xml:"SignedInfo"`
-	SignatureValue  string            `xml:"SignatureValue"`
+	SignedInfo     xmldsigSignedInfo `xml:"SignedInfo"`
+	SignatureValue string            `xml:"SignatureValue"`
 }
 
 type xmldsigSignedInfo struct {
-	SignatureMethod xmldsigAlgorithm  `xml:"SignatureMethod"`
-	References     []xmldsigReference `xml:"Reference"`
+	SignatureMethod xmldsigAlgorithm   `xml:"SignatureMethod"`
+	References      []xmldsigReference `xml:"Reference"`
 }
 
 type xmldsigAlgorithm struct {
@@ -903,19 +1038,36 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		return nil, fmt.Errorf("%w: saml: idpCertPEM is required for signature verification", module.ErrConfig)
 	}
 
-	if v, ok := raw["entityId"].(string); ok {
+	if v, ok := raw["entityId"].(string); ok && v != "" {
 		id.entityID = v
+	} else {
+		// SAML-VULN-02: entityId is required. Without it, Destination
+		// and SubjectConfirmation Recipient checks are silently
+		// disabled, enabling cross-SP assertion replay.
+		return nil, fmt.Errorf("%w: saml: entityId is required (SP assertion consumer service URL)", module.ErrConfig)
 	}
 	if v, ok := raw["issuer"].(string); ok {
 		id.issuer = v
 	}
-	if v, ok := raw["audienceRestriction"].(string); ok {
+	if v, ok := raw["audienceRestriction"].(string); ok && v != "" {
 		id.audienceRestriction = v
+	} else {
+		// SAML-VULN-04: audienceRestriction is required. Without it, assertions
+		// intended for other SPs sharing the same IdP are silently accepted.
+		return nil, fmt.Errorf("%w: saml: audienceRestriction is required (prevents cross-SP assertion acceptance)", module.ErrConfig)
 	}
 	if v, ok := raw["maxClockSkew"].(string); ok && v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return nil, fmt.Errorf("%w: saml: maxClockSkew: %v", module.ErrConfig, err)
+		}
+		// SAML-VULN-03: Cap clock skew to prevent misconfiguration from
+		// creating an indefinite assertion acceptance window.
+		if d > maxAllowedClockSkew {
+			return nil, fmt.Errorf("%w: saml: maxClockSkew %v exceeds maximum allowed (%v)", module.ErrConfig, d, maxAllowedClockSkew)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("%w: saml: maxClockSkew must not be negative", module.ErrConfig)
 		}
 		id.maxClockSkew = d
 	}
@@ -934,4 +1086,16 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	}
 
 	return id, nil
+}
+
+// containsControlChar reports whether s contains any ASCII control character
+// (bytes 0x00–0x1F or 0x7F) or Unicode control category characters.
+// SAML-VULN-06: prevents log injection / audit evasion via crafted NameIDs.
+func containsControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7F || unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }

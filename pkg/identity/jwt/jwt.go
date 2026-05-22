@@ -180,6 +180,13 @@ func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, e
 	opts := []jwtlib.ParseOption{
 		jwtlib.WithKeySet(keyset),
 		jwtlib.WithValidate(true),
+		// JWT-VULN-01: Require the `exp` claim to be present. Without this,
+		// jwx's WithValidate(true) only validates exp/nbf *if present* — a
+		// token without `exp` would be accepted and never expire, making it
+		// valid forever. This is equivalent to an immortal bearer credential
+		// that survives key rotation, user deprovisioning, and incident
+		// response. Per RFC 9068 §2.1 (JWT Access Tokens), exp is REQUIRED.
+		jwtlib.WithRequiredClaim("exp"),
 	}
 	if cfg.IssuerURL != "" {
 		opts = append(opts, jwtlib.WithIssuer(cfg.IssuerURL))
