@@ -249,7 +249,12 @@ func TestDPoP_CnfJktBinding_Mismatch(t *testing.T) {
 // TestDPoP_AthBinding: when a bearer is on the request, the proof's
 // `ath` must equal base64url(sha256(token)).
 func TestDPoP_AthBinding_Match(t *testing.T) {
-	f := newFixture(t, &stubIdentifier{name: "inner", claims: map[string]any{}}, 30*time.Second)
+	f := newFixture(t, &stubIdentifier{name: "inner"}, 30*time.Second)
+	// Inner must carry cnf.jkt when bearer is present (DPOP-VULN-01 fix).
+	f.identity.inner = &stubIdentifier{
+		name:   "inner",
+		claims: map[string]any{"cnf": map[string]any{"jkt": f.thumb}},
+	}
 	at := "deadbeef-access-token"
 	sum := sha256.Sum256([]byte(at))
 	ath := base64.RawURLEncoding.EncodeToString(sum[:])
@@ -260,7 +265,11 @@ func TestDPoP_AthBinding_Match(t *testing.T) {
 }
 
 func TestDPoP_AthBinding_Mismatch(t *testing.T) {
-	f := newFixture(t, &stubIdentifier{name: "inner", claims: map[string]any{}}, 30*time.Second)
+	f := newFixture(t, &stubIdentifier{name: "inner"}, 30*time.Second)
+	f.identity.inner = &stubIdentifier{
+		name:   "inner",
+		claims: map[string]any{"cnf": map[string]any{"jkt": f.thumb}},
+	}
 	proof := f.signProof(t, "GET", "https://api.example/x", "jti-ath-bad", time.Now(), "wrong-ath")
 	_, err := f.identity.Identify(context.Background(), req("GET", "api.example", "/x", proof, "the-token"))
 	if !errors.Is(err, module.ErrInvalidCredential) {
@@ -592,6 +601,67 @@ func TestDPoP_RejectsUnknownConfigKey(t *testing.T) {
 	}
 	if !errors.Is(err, module.ErrConfig) {
 		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}
+
+// TestDPoP_RejectsTokenWithoutCnfJkt verifies DPOP-VULN-01: when
+// required=true and a bearer token is present, the inner identity MUST
+// carry cnf.jkt. Without it, proof-of-possession is not enforced and a
+// stolen token can be replayed with any attacker-generated key.
+func TestDPoP_RejectsTokenWithoutCnfJkt(t *testing.T) {
+	// Inner returns identity WITHOUT cnf.jkt — simulates an IdP that
+	// didn't bind the token to the client's DPoP key.
+	f := newFixture(t, &stubIdentifier{name: "inner", claims: map[string]any{
+		"scope": "read write",
+	}}, 30*time.Second)
+
+	at := "stolen-access-token"
+	sum := sha256.Sum256([]byte(at))
+	ath := base64.RawURLEncoding.EncodeToString(sum[:])
+	proof := f.signProof(t, "GET", "https://api.example/resource", "jti-no-cnf", time.Now(), ath)
+
+	_, err := f.identity.Identify(context.Background(), req("GET", "api.example", "/resource", proof, at))
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (token without cnf.jkt must be rejected when DPoP required)", err)
+	}
+}
+
+// TestDPoP_AllowsMissingCnfJktWhenNotRequired verifies that
+// required=false does NOT enforce cnf.jkt — this allows gradual DPoP
+// rollout where some tokens may not yet be DPoP-bound.
+func TestDPoP_AllowsMissingCnfJktWhenNotRequired(t *testing.T) {
+	f := newFixture(t, &stubIdentifier{name: "inner", claims: map[string]any{}}, 30*time.Second)
+	f.identity.cfg.Required = false
+
+	at := "unbound-token"
+	sum := sha256.Sum256([]byte(at))
+	ath := base64.RawURLEncoding.EncodeToString(sum[:])
+	proof := f.signProof(t, "GET", "https://api.example/x", "jti-not-req", time.Now(), ath)
+
+	_, err := f.identity.Identify(context.Background(), req("GET", "api.example", "/x", proof, at))
+	if err != nil {
+		t.Fatalf("Identify: %v (required=false should allow missing cnf.jkt)", err)
+	}
+}
+
+// TestDPoP_HTUMatchesWithQueryInPath verifies DPOP-VULN-02: when
+// r.Path includes query strings (as in ext_authz deployments), the
+// htu comparison must still succeed by stripping the query from r.Path
+// per RFC 9449 §4.3 step 9.
+func TestDPoP_HTUMatchesWithQueryInPath(t *testing.T) {
+	f := newFixture(t, &stubIdentifier{name: "inner", claims: map[string]any{}}, 30*time.Second)
+	// Proof htu omits query (RFC-compliant).
+	proof := f.signProof(t, "GET", "https://api.example/resource", "jti-query", time.Now(), "")
+	// Request path includes query (as ext_authz provides).
+	r := &module.Request{
+		Method:  "GET",
+		Host:    "api.example",
+		Path:    "/resource?id=42&page=1",
+		Headers: map[string][]string{"dpop": {proof}},
+	}
+	_, err := f.identity.Identify(context.Background(), r)
+	if err != nil {
+		t.Fatalf("Identify: %v (htu should match after stripping query from r.Path)", err)
 	}
 }
 

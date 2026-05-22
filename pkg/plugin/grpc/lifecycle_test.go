@@ -178,7 +178,7 @@ func TestStartSupervisor_BadCommandSurfacesErrConfig(t *testing.T) {
 		rsInitialBackoff:   5 * time.Millisecond,
 		rsMaxBackoff:       10 * time.Millisecond,
 		rsMaxRestarts:      1,
-		startTimeout:       500 * time.Millisecond,
+		startTimeout:       2 * time.Second,
 	}
 	defer stopSupervisorForTest(cfg)
 

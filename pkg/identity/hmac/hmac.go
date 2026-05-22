@@ -375,20 +375,19 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		skew = d
 	}
 
-	// Required signed headers: default to host + dateHeader. Operators
-	// can extend (e.g. ["host","date","content-type","x-amz-target"])
-	// to harden specific routes, but emptying the list is rejected —
-	// that would silently disable host/date binding.
-	required := []string{"host", strings.ToLower(dateHdr)}
+	// Required signed headers: always includes host + dateHeader as
+	// mandatory minimums. Operators can extend (e.g. adding
+	// "content-type", "x-amz-target") to harden specific routes but
+	// cannot remove the mandatory set — doing so would silently disable
+	// host-binding (cross-host replay) and date-binding (indefinite
+	// replay via unsigned Date header).
+	mandatory := []string{"host", strings.ToLower(dateHdr)}
+	required := append([]string{}, mandatory...)
 	if v, ok := raw["requiredSignedHeaders"].([]any); ok {
-		required = required[:0]
 		for _, x := range v {
 			if s, ok := x.(string); ok && s != "" {
 				required = append(required, strings.ToLower(s))
 			}
-		}
-		if len(required) == 0 {
-			return nil, fmt.Errorf("%w: hmac.requiredSignedHeaders: empty list disables host/date binding", module.ErrConfig)
 		}
 	}
 	required = dedupStrings(required)
@@ -411,6 +410,14 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		if err != nil {
 			// Allow plain UTF-8 secrets too — easier for human-managed config.
 			raw = []byte(secret)
+		}
+		// Minimum key length: 128 bits (16 bytes). Keys shorter than this
+		// are trivially brute-forceable offline from a single observed
+		// signed request. NIST SP 800-107 recommends key ≥ hash output
+		// (32 bytes for SHA-256); 16 is the floor we enforce.
+		const minKeyLen = 16
+		if len(raw) < minKeyLen {
+			return nil, fmt.Errorf("%w: hmac %q: key %q secret too short (%d bytes, minimum %d)", module.ErrConfig, name, kid, len(raw), minKeyLen)
 		}
 		entry := KeyEntry{Secret: raw}
 		entry.Subject, _ = spec["subject"].(string)

@@ -75,3 +75,15 @@ Input/output format: JSON.
 5. Reads the JSON output from guest memory using the returned packed pointer.
 6. Deserializes the response into the appropriate module interface type.
 7. Instance is closed after each call (no state persistence across requests).
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Runtime` | ✅ Yes | `sync.Mutex` protects modules map; channel-based concurrency limiter bounds WASM instances |
+| `Module` | ✅ Yes | Channel semaphore bounds concurrent invocations; each `Call` instantiates a fresh WASM instance |
+| `Identifier` | ✅ Yes | Stateless wrapper; delegates to `Module.Call` |
+| `Authorizer` | ✅ Yes | Stateless wrapper; delegates to `Module.Call` |
+| `Mutator` | ✅ Yes | Stateless wrapper; delegates to `Module.Call` |
+
+The global `Runtime` singleton is initialized via `sync.Once`. Each `Module.Call` creates a fresh WASM instance (no shared instance state), so after acquiring a semaphore slot, execution is fully isolated.

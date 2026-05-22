@@ -60,6 +60,10 @@ func main() {
 		federationCmd(os.Args[2:])
 	case "compliance":
 		compliance(os.Args[2:])
+	case "simulate":
+		simulateCmd(os.Args[2:])
+	case "test":
+		testCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -85,6 +89,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  bundle <push|pull|pack|inspect>          manage policy bundles (OCI artifacts)")
 	fmt.Fprintln(os.Stderr, "  federation <generate-key|status>          multi-cluster federation management")
 	fmt.Fprintln(os.Stderr, "  compliance --config FILE --framework NAME generate compliance evidence report (JSON)")
+	fmt.Fprintln(os.Stderr, "  simulate --config FILE --audit FILE      replay audit events against candidate policy (impact analysis)")
+	fmt.Fprintln(os.Stderr, "  test --config FILE --fixtures GLOB       run YAML test fixtures against policy (CI contract)")
 	os.Exit(2)
 }
 

@@ -33,6 +33,8 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/jwt"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/mtls"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/oauth2"
+	_ "github.com/mikeappsec/lightweightauth/pkg/identity/saml"
+	_ "github.com/mikeappsec/lightweightauth/pkg/identity/scim"
 	_ "github.com/mikeappsec/lightweightauth/pkg/mutator/headers"
 	_ "github.com/mikeappsec/lightweightauth/pkg/mutator/jwtissue"
 	_ "github.com/mikeappsec/lightweightauth/pkg/ratelimit/valkey"

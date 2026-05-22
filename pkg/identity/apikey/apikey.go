@@ -128,11 +128,17 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 		for k, val := range staticRaw {
 			switch t := val.(type) {
 			case string:
+				if t == "" {
+					return nil, fmt.Errorf("%w: apikey %q: static[%q] subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, k)
+				}
 				keys[k] = entry{subject: t, keyID: shortID(k)}
 			case map[string]any:
 				e := entry{keyID: shortID(k)}
 				if s, ok := t["subject"].(string); ok {
 					e.subject = s
+				}
+				if e.subject == "" {
+					return nil, fmt.Errorf("%w: apikey %q: static[%q].subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, k)
 				}
 				if rs, ok := t["roles"].([]any); ok {
 					for _, r := range rs {
@@ -166,6 +172,9 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 				return nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q].hash is required", module.ErrConfig, name, id)
 			}
 			subject, _ := spec["subject"].(string)
+			if subject == "" {
+				return nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q].subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, id)
+			}
 			var roles []string
 			if rs, ok := spec["roles"].([]any); ok {
 				for _, r := range rs {

@@ -105,7 +105,7 @@ func (d *deviceFakeIDP) handleTokenWithDevice(w http.ResponseWriter, r *http.Req
 		Subject("device-bob").
 		Audience([]string{d.clientID}).
 		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(5 * time.Minute)).
+		Expiration(time.Now().Add(5*time.Minute)).
 		Claim("email", "bob@example.com").
 		Claim("groups", []string{"admin"}).
 		Build()
@@ -260,6 +260,29 @@ func TestOAuth2_DeviceFlow_RoutesUnmounted(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status=%d, want 404 when device flow is not configured", resp.StatusCode)
+	}
+}
+
+// TestOAuth2_DeviceFlow_RejectsFormURLEncoded verifies OAUTH2-VULN-01 fix:
+// the /oauth2/device/poll endpoint rejects form-urlencoded bodies to prevent
+// cross-origin session fixation via HTML form submission (login CSRF).
+func TestOAuth2_DeviceFlow_RejectsFormURLEncoded(t *testing.T) {
+	t.Parallel()
+	idp := newDeviceFakeIDP(t, "test-client")
+	lw := bootLwauthWithDevice(t, idp)
+
+	// Simulate what a cross-origin <form> submission would look like.
+	resp, err := http.Post(
+		lw.URL+"/oauth2/device/poll",
+		"application/x-www-form-urlencoded",
+		strings.NewReader("device_code=some-code"),
+	)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("status=%d, want 415 for form-urlencoded device/poll (CSRF protection)", resp.StatusCode)
 	}
 }
 

@@ -59,3 +59,7 @@ Each child is `{ name, type, config }` — built recursively via `module.BuildAu
 2. **anyOf mode**: evaluates children until one allows; short-circuits on upstream errors.
 3. **allOf mode**: evaluates all children; first deny terminates.
 4. Merges response/upstream headers from all allowed children into the final decision.
+
+## Thread Safety
+
+The `Authorizer` returned by this package is safe for concurrent use. It is a stateless orchestrator holding an immutable list of child `Authorizer` values and iterating them on each call. Thread safety depends transitively on each child being safe, which is guaranteed by the module contract.

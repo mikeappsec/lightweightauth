@@ -1,0 +1,41 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/mikeappsec/lwauth-controlplane
+  tag: ""  # defaults to Chart appVersion
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  port: 8443
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+leaderElection:
+  enabled: true
+
+clusterName: "local"
+defaultImage: "ghcr.io/mikeappsec/lightweightauth:latest"
+
+# Additional clusters to watch (Phase 2).
+# clusters:
+#   - name: prod-us-east
+#     kubeconfigSecret: us-east-kubeconfig
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -58,3 +58,13 @@ handler := client.HTTPMiddleware(mux)
 2. `Authorize()` sends an `AuthorizeRequest` proto and maps the response to the SDK's `Response` type.
 3. `UnaryServerInterceptor()` extracts method name, metadata, and peer info from each incoming RPC; calls Authorize; rejects with appropriate gRPC status code on deny.
 4. `HTTPMiddleware()` extracts headers, method, and path from `*http.Request`; calls Authorize; returns the configured error status on deny.
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Client` | ✅ Yes | Wraps gRPC `ClientConn` + generated client, both goroutine-safe |
+| `Request` | ✅ Yes | Plain value type; caller-owned, not shared |
+| `Response` | ✅ Yes | Plain value type; returned per-call |
+
+`UnaryServerInterceptor()` and `HTTPMiddleware()` return closures that capture the `Client` and call `Authorize` concurrently from many goroutines. No mutable shared state exists within this package.

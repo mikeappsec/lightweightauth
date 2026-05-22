@@ -76,3 +76,16 @@ resilience:
 ## Benchmark
 
 Guard overhead (closed circuit, no retry): ~15ns per call.
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Guard` | ✅ Yes | Delegates to `Breaker` + `RetryBudget`, both mutex-protected |
+| `Breaker` | ✅ Yes | `sync.Mutex` protects state, failures, successes, openedAt |
+| `RetryBudget` | ✅ Yes | `sync.Mutex` protects tokens and last-refill timestamp |
+| `BreakerConfig` | ✅ Yes | Plain value type; immutable after construction |
+| `RetryBudgetConfig` | ✅ Yes | Plain value type; immutable after construction |
+| `GuardConfig` | ✅ Yes | Plain value type; immutable after construction |
+
+`Guard.Do()` is safe to call from multiple goroutines simultaneously.

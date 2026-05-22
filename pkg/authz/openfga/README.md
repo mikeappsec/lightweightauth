@@ -77,3 +77,7 @@ authorizers:
 2. POSTs a `Check` request to `{apiUrl}/stores/{storeId}/check`.
 3. If `allowed: true` → allow; `allowed: false` → deny (403).
 4. Network failures handled by circuit breaker → 503.
+
+## Thread Safety
+
+The `Authorizer` returned by this package is safe for concurrent use. It holds immutable pre-compiled templates, an `HTTPDoer` (`*http.Client` is goroutine-safe), and an `*upstream.Guard` (mutex-protected internally). Each `Authorize` call builds a fresh HTTP request and body reader — no shared mutable state.

@@ -56,3 +56,13 @@ configstream.Stream(ctx, conn, "node-1", func(snap *configstream.Snapshot) error
 2. **Broker.Subscribe()** returns a channel primed with the latest snapshot. Subsequent publishes conflate: if the subscriber hasn't read yet, the pending slot is overwritten with the newer version.
 3. **Server** wraps the broker as a gRPC `StreamAuthConfig` service. Each stream is authorized on connect; snapshots push to clients as they arrive.
 4. **Stream()** client opens the RPC, receives snapshots, and calls the handler for each.
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Broker` | ✅ Yes | `sync.Mutex` protects version, current snapshot, and subscriber set |
+| `Server` | ✅ Yes | Stateless; delegates to `Broker` |
+| `Snapshot` | ✅ Yes | Immutable after creation; `Spec` is shared read-only |
+
+`Publish()` is safe to call from many goroutines concurrently (multi-writer fan-in). Delivery to subscribers happens outside the broker mutex. `Stream()` is a blocking single-shot client helper.

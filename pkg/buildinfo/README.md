@@ -44,3 +44,7 @@ go build -ldflags "-X .../buildinfo.version=v1.2.0 -X .../buildinfo.commit=$(git
 ```
 
 `Get()` returns a snapshot struct. `FIPSEnabled` is a compile-time constant set by the `fips` build tag in `Dockerfile.fips`.
+
+## Thread Safety
+
+All exported functions and variables are safe for concurrent use. Package-level variables (`Version`, `Commit`, `Date`) are written once at link time and never mutated at runtime. `Get()` returns a fresh value struct on each call.

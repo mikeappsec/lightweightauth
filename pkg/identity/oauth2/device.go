@@ -74,9 +74,26 @@ func (i *identifier) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 // handleDevicePoll exchanges the supplied device_code for a token. On
 // success it mints the same session shape as /oauth2/callback so refresh
 // rotation and RP-logout from M6 apply unchanged.
+//
+// OAUTH2-VULN-01 hardening: require Content-Type: application/json.
+// HTML forms can only submit application/x-www-form-urlencoded,
+// multipart/form-data, or text/plain — all of which are "CORS-simple"
+// types that bypass preflight. By requiring application/json (a non-
+// simple type), any cross-origin request triggers a CORS preflight that
+// the server does not answer, so the browser blocks the request.
+// Without this, an attacker who has authorized their own device_code
+// could embed a cross-origin form that POSTs the code to the victim's
+// browser, minting a session cookie for the attacker's identity
+// (login CSRF / session fixation).
 func (i *identifier) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// OAUTH2-VULN-01: reject non-JSON content types to prevent cross-
+	// origin form submissions (login CSRF via device code session fixation).
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 	deviceCode, err := readDeviceCode(r)
@@ -184,31 +201,23 @@ func (i *identifier) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// readDeviceCode accepts the device_code as either a JSON body
-// ({"device_code":"..."}) or a form-urlencoded body. Empty strings are
-// rejected so we never POST a blank grant.
+// readDeviceCode extracts the device_code from a JSON request body.
+// Empty strings are rejected so we never POST a blank grant.
+//
+// OAUTH2-VULN-01: Only JSON is accepted (form-urlencoded removed).
+// The Content-Type guard in handleDevicePoll ensures we never reach
+// here with a non-JSON body, but we also check defensively.
 func readDeviceCode(r *http.Request) (string, error) {
-	ct := r.Header.Get("Content-Type")
-	if strings.HasPrefix(ct, "application/json") {
-		var body struct {
-			DeviceCode string `json:"device_code"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			return "", fmt.Errorf("invalid json: %w", err)
-		}
-		if body.DeviceCode == "" {
-			return "", fmt.Errorf("device_code is required")
-		}
-		return body.DeviceCode, nil
+	var body struct {
+		DeviceCode string `json:"device_code"`
 	}
-	if err := r.ParseForm(); err != nil {
-		return "", fmt.Errorf("invalid form: %w", err)
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+		return "", fmt.Errorf("invalid json: %w", err)
 	}
-	dc := r.PostFormValue("device_code")
-	if dc == "" {
+	if body.DeviceCode == "" {
 		return "", fmt.Errorf("device_code is required")
 	}
-	return dc, nil
+	return body.DeviceCode, nil
 }
 
 // postForm POSTs an application/x-www-form-urlencoded body and returns

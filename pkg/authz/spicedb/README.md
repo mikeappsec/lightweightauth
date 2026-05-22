@@ -82,3 +82,7 @@ authorizers:
 3. `PERMISSIONSHIP_HAS_PERMISSION` → allow; `NO_PERMISSION` → deny (403).
 4. Conditional permissions → `ErrUpstream` (allows composite fallthrough).
 5. Network failures handled by circuit breaker → 503.
+
+## Thread Safety
+
+The `Authorizer` returned by this package is safe for concurrent use. It holds immutable pre-compiled templates, a `PermissionChecker` (SpiceDB gRPC client — goroutine-safe), and an `*upstream.Guard` (mutex-protected internally). No shared mutable state is exposed to callers.

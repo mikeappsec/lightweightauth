@@ -24,13 +24,16 @@ func rawSign(secret, msg []byte) string {
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
+// testSecret is a 32-byte key for test use (meets the 16-byte minimum).
+var testSecret = []byte("this-is-a-32-byte-test-secret!!")
+
 // newID builds an HMAC identifier with the canonical defaults.
 func newID(t *testing.T) module.Identifier {
 	t.Helper()
 	id, err := factory("hmac", map[string]any{
 		"keys": map[string]any{
 			"abc": map[string]any{
-				"secret":  base64.StdEncoding.EncodeToString([]byte("supersecret")),
+				"secret":  base64.StdEncoding.EncodeToString(testSecret),
 				"subject": "service-a",
 				"roles":   []any{"machine"},
 			},
@@ -68,7 +71,7 @@ func TestHMAC_Roundtrip(t *testing.T) {
 		},
 	}
 	r.Headers["Authorization"] = []string{
-		signReq([]byte("supersecret"), "abc", r, []string{"date", "host"}),
+		signReq(testSecret, "abc", r, []string{"date", "host"}),
 	}
 
 	got, err := id.Identify(context.Background(), r)
@@ -97,7 +100,7 @@ func TestHMAC_QueryTamper(t *testing.T) {
 		Method: "GET", Host: "api.example.com", Path: "/transfer?id=1&amount=10",
 		Headers: map[string][]string{"Date": {now}, "Host": {"api.example.com"}},
 	}
-	auth := signReq([]byte("supersecret"), "abc", signerReq, signed)
+	auth := signReq(testSecret, "abc", signerReq, signed)
 
 	// Attacker replays the same signature against amount=1000.
 	attackerReq := &module.Request{
@@ -126,7 +129,7 @@ func TestHMAC_HostTamper(t *testing.T) {
 		Method: "POST", Host: "internal.svc", Path: "/admin",
 		Headers: map[string][]string{"Date": {now}, "Host": {"internal.svc"}},
 	}
-	auth := signReq([]byte("supersecret"), "abc", signerReq, signed)
+	auth := signReq(testSecret, "abc", signerReq, signed)
 
 	attackerReq := &module.Request{
 		Method: "POST", Host: "public.svc", Path: "/admin",
@@ -154,7 +157,7 @@ func TestHMAC_BodyTamper(t *testing.T) {
 		Body:    []byte(`{"amount":10}`),
 		Headers: map[string][]string{"Date": {now}, "Host": {"api.example.com"}},
 	}
-	auth := signReq([]byte("supersecret"), "abc", signerReq, signed)
+	auth := signReq(testSecret, "abc", signerReq, signed)
 
 	attackerReq := &module.Request{
 		Method: "POST", Host: "api.example.com", Path: "/things",
@@ -186,7 +189,7 @@ func TestHMAC_RequiredSignedHeaders(t *testing.T) {
 		Method: "GET", Host: "api.example.com", Path: "/x",
 		Headers: map[string][]string{"Date": {now}, "Host": {"api.example.com"}},
 	}
-	r.Headers["Authorization"] = []string{signReq([]byte("supersecret"), "abc", r, signed)}
+	r.Headers["Authorization"] = []string{signReq(testSecret, "abc", r, signed)}
 
 	_, err := id.Identify(context.Background(), r)
 	if !errors.Is(err, module.ErrInvalidCredential) {
@@ -203,7 +206,7 @@ func TestHMAC_ClockSkew(t *testing.T) {
 		Method: "GET", Host: "h", Path: "/x",
 		Headers: map[string][]string{"Date": {stale}, "Host": {"h"}},
 	}
-	r.Headers["Authorization"] = []string{signReq([]byte("supersecret"), "abc", r, signed)}
+	r.Headers["Authorization"] = []string{signReq(testSecret, "abc", r, signed)}
 	_, err := id.Identify(context.Background(), r)
 	if !errors.Is(err, module.ErrInvalidCredential) {
 		t.Fatalf("err = %v, want ErrInvalidCredential (skew)", err)
@@ -290,7 +293,7 @@ func TestCanonical_BodyHashHex(t *testing.T) {
 func TestHMAC_RejectsUnknownConfigKey(t *testing.T) {
 	t.Parallel()
 	_, err := factory("h", map[string]any{
-		"keys":    map[string]any{"k1": map[string]any{"secret": "dGVzdA=="}},
+		"keys":    map[string]any{"k1": map[string]any{"secret": base64.StdEncoding.EncodeToString(testSecret)}},
 		"timeout": "5s",
 	})
 	if err == nil {
@@ -298,5 +301,69 @@ func TestHMAC_RejectsUnknownConfigKey(t *testing.T) {
 	}
 	if !errors.Is(err, module.ErrConfig) {
 		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+}
+
+// TestHMAC_RequiredSignedHeadersAlwaysIncludesHostAndDate verifies
+// HMAC-VULN-01: an operator setting requiredSignedHeaders cannot remove
+// host or dateHeader from the mandatory set. This prevents silent
+// disabling of replay protection and cross-host binding.
+func TestHMAC_RequiredSignedHeadersAlwaysIncludesHostAndDate(t *testing.T) {
+	t.Parallel()
+
+	// Operator tries to set requiredSignedHeaders to only ["content-type"].
+	// The factory must still enforce host and date.
+	id, err := factory("hmac", map[string]any{
+		"requiredSignedHeaders": []any{"content-type"},
+		"keys": map[string]any{
+			"abc": map[string]any{
+				"secret":  base64.StdEncoding.EncodeToString(testSecret),
+				"subject": "svc",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	// Sign with only content-type (omitting host and date).
+	signed := []string{"content-type"}
+	r := &module.Request{
+		Method: "GET", Host: "h", Path: "/x",
+		Headers: map[string][]string{
+			"Date":         {now},
+			"Host":         {"h"},
+			"Content-Type": {"application/json"},
+		},
+	}
+	r.Headers["Authorization"] = []string{signReq(testSecret, "abc", r, signed)}
+
+	_, err = id.Identify(context.Background(), r)
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (host+date must always be required even when operator overrides requiredSignedHeaders)", err)
+	}
+}
+
+// TestHMAC_RejectsShortSecret verifies HMAC-VULN-02: secrets shorter
+// than 16 bytes are rejected at configuration time.
+func TestHMAC_RejectsShortSecret(t *testing.T) {
+	t.Parallel()
+	_, err := factory("hmac", map[string]any{
+		"keys": map[string]any{
+			"weak": map[string]any{
+				"secret":  base64.StdEncoding.EncodeToString([]byte("short")), // 5 bytes
+				"subject": "svc",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for short secret, got nil")
+	}
+	if !errors.Is(err, module.ErrConfig) {
+		t.Errorf("error = %v, want ErrConfig wrapper", err)
+	}
+	if !strings.Contains(err.Error(), "too short") {
+		t.Errorf("error = %v, want mention of 'too short'", err)
 	}
 }

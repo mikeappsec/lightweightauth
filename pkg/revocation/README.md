@@ -99,3 +99,14 @@ For 0–1 keys, `ExistsAny` inlines the call without spawning goroutines.
 3. `NegCache` wraps the backing store: on "not revoked" result, caches locally for `negCacheTTL` to skip network calls.
 4. On `Add`, NegCache evicts the local entry to ensure immediate enforcement.
 5. ValkeyStore uses Redis `SET key reason EX ttl` for add, `EXISTS key` for lookup.
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Store` (interface) | ✅ Yes | Contract mandates implementations be safe from the pipeline hot path |
+| `MemoryStore` | ✅ Yes | `sync.RWMutex` protects entries (RLock for reads, Lock for writes) |
+| `ValkeyStore` | ✅ Yes | Stateless wrapper around goroutine-safe Valkey client |
+| `NegCache` | ✅ Yes | `sync.RWMutex` protects local cache map; reaper goroutine stopped via channel |
+| `ParallelChecker` | ✅ Yes | Stateless; uses bounded errgroup for parallel `Exists` checks |
+| `Entry` | ✅ Yes | Plain value type |

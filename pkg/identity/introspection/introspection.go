@@ -105,7 +105,7 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 	if raw, ok, _ := i.posCache.Get(ctx, key); ok {
 		var claims map[string]any
 		if err := json.Unmarshal(raw, &claims); err == nil {
-			return identityFromClaims(claims, i.name), nil
+			return identityFromClaims(claims, i.name)
 		}
 	}
 
@@ -150,7 +150,7 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		raw, _ := json.Marshal(claims)
 		_ = i.posCache.Set(ctx, key, raw, ttl)
 	}
-	return identityFromClaims(claims, i.name), nil
+	return identityFromClaims(claims, i.name)
 }
 
 func (i *identifier) callIntrospection(ctx context.Context, tok string) (map[string]any, error) {
@@ -195,12 +195,27 @@ func (i *identifier) callIntrospection(ctx context.Context, tok string) (map[str
 	return claims, nil
 }
 
-func identityFromClaims(claims map[string]any, source string) *module.Identity {
+func identityFromClaims(claims map[string]any, source string) (*module.Identity, error) {
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
 		sub, _ = claims["username"].(string)
 	}
-	return &module.Identity{Subject: sub, Claims: claims, Source: source}
+	// INTROSPECT-VULN-01: Reject active tokens without a subject identifier.
+	// An empty subject defeats per-user authorization, audit attribution,
+	// revocation, and rate limiting. Multiple distinct tokens resolving to
+	// Subject="" would be indistinguishable in RBAC, audit, and revocation —
+	// revoking "sub:" would kill ALL anonymous tokens or none individually.
+	// Per RFC 7662 §2.2, `sub` is OPTIONAL in the response but we require
+	// at least one identity anchor (sub, username, or client_id).
+	if sub == "" {
+		if cid, ok := claims["client_id"].(string); ok && cid != "" {
+			sub = cid
+		}
+	}
+	if sub == "" {
+		return nil, fmt.Errorf("%w: introspection: active token has no sub, username, or client_id", module.ErrInvalidCredential)
+	}
+	return &module.Identity{Subject: sub, Claims: claims, Source: source}, nil
 }
 
 func bearerFrom(r *module.Request, header string) string {

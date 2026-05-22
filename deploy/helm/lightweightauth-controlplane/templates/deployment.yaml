@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "controlplane.fullname" . }}
+  labels:
+    {{- include "controlplane.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "controlplane.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "controlplane.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "controlplane.serviceAccountName" . }}
+      containers:
+        - name: controlplane
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: api
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+            - name: health
+              containerPort: 8082
+              protocol: TCP
+          env:
+            - name: CP_API_ADDR
+              value: ":8443"
+            - name: CP_METRICS_ADDR
+              value: ":9090"
+            - name: CP_HEALTH_ADDR
+              value: ":8082"
+            - name: CP_CLUSTER_NAME
+              value: {{ .Values.clusterName | quote }}
+            - name: CP_DEFAULT_IMAGE
+              value: {{ .Values.defaultImage | quote }}
+            - name: CP_LEADER_ELECT
+              value: {{ .Values.leaderElection.enabled | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

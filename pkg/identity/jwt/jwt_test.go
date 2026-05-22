@@ -216,6 +216,34 @@ func TestJWT_RejectsBadSignature(t *testing.T) {
 	}
 }
 
+// TestJWT_RejectsNoExp verifies JWT-VULN-01: tokens without an `exp` claim
+// are rejected. Without this, a stolen token would be valid forever — surviving
+// key rotation, user deprovisioning, and incident response.
+func TestJWT_RejectsNoExp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	id := newID(t, f, Config{IssuerURL: "https://idp.test"})
+
+	// Mint a token without `exp` — only iss, sub, iat.
+	tok, err := jwtlib.NewBuilder().
+		Issuer("https://idp.test").
+		Subject("alice").
+		IssuedAt(time.Now()).
+		Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	signed, err := jwtlib.Sign(tok, jwtlib.WithKey(jwa.RS256, f.signKey))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	_, err = id.Identify(context.Background(), req(string(signed)))
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (token without exp must be rejected)", err)
+	}
+}
+
 func TestJWT_FactoryRequiresJWKSURL(t *testing.T) {
 	t.Parallel()
 	_, err := factory("x", map[string]any{})

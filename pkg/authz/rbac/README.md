@@ -50,3 +50,7 @@ authorizers:
 2. Checks each role against the allow-set (stored as a hash map).
 3. If any role matches, returns `Allow: true`.
 4. Otherwise returns 403 with reason: `"subject '<sub>' has no allowed role"`.
+
+## Thread Safety
+
+The `Authorizer` returned by this package is safe for concurrent use. It is entirely read-only after factory construction: the allow map is built once and only read via hash lookups. No synchronization primitives are needed — no mutable state exists.

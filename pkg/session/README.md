@@ -66,3 +66,14 @@ if sess.Valid() { ... }
 
 - **CookieStore**: serializes session to JSON, encrypts with AES-256-GCM (random 12-byte nonce), base64url-encodes `nonce || ciphertext || tag`, sets as cookie value.
 - **MemoryStore**: generates a 256-bit random session ID, stores session in a `sync.Map`, sets the session ID as a cookie. Janitor periodically removes expired entries.
+
+## Thread Safety
+
+| Type | Safe for concurrent use? | Notes |
+|------|--------------------------|-------|
+| `Store` (interface) | ✅ Yes | Contract mandates implementations be goroutine-safe |
+| `CookieStore` | ✅ Yes | Stateless after construction; AES-GCM seal/open are safe per crypto spec |
+| `MemoryStore` | ✅ Yes | `sync.Mutex` protects entries map; janitor goroutine stopped via channel on `Close()` |
+| `Session` | ❌ No | Plain struct with mutable `Claims` map; do not share across goroutines without external synchronization |
+
+`MemoryStore.Load` returns a deep copy of the `Session` to prevent data races on the `Claims` map.

@@ -57,6 +57,8 @@ identifiers:
 - Rejects symmetric algorithms and `none` in DPoP proofs
 - Rejects private keys in the proof header (only public JWKs accepted)
 - `X-Forwarded-Proto` aware for scheme comparison behind proxies
+- `htu` comparison strips query from the request path for ext_authz compatibility (DPOP-VULN-02 fix)
+- `cnf.jkt` is mandatory when `required: true` and a bearer token is present — prevents token replay with any key (DPOP-VULN-01 fix)
 - Optional mode: missing DPoP header falls through to inner identifier when `required: false`
 
 ## How It Works
@@ -64,7 +66,9 @@ identifiers:
 1. Extracts the DPoP proof JWS from the configured header.
 2. Validates proof structure: `typ=dpop+jwt`, asymmetric `alg`, embedded public `jwk`.
 3. Verifies JWS signature under the embedded JWK.
-4. Validates payload claims: `htm` matches method, `htu` matches URL, `iat` within ±skew.
+4. Validates payload claims: `htm` matches method, `htu` matches URL (path only, query stripped), `iat` within ±skew.
 5. Checks `jti` uniqueness against the replay cache.
 6. Delegates to the inner identifier (e.g., JWT validation).
-7. Binds proof to token: `cnf.jkt` (RFC 7638 thumbprint) must match, `ath` must equal `base64url(sha256(access_token))`.
+7. Enforces proof-of-possession binding:
+   - `cnf.jkt` (RFC 7638 thumbprint) **must** match the proof JWK — mandatory when `required: true` and a bearer token is present (DPOP-VULN-01 fix).
+   - `ath` **must** equal `base64url(sha256(access_token))` when an access token is present.

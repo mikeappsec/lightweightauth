@@ -46,14 +46,15 @@ identifiers:
 | `scheme` | string | `"HMAC-SHA256"` | Authorization scheme prefix |
 | `dateHeader` | string | `"Date"` | Header for clock-skew enforcement |
 | `clockSkew` | duration | `5m` | Allowed clock drift |
-| `requiredSignedHeaders` | []string | `["host", "date"]` | Headers the signer MUST include |
-| `keys` | map | *required* | Named HMAC keys with secrets + identity |
+| `requiredSignedHeaders` | []string | `["host", "date"]` | Additional headers the signer MUST include (extends mandatory `host` + `dateHeader`) |
+| `keys` | map | *required* | Named HMAC keys with secrets + identity (minimum 16-byte key length enforced) |
 
 ## Features
 
 - Constant-time signature comparison via `subtle.ConstantTimeCompare`
 - Clock-skew-based replay protection via `Date` header
-- Configurable required signed headers (prevents header-stripping attacks)
+- Mandatory `host` and `dateHeader` are always included in the required signed set — operator `requiredSignedHeaders` extends but cannot replace them (HMAC-VULN-01 fix)
+- Minimum 16-byte key length enforced at configuration time to prevent brute-force attacks (HMAC-VULN-02 fix)
 - Canonical request format with deterministic query param ordering
 - Key rotation via `keyrotation.KeySet[KeyEntry]`
 - Body hashing (SHA-256) included in canonical request

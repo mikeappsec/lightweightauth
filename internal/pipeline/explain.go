@@ -395,3 +395,33 @@ func (e *Engine) explainMutate(ctx context.Context, m module.ResponseMutator, r 
 		Result:  "applied",
 	}
 }
+
+// SimEvaluate runs the pipeline in a lightweight mode for bulk replay
+// (G7 — POL-SIM-1). It returns the allow/deny verdict and a reason string
+// without emitting metrics, audit, or traces. Used by `lwauthctl simulate`.
+func (e *Engine) SimEvaluate(ctx context.Context, r *module.Request) (allow bool, reason string) {
+	if r.Context == nil {
+		r.Context = make(map[string]any)
+	}
+
+	id, err := e.identify(ctx, r)
+	if err != nil {
+		return false, "identify: " + err.Error()
+	}
+	if id != nil {
+		r.Context["identity"] = id
+	}
+
+	dec, err := e.authorizer.Authorize(ctx, r, id)
+	if err != nil {
+		return false, "authorize: " + err.Error()
+	}
+	if dec == nil || !dec.Allow {
+		reason := "denied"
+		if dec != nil && dec.Reason != "" {
+			reason = dec.Reason
+		}
+		return false, reason
+	}
+	return true, ""
+}

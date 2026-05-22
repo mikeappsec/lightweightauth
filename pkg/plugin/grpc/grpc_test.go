@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	pluginv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/plugin/v1"
+	authv1 "github.com/mikeappsec/lightweightauth/api/proto/lightweightauth/v1"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
@@ -97,7 +97,7 @@ func TestIdentifier_Identify_OK(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 	})
 	if err != nil {

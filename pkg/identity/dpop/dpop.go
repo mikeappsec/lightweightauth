@@ -115,8 +115,12 @@ func (i *identifier) Name() string { return i.name }
 //     Failures from inner are returned as-is (ErrNoMatch lets the next
 //     configured identifier try, ErrInvalidCredential is fatal for
 //     this identifier).
-//  3. After inner returns identity, optionally check `cnf.jkt` and
-//     `ath` to enforce the proof-of-possession binding.
+//  3. After inner returns identity, enforce proof-of-possession binding:
+//     - `cnf.jkt` (RFC 7800): MANDATORY when required=true and a bearer
+//     token is present. The inner identity MUST carry cnf.jkt matching
+//     the proof JWK thumbprint; absence is rejected.
+//     - `ath` (RFC 9449 §4.3 step 11): MANDATORY when an access token
+//     is present. Must equal base64url(sha256(access_token)).
 func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.Identity, error) {
 	proof := r.Header(i.cfg.ProofHeader)
 	if proof == "" {
@@ -143,7 +147,11 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 	}
 
 	// Confirmation-claim binding (RFC 9449 §6.1 / RFC 7800 cnf.jkt).
-	if jkt, ok := extractCnfJkt(id); ok {
+	// When DPoP is required AND an access token is present, the inner
+	// identity MUST carry cnf.jkt. Without it, the proof-of-possession
+	// binding is absent and a stolen token can be replayed with any key.
+	jkt, hasCnf := extractCnfJkt(id)
+	if hasCnf {
 		thumb, terr := jwkThumbprintB64(jwkProof)
 		if terr != nil {
 			return nil, fmt.Errorf("%w: dpop: thumbprint: %v", module.ErrInvalidCredential, terr)
@@ -151,6 +159,10 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 		if thumb != jkt {
 			return nil, fmt.Errorf("%w: dpop: cnf.jkt mismatch", module.ErrInvalidCredential)
 		}
+	} else if i.cfg.Required && bearerToken(r, i.cfg.BearerHeader) != "" {
+		// DPoP is required and a token is present but the token lacks
+		// cnf.jkt — this defeats proof-of-possession. Reject.
+		return nil, fmt.Errorf("%w: dpop: token missing cnf.jkt (required for DPoP-bound tokens)", module.ErrInvalidCredential)
 	}
 
 	// ath binding (RFC 9449 §4.3 step 11). Computed against whatever
@@ -269,7 +281,13 @@ func matchHTU(got string, r *module.Request) error {
 	if !strings.EqualFold(u.Host, r.Host) {
 		return fmt.Errorf("host mismatch (got %q, want %q)", u.Host, r.Host)
 	}
+	// Strip query from r.Path for comparison — RFC 9449 §4.3 step 9
+	// requires ignoring query and fragment. r.Path may include the query
+	// string (e.g. from ext_authz :path pseudo-header).
 	wantPath := r.Path
+	if idx := strings.IndexByte(wantPath, '?'); idx >= 0 {
+		wantPath = wantPath[:idx]
+	}
 	if wantPath == "" {
 		wantPath = "/"
 	}

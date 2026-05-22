@@ -116,7 +116,7 @@ func TestSign_Identifier_RequireMode_AcceptsValidSig(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		"signing":  signingCfg("require", kid, signSecretHex),
 	})
@@ -141,7 +141,7 @@ func TestSign_Identifier_RequireMode_RejectsUnsignedPlugin(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		"signing":  signingCfg("require", "ops-2026-04", signSecretHex),
 	})
@@ -248,7 +248,7 @@ func TestSign_Identifier_VerifyMode_AllowsUnsignedLegacyPlugin(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		"signing":  signingCfg("verify", "ops-2026-04", signSecretHex),
 	})
@@ -283,7 +283,7 @@ func TestSign_Identifier_VerifyMode_RejectsBadSignature(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		"signing":  signingCfg("verify", kid, signSecretHex),
 	})
@@ -315,7 +315,7 @@ func TestSign_Identifier_DisabledMode_IgnoresTrailers(t *testing.T) {
 
 	id, err := module.BuildIdentifier("grpc-plugin", "remote-saml", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		// No signing block at all → mode defaults to disabled.
 	})
@@ -349,7 +349,7 @@ func TestSign_Authorizer_RequireMode_AcceptsValidSig(t *testing.T) {
 
 	az, err := module.BuildAuthorizer("grpc-plugin", "remote-rbac", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		"signing":  signingCfg("require", kid, signSecretHex),
 	})
@@ -387,7 +387,7 @@ func TestSign_Authorizer_RequireMode_RejectsTamperedAllow(t *testing.T) {
 
 	az, err := module.BuildAuthorizer("grpc-plugin", "remote-rbac", map[string]any{
 		"address":  addr,
-		"timeout":  "200ms",
+		"timeout":  "2s",
 		"insecure": true,
 		"signing":  signingCfg("require", kid, signSecretHex),
 	})

@@ -122,20 +122,57 @@ func TestMTLS_PeerCertsPath(t *testing.T) {
 
 func TestMTLS_XFCCPath(t *testing.T) {
 	t.Parallel()
-	_, pemStr := makeCert(t, "bob", "Corp Root", "spiffe://example.org/ns/default/sa/bob")
-	encoded := url.QueryEscape(pemStr)
+	// MTLS-VULN-02: now requires a CA pool for XFCC trust. Use a
+	// proper CA-signed leaf with a SPIFFE URI SAN.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ca key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("ca cert: %v", err)
+	}
+	caCert, _ := x509.ParseCertificate(caDER)
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("leaf key: %v", err)
+	}
+	spiffeURL, _ := url.Parse("spiffe://example.org/ns/default/sa/bob")
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "bob"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		URIs:         []*url.URL{spiffeURL},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("leaf cert: %v", err)
+	}
+	leafPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}))
+
+	encoded := url.QueryEscape(leafPEM)
 	xfcc := `By=spiffe://example.org;Hash=abc;Cert="` + encoded + `";Subject="CN=bob"`
 
-	// Operator opts in: a verified Envoy/Istio hop sits in front and
-	// emits XFCC. Without trustForwardedClientCert, the header is
-	// ignored entirely (covered by TestMTLS_XFCC_DefaultIgnored below).
-	// We also pin a trusted issuer so the SEC-MTLS-1 anchor gate is
-	// satisfied — trustForwardedClientCert: true alone is rejected.
-	// makeCert produces a self-signed cert (parent==template), so the
-	// effective Issuer DN is CN=bob, not CN=Corp Root.
+	// Operator opts in with a CA pool (MTLS-VULN-02 fix: CA pool is
+	// now mandatory for XFCC trust).
 	id, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
-		"trustedIssuers":           []any{"CN=bob"},
+		"trustedCAs":               caPEM,
+		"trustedIssuers":           []any{"CN=Test CA"},
 	})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
@@ -247,11 +284,10 @@ func TestMTLS_CAPoolRequiresTrustFlag(t *testing.T) {
 	}
 }
 
-// TestMTLS_TrustFlagRequiresAnchor pins SEC-MTLS-1: enabling
-// trustForwardedClientCert without ANY anchor (CA bundle, inline PEM,
-// or issuer allow-list) silently re-enables the original blind-XFCC
-// behavior — anyone who can reach the listener could spoof any
-// subject. The factory must reject this at compile time.
+// TestMTLS_TrustFlagRequiresAnchor pins SEC-MTLS-1 + MTLS-VULN-02:
+// enabling trustForwardedClientCert requires a CA bundle for
+// cryptographic chain verification. trustedIssuers alone is no longer
+// accepted because the Issuer DN is self-declared and trivially forgeable.
 func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 	t.Parallel()
 
@@ -259,7 +295,7 @@ func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 	if _, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
 	}); err == nil {
-		t.Fatal("factory accepted trustForwardedClientCert: true without any anchor (CA / issuer)")
+		t.Fatal("factory accepted trustForwardedClientCert: true without any anchor")
 	}
 
 	// Empty issuer list still counts as no anchor.
@@ -270,21 +306,80 @@ func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 		t.Fatal("factory accepted trustForwardedClientCert: true with empty trustedIssuers")
 	}
 
-	// Each individual anchor is sufficient on its own.
+	// MTLS-VULN-02: trustedIssuers alone is no longer sufficient — the
+	// Issuer DN is self-declared and trivially forgeable.
+	if _, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+		"trustedIssuers":           []any{"CN=Corp Root CA"},
+	}); err == nil {
+		t.Fatal("factory accepted trustForwardedClientCert: true with only trustedIssuers (must require CA pool)")
+	}
+
+	// A CA pool IS sufficient on its own.
 	caPEM, _, _ := makeCAandLeaf(t, "Corp Root CA", "alice", "")
-	for label, raw := range map[string]map[string]any{
-		"trustedCAs": {
-			"trustForwardedClientCert": true,
-			"trustedCAs":               caPEM,
-		},
-		"trustedIssuers": {
-			"trustForwardedClientCert": true,
-			"trustedIssuers":           []any{"CN=Corp Root CA"},
-		},
-	} {
-		if _, err := factory("mtls", raw); err != nil {
-			t.Errorf("anchor %q rejected: %v", label, err)
-		}
+	if _, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+		"trustedCAs":               caPEM,
+	}); err != nil {
+		t.Errorf("trustedCAs anchor rejected: %v", err)
+	}
+
+	// CA pool + trustedIssuers together (recommended config).
+	if _, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+		"trustedCAs":               caPEM,
+		"trustedIssuers":           []any{"CN=Corp Root CA"},
+	}); err != nil {
+		t.Errorf("trustedCAs + trustedIssuers anchor rejected: %v", err)
+	}
+}
+
+// TestMTLS_XFCC_ExpiredCertRejected verifies MTLS-VULN-01: an expired
+// certificate forwarded via XFCC is rejected. Go's x509.Verify catches
+// this when a CA pool is configured, but we also have a belt-and-suspenders
+// explicit check for defense-in-depth.
+func TestMTLS_XFCC_ExpiredCertRejected(t *testing.T) {
+	t.Parallel()
+	// Mint a CA + leaf where the leaf expired an hour ago.
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Expiry Test CA"},
+		NotBefore:             time.Now().Add(-48 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caDER)
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(99),
+		Subject:      pkix.Name{CommonName: "expired-client"},
+		NotBefore:    time.Now().Add(-24 * time.Hour),
+		NotAfter:     time.Now().Add(-1 * time.Hour), // EXPIRED
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	leafPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}))
+
+	id, err := factory("mtls", map[string]any{
+		"trustForwardedClientCert": true,
+		"trustedCAs":               caPEM,
+	})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	xfcc := `Cert="` + url.QueryEscape(leafPEM) + `"`
+	_, err = id.Identify(context.Background(), &module.Request{
+		Headers: map[string][]string{"X-Forwarded-Client-Cert": {xfcc}},
+	})
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (expired cert must be rejected)", err)
 	}
 }
 

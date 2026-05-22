@@ -2206,7 +2206,7 @@ G6. ~~**EXPLAIN-API-1 — Decision explainability API.**~~ ✅ Done
   structured JSON suitable for support tooling and incident response.
   Promotion trigger: D2 (policy versioning) for trace stamping.
 
-G7. **POL-SIM-1 — Policy simulation and impact analysis.**
+G7. ~~**POL-SIM-1 — Policy simulation and impact analysis.**~~ ✅ Done
   Reduces production-change risk. Replay last N hours of production
   audit events against a candidate policy; report percentage of
   decisions changed, top affected subjects/paths, deny reasons, and
@@ -2214,7 +2214,7 @@ G7. **POL-SIM-1 — Policy simulation and impact analysis.**
   merge this, who breaks?" before committing the change. Promotion
   trigger: D2 + D4 (audit sinks for replay source).
 
-G8. **POL-TEST-1 — Policy-as-Code testing framework.**
+G8. ~~**POL-TEST-1 — Policy-as-Code testing framework.**~~ ✅ Done
   Gives application teams a CI contract for policy changes. Add
   `lwauthctl test` that runs YAML test fixtures (`request -> expected
   decision`) like Rego unit tests. Generate test scaffolds from
@@ -2223,7 +2223,7 @@ G8. **POL-TEST-1 — Policy-as-Code testing framework.**
   `AuthConfig` CRDs so PRs require passing tests. Promotion trigger:
   D2 (policy versioning) shipped.
 
-G9. **ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**
+G9. ~~**ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**~~ ✅ Done
   Common procurement blocker in FSI, healthcare, education, and
   government. Add `pkg/identity/saml` (SP-initiated and IdP-initiated
   flows, signature validation, NotBefore/NotOnOrAfter) and
@@ -2232,14 +2232,446 @@ G9. **ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**
   Promotion trigger: at least one customer commitment — adds
   significant XML / xmldsig dependency surface.
 
-G10. **BREAKGLASS-1 — Time-bounded / break-glass access.**
+G10. **CTRL-UI-1 — Management UI and multi-instance control plane.**
+
+> **One-liner:** A web-based management console and backing API that lets
+> operators create, configure, observe, and interconnect lwauth instances
+> across namespaces and clusters — without requiring `kubectl` access.
+
+#### Motivation
+
+G1–G9 gave lwauth enterprise identity, policy, and compliance features.
+Operators still manage everything through `kubectl apply`, `lwauthctl`,
+and Helm values. For platform teams operating tens of lwauth instances
+across multiple tenants, a visual control plane removes friction:
+
+- A new team should be able to self-service a "create lwauth instance
+  for my namespace" workflow without YAML.
+- SRE needs a single pane to see the health, config version, and
+  decision-rate of every instance across all clusters.
+- Cross-tenant proxy mesh: two tenants that want to share a protected
+  upstream (e.g. a shared data service) need a way to federate their
+  auth pipelines through HTTP without custom Envoy configs.
+
+#### High-level architecture
+
+```
+                ┌──────────────────────────────────────────────────────┐
+                │              lwauth-console (SPA)                     │
+                │  SolidJS / TypeScript / Vite / TailwindCSS           │
+                └───────────────────┬──────────────────────────────────┘
+                                    │ REST + WebSocket (admin JWT / mTLS)
+                ┌───────────────────▼──────────────────────────────────┐
+                │         lwauth-controlplane (Go binary)               │
+                │  cmd/lwauth-controlplane — shares internal/ + pkg/    │
+                │  with cmd/lwauth; deploys as its own Pod              │
+                │                                                       │
+                │  ┌─────────┐ ┌──────────┐ ┌─────────┐ ┌──────────┐  │
+                │  │Instance │ │ Proxy    │ │ Config  │ │ Observe  │  │
+                │  │Manager  │ │ Mesh     │ │ Editor  │ │ Aggreg.  │  │
+                │  └────┬────┘ └────┬─────┘ └────┬────┘ └────┬─────┘  │
+                └───────┼───────────┼────────────┼───────────┼─────────┘
+                        │           │            │           │
+         ┌──────────────┼───────────┼────────────┼───────────┼─────┐
+         │ Cluster A     │           │            │           │     │
+         │  ┌────────────▼──┐  ┌────▼────┐  ┌───▼────┐  ┌──▼────┐ │
+         │  │LwauthInstance │  │ProxyRoute│  │lwauth  │  │/admin │ │
+         │  │ CRD          │  │ CRD     │  │pods    │  │/metrics│ │
+         │  └───────────────┘  └─────────┘  └────────┘  └───────┘ │
+         └─────────────────────────────────────────────────────────┘
+                        │ (kubeconfig / ServiceAccount token)
+         ┌──────────────▼─────────────────────────────────────────┐
+         │ Cluster B (remote)                                      │
+         │  ┌───────────────┐  ┌─────────┐  ┌────────┐  ┌───────┐ │
+         │  │LwauthInstance │  │ProxyRoute│  │lwauth  │  │/admin │ │
+         │  │ CRD          │  │ CRD     │  │pods    │  │/metrics│ │
+         │  └───────────────┘  └─────────┘  └────────┘  └───────┘ │
+         └─────────────────────────────────────────────────────────┘
+```
+
+#### Deployment model — hybrid separate-entrypoint
+
+`cmd/lwauth-controlplane` lives in the same Go module as `cmd/lwauth`
+and imports shared packages (`internal/config`, `internal/server`,
+`pkg/module`, `pkg/configstream`, etc.). It compiles to its **own
+binary** and deploys as a dedicated Pod (or Deployment) — it is NOT a
+mode flag on `lwauth` itself.
+
+**How they interact at runtime:**
+
+```
+┌────────────────────────────┐         ┌─────────────────────────┐
+│  lwauth-controlplane Pod   │         │  lwauth Pod (instance)  │
+│                            │  HTTP   │                         │
+│  Instance Manager  ───────────────►  │  /v1/admin/status       │
+│  Config Editor     ───────────────►  │  /v1/admin/explain      │
+│  Observ. Aggreg.   ───────────────►  │  /metrics               │
+│  Proxy Mesh Mgr    ───────────────►  │  /v1/authorize (proxy)  │
+│                            │         │                         │
+│  CRD Controller    ──► K8s API       │  Watches AuthConfig CRD │
+│  (LwauthInstance,          │         │  via configstream       │
+│   ProxyRoute)              │         │                         │
+└────────────────────────────┘         └─────────────────────────┘
+```
+
+The control plane **never injects code into the lwauth process**. All
+interaction is over the network:
+
+| Interaction | Mechanism |
+|---|---|
+| Create/scale/delete instance | Control plane writes `LwauthInstance` CRD → its own controller reconciles Deployment + Service + AuthConfig |
+| Push config | Control plane writes AuthConfig CRD → lwauth's existing CRD watcher picks it up via `configstream` |
+| Read health/status | HTTP GET to lwauth Pod's `/v1/admin/status` + `/healthz` |
+| Read metrics | HTTP GET to `/metrics` (Prometheus exposition) |
+| Explain a decision | HTTP POST to `/v1/admin/explain` on the target instance |
+| Invalidate cache | HTTP POST to `/v1/admin/cache/invalidate` |
+| Cross-tenant proxy | At reconcile time, control plane patches the source instance's AuthConfig to inject a pipeline rule that calls the target's `/v1/authorize` |
+
+Because all communication is over standard HTTP endpoints that lwauth
+already exposes, the control plane works with any lwauth version that
+has the admin API (M9+). Operators who don't deploy the control plane
+lose nothing — `kubectl` and `lwauthctl` remain fully functional.
+
+#### Instance discovery — dual mode
+
+The control plane discovers lwauth instances through **two
+complementary mechanisms** (both active simultaneously):
+
+1. **Kubernetes Service/Endpoint discovery (automatic).** A
+   label-selector watch (`app.kubernetes.io/name=lwauth`) finds
+   Services in all watched namespaces. For each Service, the control
+   plane resolves the Endpoints, probes `/v1/admin/status`, and
+   registers the instance in its in-memory registry. Works for every
+   cluster the control plane has credentials for.
+
+2. **Manual registration via API.** For instances outside auto-
+   discovery scope (bare-metal, VMs, air-gapped clusters without
+   shared API access, or third-party-managed lwauth deployments),
+   operators POST a registration:
+   ```json
+   POST /v1/controlplane/instances/register
+   {
+     "name": "edge-us-west",
+     "cluster": "prod-us-west",
+     "adminUrl": "https://lwauth.edge-us-west.internal:8080",
+     "grpcUrl": "dns:///lwauth.edge-us-west.internal:9001",
+     "tls": { "caBundle": "...", "clientCert": "secretRef://..." }
+   }
+   ```
+   Manually-registered instances are health-checked on the same
+   interval as auto-discovered ones and surface in the UI identically.
+
+#### Multi-cluster support
+
+Multi-cluster is supported from day one. The control plane accepts
+multiple cluster connections:
+
+```yaml
+# controlplane-config.yaml
+clusters:
+  - name: prod-us-east
+    kubeconfig: /etc/lwauth-cp/kubeconfigs/us-east.yaml
+    # Or: serviceAccountToken + apiServer URL for in-cluster→remote.
+  - name: prod-eu-west
+    kubeconfig: /etc/lwauth-cp/kubeconfigs/eu-west.yaml
+  - name: local
+    inCluster: true   # uses mounted ServiceAccount token
+```
+
+Each cluster connection spawns its own controller-runtime manager
+(label-selector watch + CRD reconciler). The REST API and UI expose
+a `cluster` dimension on every resource. `ProxyRoute` CRDs support
+cross-cluster targets:
+
+```yaml
+spec:
+  target:
+    cluster: prod-eu-west          # remote cluster name
+    instanceRef: tenant-b
+    transport: http                # over public or mesh ingress
+```
+
+Cross-cluster proxy routes use the target's externally-reachable
+admin URL (resolved from `LwauthInstance.status.externalUrl` or the
+manual registration's `adminUrl`). mTLS is mandatory for cross-
+cluster traffic.
+
+#### Components
+
+##### 1. Control-plane API server (`cmd/lwauth-controlplane`)
+
+A Go binary that shares `internal/` and `pkg/` with `cmd/lwauth` (same
+Go module, separate `main` package). It does **not** serve data-plane
+traffic — it is purely management.
+
+- **Instance lifecycle.** CRUD operations on lwauth Deployment +
+  Service + AuthConfig bundles. Thin wrapper over Kubernetes API that
+  enforces naming, resource limits, and tenant isolation by default.
+  Creates instances via a `LwauthInstance` CRD (new) so the controller
+  can reconcile desired state → running Pods.
+
+- **Config editor.** Accepts AuthConfig YAML/JSON via API; validates
+  (reuses the same `internal/config.Compile` path that `cmd/lwauth`
+  uses), diffs against live, and applies. Stores version history
+  (annotation-based or dedicated ConfigMap changelog) for audit and
+  rollback.
+
+- **Proxy mesh management.** Introduces a `ProxyRoute` CRD that
+  declares "tenant A's lwauth should forward auth-decisions for path
+  prefix `/shared/*` to tenant B's lwauth over HTTP". The controller
+  wires this as a `header-passthrough` + upstream Guard route between
+  instances. All cross-tenant traffic is mTLS by default (uses the
+  cluster's mesh certs or a dedicated CA from G1 secret resolvers).
+
+- **Observability aggregator.** Fans out to each discovered instance's
+  `/metrics` and `/v1/admin/status` endpoints (across all registered
+  clusters); streams decision-rate, cache-hit ratio, error counts, and
+  config-version to the UI over WebSocket. Lightweight: no Prometheus
+  dep — scrapes the already-exposed exposition format and aggregates
+  in memory.
+
+- **Multi-instance default.** `LwauthInstance` CRD defaults
+  `replicaCount: 2`, anti-affinity across nodes, PodDisruptionBudget
+  `minAvailable: 1`. A fresh "create instance" call produces a
+  production-ready HA pair without operator intervention.
+
+##### 2. Web UI (`ui/console`)
+
+- **Technology.** React 19 + Vite + TailwindCSS + shadcn/ui. Ships as
+  a static bundle served by the control-plane binary (embedded via
+  `embed.FS`). Zero external runtime dependency.
+
+- **Screens:**
+
+  | Screen | Purpose |
+  |--------|---------|
+  | **Dashboard** | Cluster-wide view: instance count, aggregate decision rate, top-denied paths, alert badges |
+  | **Instances** | List / create / delete / scale instances; per-instance config editor with diff preview |
+  | **Config editor** | YAML / form-based AuthConfig editing with inline validation, explain preview, and "apply" |
+  | **Proxy mesh** | Visual graph of cross-tenant proxy routes; drag-and-drop to create `ProxyRoute` CRDs |
+  | **Decisions** | Live tail of recent decisions (from audit stream); filter by tenant, subject, path, verdict |
+  | **Explain** | Paste a trace-ID or craft a synthetic request → full pipeline trace (wraps `/v1/admin/explain`) |
+  | **Health** | Per-instance health, config version, uptime, cache stats, upstream guard status |
+  | **Settings** | Control-plane auth config, RBAC roles, notification channels |
+
+- **Auth model.** The UI authenticates against the control-plane API
+  using the same admin JWT / mTLS model documented in
+  [operations/admin-auth.md](operations/admin-auth.md). SSO login via
+  the existing `oauth2` identity module (PKCE flow against the
+  operator's IdP). Role-based visibility: `viewer` sees dashboards and
+  explain; `operator` can edit config; `admin` can create/destroy
+  instances.
+
+##### 3. New CRDs
+
+```yaml
+apiVersion: lightweightauth.io/v1alpha1
+kind: LwauthInstance
+metadata:
+  name: tenant-a
+  namespace: lwauth-system
+spec:
+  # Target namespace where the lwauth Deployment + Service land.
+  targetNamespace: tenant-a
+  replicas: 2
+  version: v1.2.0            # pinned image tag; empty = latest
+  config:
+    # Inline AuthConfig or reference to an existing AuthConfig CR.
+    authConfigRef: { name: tenant-a-policy, namespace: tenant-a }
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: "1", memory: 512Mi }
+  tls:
+    enabled: true
+    certManager: { issuerRef: { name: letsencrypt-prod, kind: ClusterIssuer } }
+  networkPolicy:
+    enabled: true             # default: isolate the instance
+  podDisruptionBudget:
+    minAvailable: 1
+status:
+  ready: true
+  replicas: 2/2
+  configVersion: "sha256:ab12..."
+  lastReconcile: "2026-05-23T10:00:00Z"
+```
+
+```yaml
+apiVersion: lightweightauth.io/v1alpha1
+kind: ProxyRoute
+metadata:
+  name: shared-data-route
+  namespace: lwauth-system
+spec:
+  # Source: the lwauth instance that receives the original request.
+  source:
+    instanceRef: tenant-a
+    pathPrefix: /shared/data/
+  # Target: the lwauth instance that owns the target policy.
+  target:
+    instanceRef: tenant-b
+    # How source reaches target: cluster-internal HTTP by default.
+    transport: http
+    # mTLS between instances (default: true when mesh certs available).
+    mtls: true
+  # What to forward: the module.Request (method, path, headers, tenant).
+  # Body is NOT forwarded by default (auth decisions rarely need it).
+  forwardBody: false
+  # Timeout for the cross-instance call.
+  timeout: 2s
+  # Fallback if target is unreachable: deny (safe default).
+  failureMode: deny
+status:
+  healthy: true
+  lastProbe: "2026-05-23T10:00:00Z"
+  latencyP99: 4ms
+```
+
+##### 4. Cross-tenant proxy mesh — HTTP federation
+
+When a `ProxyRoute` is reconciled, the controller:
+
+1. Discovers the target instance's in-cluster Service address.
+2. Injects a synthetic pipeline stage into the source instance's
+   engine: for requests matching `spec.source.pathPrefix`, the
+   pipeline short-circuits and issues an HTTP `POST /v1/authorize`
+   to the target instance with the original `module.Request` payload.
+3. The target evaluates against its own policy and returns
+   allow/deny + mutated headers.
+4. The source merges the target's response (union of upstream headers;
+   deny wins) and returns the final decision to Envoy / the caller.
+
+**Security properties:**
+- Cross-tenant calls use mTLS by default; the source presents a
+  client cert that the target validates against a CA bundle configured
+  in the target's `LwauthInstance`.
+- The target can restrict which source instances are allowed to
+  proxy to it via an allowlist on `ProxyRoute.spec.target.allowSources`.
+- Decision caching respects tenant boundaries: source caches the
+  proxied decision keyed by `(target, request-hash)` with a
+  configurable TTL (default: same as target's own cache TTL).
+- Audit events on both sides are tagged `proxy_route=<name>` so
+  the compliance report (G4) traces cross-tenant decisions.
+
+##### 5. Multi-instance deployment defaults
+
+The `LwauthInstance` controller provisions:
+
+| Resource | Default |
+|----------|---------|
+| Deployment | 2 replicas, `topologySpreadConstraints` (zone-spread), resource requests 100m/128Mi |
+| Service | ClusterIP, headless for gRPC (client-side LB) |
+| NetworkPolicy | Ingress: only from gateway selector + control-plane; Egress: IdP URLs + target Valkey + DNS |
+| PodDisruptionBudget | `minAvailable: 1` |
+| ServiceAccount | Dedicated per-instance; no cluster-wide permissions |
+| HPA | Optional; disabled by default; `spec.autoscaling.{min,max,targetCPU}` |
+| TLS | cert-manager `Certificate` CR if `spec.tls.certManager` set |
+| ConfigMap | Envoy sidecar config (if gateway co-location is chosen) |
+
+Multiple instances in the same cluster share nothing by default (no
+shared Valkey, no shared secrets). Operators who want shared cache can
+set `spec.config.cache.valkey.address` to the same Valkey cluster; the
+key-prefix includes the instance name so there is no collision.
+
+##### 6. API surface
+
+All endpoints live under `/v1/controlplane/` on the control-plane
+binary. Auth: admin JWT / mTLS (same as `/v1/admin/*` on lwauth itself).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/v1/controlplane/clusters` | List registered clusters |
+| POST | `/v1/controlplane/clusters` | Register a cluster (kubeconfig or manual) |
+| DELETE | `/v1/controlplane/clusters/{name}` | Remove cluster registration |
+| GET | `/v1/controlplane/instances` | List all instances (filterable by `?cluster=`) |
+| POST | `/v1/controlplane/instances` | Create instance (in specified cluster) |
+| POST | `/v1/controlplane/instances/register` | Manually register an external instance |
+| GET | `/v1/controlplane/instances/{cluster}/{name}` | Instance detail + status |
+| PUT | `/v1/controlplane/instances/{cluster}/{name}` | Update instance spec |
+| DELETE | `/v1/controlplane/instances/{cluster}/{name}` | Delete instance (grace period) |
+| POST | `/v1/controlplane/instances/{cluster}/{name}/config` | Push new AuthConfig |
+| GET | `/v1/controlplane/instances/{cluster}/{name}/config/history` | Config version log |
+| POST | `/v1/controlplane/instances/{cluster}/{name}/config/rollback` | Rollback to version N |
+| GET | `/v1/controlplane/routes` | List ProxyRoutes (all clusters) |
+| POST | `/v1/controlplane/routes` | Create ProxyRoute (may be cross-cluster) |
+| DELETE | `/v1/controlplane/routes/{name}` | Delete ProxyRoute |
+| GET | `/v1/controlplane/health` | Aggregated health across all clusters |
+| WS | `/v1/controlplane/stream/decisions` | Live decision stream (WebSocket, filterable) |
+| WS | `/v1/controlplane/stream/metrics` | Live metrics stream (WebSocket, filterable) |
+
+##### 7. Design decisions and trade-offs
+
+| Decision | Rationale |
+|----------|-----------|
+| Hybrid: separate entrypoint, shared library | `cmd/lwauth-controlplane` imports the same `internal/config`, `pkg/module`, `pkg/configstream` packages as `cmd/lwauth`. Two binaries from one repo; data plane stays minimal, control plane reuses validation/compile logic without forking. |
+| Network-only interaction (no sidecar/injection) | Control plane talks to lwauth instances over their existing HTTP admin API (`/v1/admin/*`, `/metrics`). No mutating webhooks, no code injection, no shared memory. Any lwauth version with M9 admin endpoints is compatible. |
+| CRD-driven (not just REST) | Reconciliation loop gives eventual consistency, drift detection, and GitOps compatibility. REST API is a convenience layer over CRD CRUD. |
+| HTTP (not gRPC) for cross-tenant proxy | HTTP keeps the dependency light (no `go-control-plane` on the proxy hop); the payload is the same JSON that `/v1/authorize` already speaks. Performance-sensitive deployments can opt into gRPC via `spec.target.transport: grpc`. |
+| Multi-cluster from day one | Auth infrastructure is typically the first thing that spans regions. Delaying multi-cluster creates single-cluster assumptions in the data model that are expensive to retrofit. |
+| Dual discovery (auto + manual) | Auto-discovery via label selectors covers the 90% case; manual registration covers VMs, edge, air-gapped, or third-party-managed instances without requiring K8s API access to those environments. |
+| UI embedded in binary | Single container to deploy; no CDN, no separate static-hosting infra. Operators who prefer headless can ignore the UI and use `lwauthctl` or raw API. |
+| SolidJS (not React) | Fine-grained reactivity without virtual DOM diffing. The live-streaming decision tail and mesh topology graph benefit from surgical DOM updates. Bundle size is ~7 KB (Solid) vs ~40 KB (React) — meaningful for the embedded `embed.FS` delivery model. TypeScript throughout. |
+| Default multi-replica | Auth is on the critical path; single-replica defaults in cookbooks have caused customer outages. The CRD defaults to 2 replicas + PDB so "create instance" is HA out of the box. |
+
+##### 8. Security considerations
+
+- **UI XSS/CSRF:** CSP header (`default-src 'self'`), SameSite=Strict
+  cookies, CSRF token on all state-changing requests.
+- **RBAC isolation:** The control-plane ServiceAccount has only the
+  minimum RBAC: `get/list/watch/create/patch/delete` on lwauth CRDs
+  and Deployments/Services in target namespaces. No cluster-admin.
+- **Tenant boundary:** A `ProxyRoute` can only be created by an admin
+  with `manage_routes` verb. The target instance must explicitly opt-in
+  via `spec.allowInboundProxy: true` on its `LwauthInstance` CR.
+- **Secrets:** The control-plane never stores secrets itself; it
+  references `SecretRef` / G1 external secret resolvers for TLS certs,
+  IdP client secrets, and Valkey passwords.
+- **Audit:** Every control-plane action (create/update/delete instance,
+  push config, create route) emits an audit event to the same slog
+  sink as the data plane.
+
+##### 9. Promotion triggers and dependencies
+
+| Dependency | Why |
+|------------|-----|
+| G2 (admin RBAC) | Control-plane auth inherits the admin-plane model |
+| G6 (explain API) | Explain screen wraps the existing endpoint |
+| M11 (configstream) | Live config push to instances uses the existing xDS broker |
+| M4 (CRD controller) | `LwauthInstance` and `ProxyRoute` reconcilers follow the same controller-runtime pattern |
+| G1 (external secrets) | TLS cert provisioning for cross-tenant mTLS |
+| M9 (admin API) | All control-plane → instance interaction uses `/v1/admin/*` endpoints |
+
+##### 10. Delivery plan
+
+| Phase | Scope | Outcome |
+|-------|-------|---------|
+| **Phase 1** | `LwauthInstance` CRD + controller + dual discovery (label-selector + manual) + REST API + basic SolidJS dashboard (instance list/create/health) | Operators can self-service instances via API or UI; auto-discovers existing instances |
+| **Phase 2** | Multi-cluster registration + config editor + version history + rollback + explain integration | Day-two config management across clusters without kubectl |
+| **Phase 3** | `ProxyRoute` CRD + cross-tenant/cross-cluster HTTP proxy + mesh topology graph UI | Multi-tenant proxy federation |
+| **Phase 4** | Live decision stream + metrics aggregation + HPA integration + full observability console | Production-grade monitoring pane |
+
+> **Detailed task breakdown:** [docs/design/UIDESIGN.md](design/UIDESIGN.md)
+
+---
+
+*Former G10–G20 have been moved to [Milestone H](#milestone-h) below.*
+
+---
+
+### Milestone H — post-G enterprise features
+
+The following items were part of the original Tier G roadmap (G10–G20)
+and are now tracked as Milestone H. They depend on the G1–G9
+infrastructure being stable and will be prioritised based on customer
+demand.
+
+H1. **BREAKGLASS-1 — Time-bounded / break-glass access.**
   Operationally important for on-call and incident response. Built-in
   support for: "grant `user X` role `admin` until `T+1h`, audited as
   break-glass". Auto-revokes; emits a distinct compliance event tagged
   `break_glass=true`; requires ticket / incident ID metadata. Promotion
   trigger: E2 (revocation) shipped — uses the same store.
 
-G11. **QUOTA-TIER-1 — Per-tenant SLA & quota enforcement.**
+H2. **QUOTA-TIER-1 — Per-tenant SLA & quota enforcement.**
   Buyer value is strongest for SaaS platforms that map commercial tiers
   to technical limits. Beyond rate limiting: burst credits, monthly
   quotas, "tier=enterprise gets 10K rps, tier=free gets 100 rps" with
@@ -2248,7 +2680,7 @@ G11. **QUOTA-TIER-1 — Per-tenant SLA & quota enforcement.**
   rate limiter API. Promotion trigger: E1 (two-tier cache) for quota
   state.
 
-G12. **DEC-SIGN-1 — Bring-your-own KMS for decision signing.**
+H3. **DEC-SIGN-1 — Bring-your-own KMS for decision signing.**
   Valuable for zero-trust mesh and high-assurance integrations. Sign
   decision responses (Door A/B/C) with a tenant-scoped key from external
   KMS (AWS KMS, GCP KMS, Azure Key Vault, Vault Transit) so downstream
@@ -2256,7 +2688,7 @@ G12. **DEC-SIGN-1 — Bring-your-own KMS for decision signing.**
   Promotion trigger: G1 (external secrets) shipped — same resolver and
   key-management surface.
 
-G13. **CHANGE-APPROVAL-1 — Policy change approval workflow.**
+H4. **CHANGE-APPROVAL-1 — Policy change approval workflow.**
   New recommended feature. Many enterprises require two-person review
   for production authorization changes. Add optional approval metadata
   (`approvedBy`, `changeTicket`, `expiresAt`) validated by an admission
@@ -2264,15 +2696,15 @@ G13. **CHANGE-APPROVAL-1 — Policy change approval workflow.**
   approval is missing, stale, or self-approved. Promotion trigger: G2
   (admin RBAC) + C2 (GitOps promotion) shipped.
 
-G14. **PORTAL-RO-1 — Self-service policy portal (read-only first).**
+H5. **PORTAL-RO-1 — Self-service policy portal (read-only first).**
   Reduces platform-team ticket volume once the admin model is safe. Web
   UI gated by SSO that lets app teams search "why was my request
   denied?" by trace ID, view their tenant's effective policy, view
   recent decisions, and request changes via a generated PR. Read-only
-  first; write access (G2 RBAC + G13 approvals required) is a follow-up.
+  first; write access (G2 RBAC + H4 approvals required) is a follow-up.
   Promotion trigger: G2 (admin RBAC) for write mode.
 
-G15. **POL-LINT-1 — Policy linting and best-practice rules.**
+H6. **POL-LINT-1 — Policy linting and best-practice rules.**
   Good ROI and useful early, but less of a blocker than secrets,
   residency, or compliance evidence. `lwauthctl lint` warns on overly
   permissive rules (`defaultAllow: true`), missing rate limits,
@@ -2281,14 +2713,14 @@ G15. **POL-LINT-1 — Policy linting and best-practice rules.**
   Configurable rule severity. Hooks into `lwauthctl validate` and CI.
   Promotion trigger: immediate — pure additive tooling.
 
-G16. **SIEM-DETECT-1 — SIEM mappings and detection content.**
+H7. **SIEM-DETECT-1 — SIEM mappings and detection content.**
   New recommended feature. Ship Splunk, Elastic, Microsoft Sentinel,
   and Chronicle parsers/dashboards for audit events plus detection
   rules for unusual deny spikes, break-glass use, admin-policy edits,
   key-rotation failures, and cross-tenant access attempts. Promotion
   trigger: D4 (audit sinks) shipped and audit event schemas are stable.
 
-G17. **CDC-INVAL-1 — Cross-cluster cache invalidation via CDC.**
+H8. **CDC-INVAL-1 — Cross-cluster cache invalidation via CDC.**
   Important for multi-region customers, but behind the core revocation
   and invalidation work. Stream cache-invalidation events through Kafka
   or NATS instead of point-to-point Valkey Pub/Sub. Bounded-staleness
@@ -2296,7 +2728,7 @@ G17. **CDC-INVAL-1 — Cross-cluster cache invalidation via CDC.**
   invalidation events buffer at the broker. Promotion trigger: E3
   (cache invalidation) plus at least one multi-region customer.
 
-G18. **FED-CRDT-1 — Multi-region active/active policy sync.**
+H9. **FED-CRDT-1 — Multi-region active/active policy sync.**
   Advanced global-control-plane feature. Extends F8 (federation):
   CRDT-style policy version vectors so two regions can edit
   independently and merge cleanly without a global lock or single write
@@ -2305,7 +2737,7 @@ G18. **FED-CRDT-1 — Multi-region active/active policy sync.**
   trigger: F8 prototype + at least one customer with a global
   active/active deployment commitment.
 
-G19. **STATE-PERSIST-1 — Embedded persistent storage for identifiers
+H10. **STATE-PERSIST-1 — Embedded persistent storage for identifiers
   and authorizers.**
   Solves a fundamental gap: any lwauth-managed state (API key
   revocations, local client registrations, session blacklists,
@@ -2323,6 +2755,20 @@ G19. **STATE-PERSIST-1 — Embedded persistent storage for identifiers
   Raft consensus or LiteFS replication over the same interface.
   Promotion trigger: E2 (revocation) design finalised — the
   revocation store is the first consumer of persistent state.
+
+H11. **ID-ROTATE-1 — SAML IdP certificate rollover and SCIM token rotation.**
+  Adds `Rotatable` support to the SAML and SCIM identity modules via
+  `pkg/keyrotation`. SAML: accept multiple IdP certificates
+  simultaneously during cert rollover (trust both old and new until the
+  old expires or is explicitly retired); expose `KeyStates()` with each
+  cert's KID, validity window, and lifecycle state. SCIM: support
+  multiple concurrent bearer tokens with overlap-based rotation so the
+  IdP can be updated without downtime; track token KIDs in the same
+  `KeySet` lifecycle used by API keys and DPoP. Both modules emit
+  rotation metrics (`lwauth_key_rotation_state`) and surface status
+  conditions on their `IdentityProvider` CRD objects.
+  Promotion trigger: G9 (SAML/SCIM) shipped + D1 (key rotation)
+  infrastructure stable.
 
 ### Prioritization rationale
 
@@ -2359,12 +2805,17 @@ a known security or correctness gap.** Concretely:
   runtimes because they shorten the path from evaluation to production.
   SpiceDB, federation, eBPF, and WASM still require an operator or
   maintainer to own the external ecosystem before they graduate.
-- **Tier G is enterprise-customer requests.** Its order is buyer-
-  benefit weighted: external secrets, admin RBAC, data residency,
-  compliance evidence, and MFA step-up remove procurement blockers;
-  explainability, simulation, and policy tests reduce day-two support
-  and change risk; quota, signing, portal, SIEM, CDC, and global sync
-  follow once their prerequisite runtime surfaces are stable.
+- **Tier G is enterprise-customer requests (G1–G9 complete).**
+  External secrets, admin RBAC, data residency, compliance evidence,
+  MFA step-up, explainability, simulation, policy tests, and SAML/SCIM
+  are all shipped. The remaining enterprise items (break-glass, quota,
+  signing, portal, SIEM, CDC, global sync, persistent storage, and
+  SAML cert rotation) have been moved to **Milestone H** and will be
+  prioritised based on customer demand.
+- **Tier H (formerly G10–G20) is the post-G enterprise backlog.**
+  Quota, signing, portal, SIEM, CDC, and global sync follow once their
+  prerequisite runtime surfaces are stable and customer commitments
+  materialise.
 
 The sibling repos (`lightweightauth-idp`, `lightweightauth-plugins`,
 `lightweightauth-ebpf`) inherit this ordering: plugin work follows the
