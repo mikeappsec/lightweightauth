@@ -132,7 +132,7 @@ type PDBSpec struct {
 
 // AutoscalingSpec configures optional HPA.
 type AutoscalingSpec struct {
-	Enabled   bool   `json:"enabled,omitempty"`
+	Enabled     bool   `json:"enabled,omitempty"`
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
 	// TargetCPUPercent is the target CPU utilization percentage.

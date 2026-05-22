@@ -1,7 +1,7 @@
 # G10 CTRL-UI-1 — Detailed Delivery Plan
 
 > Management UI and multi-instance control plane.
-> Parent design: [DESIGN.md § G10](../DESIGN.md#g10-ctrl-ui-1--management-ui-and-multi-instance-control-plane)
+> Parent design: [DESIGN.md § G10](../DESIGN.md)
 
 ---
 
