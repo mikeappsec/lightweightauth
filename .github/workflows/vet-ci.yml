@@ -1,0 +1,37 @@
+name: Vet OSS Dependencies
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run vet
+        id: vet
+        uses: safedep/vet-action@v1
+        with:
+          policy: .github/vet/policy.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: ${{ steps.vet.outputs.report != '' }}
+        with:
+          sarif_file: ${{ steps.vet.outputs.report }}
+          category: vet
