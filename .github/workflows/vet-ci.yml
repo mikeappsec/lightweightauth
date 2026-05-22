@@ -2,10 +2,11 @@ name: Vet OSS Dependencies
 
 on:
   pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
-      - v1.2-tier-g
 
 permissions:
   contents: read
