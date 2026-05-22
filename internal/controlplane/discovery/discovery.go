@@ -214,11 +214,11 @@ type KubernetesDiscoveryConfig struct {
 
 // ManualRegistration is the request body for POST /instances/register.
 type ManualRegistration struct {
-	Name     string            `json:"name"`
-	Cluster  string            `json:"cluster"`
-	AdminURL string            `json:"adminUrl"`
-	GRPCURL  string            `json:"grpcUrl,omitempty"`
-	TLS      *TLSRegistration  `json:"tls,omitempty"`
+	Name     string           `json:"name"`
+	Cluster  string           `json:"cluster"`
+	AdminURL string           `json:"adminUrl"`
+	GRPCURL  string           `json:"grpcUrl,omitempty"`
+	TLS      *TLSRegistration `json:"tls,omitempty"`
 }
 
 // TLSRegistration holds TLS configuration for manual registration.

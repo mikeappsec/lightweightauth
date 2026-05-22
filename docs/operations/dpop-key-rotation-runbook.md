@@ -8,7 +8,7 @@ pre-registered DPoP keys with lwauth and you need to rotate them.
 
 - lwauth deployed with DPoP identifier configured
 - `kubectl` access to the cluster
-- New key material generated (see [Generating Keys](#generating-keys))
+- New key material generated (see [Step 1 — Generate New Key Pair](#step-1--generate-new-key-pair))
 
 ## Architecture Overview
 

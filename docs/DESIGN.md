@@ -2653,7 +2653,7 @@ binary. Auth: admin JWT / mTLS (same as `/v1/admin/*` on lwauth itself).
 
 ---
 
-*Former G10–G20 have been moved to [Milestone H](#milestone-h) below.*
+*Former G10–G20 have been moved to [Milestone H](#milestone-h--post-g-enterprise-features) below.*
 
 ---
 
