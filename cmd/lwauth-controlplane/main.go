@@ -32,6 +32,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/routes"
 	"github.com/mikeappsec/lightweightauth/ui"
 )
 
@@ -67,13 +68,25 @@ func main() {
 	// Config version store.
 	configStore := configmgmt.NewStore()
 
-	// Register reconciler.
+	// Route store.
+	routeStore := routes.NewStore(registry)
+
+	// Register reconcilers.
 	if err := (&controlplane.InstanceReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		DefaultImage: cfg.DefaultImage,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup InstanceReconciler")
+		os.Exit(1)
+	}
+
+	if err := (&controlplane.ProxyRouteReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Registry: registry,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup ProxyRouteReconciler")
 		os.Exit(1)
 	}
 
@@ -96,7 +109,7 @@ func main() {
 	healthChecker := discovery.NewHealthChecker(registry)
 
 	// REST API server.
-	apiServer := cpapi.NewServer(registry, clusterMgr, configStore)
+	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore)
 
 	// Wire the HTTP mux: API + embedded UI.
 	mux := http.NewServeMux()
@@ -138,6 +151,9 @@ func main() {
 
 	// Start health checker.
 	go healthChecker.Run(ctx)
+
+	// Start route health probes.
+	go routeStore.RunHealthProbes(ctx)
 
 	// Start HTTP API server.
 	go func() {

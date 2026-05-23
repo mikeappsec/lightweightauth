@@ -11,6 +11,10 @@ vendor/
 coverage.txt
 *.prof
 
+# Node
+node_modules/
+ui/console/dist/
+
 # IDE
 .idea/
 .vscode/

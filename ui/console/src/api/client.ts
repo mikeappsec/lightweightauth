@@ -159,3 +159,49 @@ export function rollbackConfig(
     { method: "POST", body: JSON.stringify({ version, author }) },
   );
 }
+
+// --- Routes ---
+
+export interface RouteEnd {
+  instance: string;
+  cluster: string;
+  pathPrefix?: string;
+}
+
+export interface RouteStatus {
+  healthy: boolean;
+  lastProbe?: string;
+  latencyMs?: number;
+}
+
+export interface Route {
+  name: string;
+  source: RouteEnd;
+  target: RouteEnd;
+  status: RouteStatus;
+  createdAt: string;
+}
+
+export interface CreateRouteRequest {
+  name: string;
+  source: RouteEnd;
+  target: RouteEnd;
+}
+
+export function listRoutes(): Promise<Route[]> {
+  return fetchJSON<Route[]>("/routes");
+}
+
+export function getRoute(name: string): Promise<Route> {
+  return fetchJSON<Route>(`/routes/${encodeURIComponent(name)}`);
+}
+
+export function createRoute(req: CreateRouteRequest): Promise<Route> {
+  return fetchJSON<Route>("/routes", { method: "POST", body: JSON.stringify(req) });
+}
+
+export function deleteRoute(name: string): Promise<void> {
+  return fetch(`${BASE}/routes/${encodeURIComponent(name)}`, { method: "DELETE" }).then((r) => {
+    if (!r.ok) throw new Error(`DELETE /routes/${name}: ${r.status}`);
+  });
+}

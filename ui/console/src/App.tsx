@@ -8,6 +8,8 @@ const Instances = lazy(() => import("./pages/Instances"));
 const InstanceDetail = lazy(() => import("./pages/InstanceDetail"));
 const Clusters = lazy(() => import("./pages/Clusters"));
 const ConfigEditor = lazy(() => import("./pages/ConfigEditor"));
+const Routes = lazy(() => import("./pages/Routes"));
+const MeshGraph = lazy(() => import("./pages/MeshGraph"));
 
 export default function App(props: ParentProps) {
   return (
@@ -18,6 +20,8 @@ export default function App(props: ParentProps) {
         <NavLink href="/" label="Dashboard" />
         <NavLink href="/instances" label="Instances" />
         <NavLink href="/clusters" label="Clusters" />
+        <NavLink href="/routes" label="Routes" />
+        <NavLink href="/mesh" label="Mesh" />
         <NavLink href="/health" label="Health" />
       </nav>
 
@@ -48,4 +52,6 @@ export const routes = [
   { path: "/instances/:cluster/:name", component: InstanceDetail },
   { path: "/instances/:cluster/:name/config", component: ConfigEditor },
   { path: "/clusters", component: Clusters },
+  { path: "/routes", component: Routes },
+  { path: "/mesh", component: MeshGraph },
 ];

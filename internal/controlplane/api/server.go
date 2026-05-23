@@ -15,6 +15,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/routes"
 )
 
 // Server is the control-plane REST API server.
@@ -22,15 +23,17 @@ type Server struct {
 	Registry       *discovery.Registry
 	ClusterManager *multicluster.Manager
 	ConfigStore    *configmgmt.Store
+	RouteStore     *routes.Store
 	Mux            *http.ServeMux
 }
 
 // NewServer creates a new API server wired to the instance registry.
-func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, configStore *configmgmt.Store) *Server {
+func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, configStore *configmgmt.Store, routeStore *routes.Store) *Server {
 	s := &Server{
 		Registry:       registry,
 		ClusterManager: clusterMgr,
 		ConfigStore:    configStore,
+		RouteStore:     routeStore,
 		Mux:            http.NewServeMux(),
 	}
 	s.registerRoutes()
@@ -55,10 +58,11 @@ func (s *Server) registerRoutes() {
 	s.Mux.HandleFunc("GET /v1/controlplane/instances/{cluster}/{name}/config/history", s.handleConfigHistory)
 	s.Mux.HandleFunc("POST /v1/controlplane/instances/{cluster}/{name}/config/rollback", s.handleConfigRollback)
 
-	// Route endpoints (Phase 3 stubs).
-	s.Mux.HandleFunc("GET /v1/controlplane/routes", s.handleStub)
-	s.Mux.HandleFunc("POST /v1/controlplane/routes", s.handleStub)
-	s.Mux.HandleFunc("DELETE /v1/controlplane/routes/{name}", s.handleStub)
+	// Route endpoints (Phase 3).
+	s.Mux.HandleFunc("GET /v1/controlplane/routes", s.handleListRoutes)
+	s.Mux.HandleFunc("GET /v1/controlplane/routes/{name}", s.handleGetRoute)
+	s.Mux.HandleFunc("POST /v1/controlplane/routes", s.handleCreateRoute)
+	s.Mux.HandleFunc("DELETE /v1/controlplane/routes/{name}", s.handleDeleteRoute)
 
 	// Health endpoint.
 	s.Mux.HandleFunc("GET /v1/controlplane/health", s.handleHealth)
@@ -307,6 +311,73 @@ func (s *Server) handleConfigRollback(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(r.Context())
 	logger.Info("config rolled back", "cluster", cluster, "instance", name, "toVersion", req.Version, "newVersion", v.Version)
 	writeJSON(w, http.StatusOK, v)
+}
+
+// --- Route handlers (Phase 3) ---
+
+// handleListRoutes returns all proxy routes.
+func (s *Server) handleListRoutes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.RouteStore.List())
+}
+
+// handleGetRoute returns a single route by name.
+func (s *Server) handleGetRoute(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	route, ok := s.RouteStore.Get(name)
+	if !ok {
+		writeError(w, http.StatusNotFound, "route not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, route)
+}
+
+// handleCreateRoute creates a new proxy route.
+func (s *Server) handleCreateRoute(w http.ResponseWriter, r *http.Request) {
+	var req routes.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	// Validate source instance exists.
+	srcCluster := req.Source.Cluster
+	if srcCluster == "" {
+		srcCluster = "local"
+	}
+	if _, ok := s.Registry.Get(srcCluster, req.Source.Instance); !ok {
+		writeError(w, http.StatusUnprocessableEntity, "source instance not found: "+req.Source.Instance)
+		return
+	}
+
+	// Validate target instance exists.
+	tgtCluster := req.Target.Cluster
+	if tgtCluster == "" {
+		tgtCluster = "local"
+	}
+	if _, ok := s.Registry.Get(tgtCluster, req.Target.Instance); !ok {
+		writeError(w, http.StatusUnprocessableEntity, "target instance not found: "+req.Target.Instance)
+		return
+	}
+
+	route, err := s.RouteStore.Create(req)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	logger := log.FromContext(r.Context())
+	logger.Info("route created", "name", req.Name, "source", req.Source.Instance, "target", req.Target.Instance)
+	writeJSON(w, http.StatusCreated, route)
+}
+
+// handleDeleteRoute removes a proxy route.
+func (s *Server) handleDeleteRoute(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if err := s.RouteStore.Delete(name); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleHealth returns aggregated health of all instances.
