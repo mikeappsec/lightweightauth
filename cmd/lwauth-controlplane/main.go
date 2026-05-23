@@ -29,7 +29,9 @@ import (
 	v1alpha1 "github.com/mikeappsec/lightweightauth/api/crd/v1alpha1"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane"
 	cpapi "github.com/mikeappsec/lightweightauth/internal/controlplane/api"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
 	"github.com/mikeappsec/lightweightauth/ui"
 )
 
@@ -58,6 +60,12 @@ func main() {
 
 	// Instance registry.
 	registry := discovery.NewRegistry()
+
+	// Multi-cluster manager.
+	clusterMgr := multicluster.NewManager(registry)
+
+	// Config version store.
+	configStore := configmgmt.NewStore()
 
 	// Register reconciler.
 	if err := (&controlplane.InstanceReconciler{
@@ -88,7 +96,7 @@ func main() {
 	healthChecker := discovery.NewHealthChecker(registry)
 
 	// REST API server.
-	apiServer := cpapi.NewServer(registry)
+	apiServer := cpapi.NewServer(registry, clusterMgr, configStore)
 
 	// Wire the HTTP mux: API + embedded UI.
 	mux := http.NewServeMux()

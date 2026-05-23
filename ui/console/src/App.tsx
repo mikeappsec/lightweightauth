@@ -6,6 +6,8 @@ import { lazy } from "solid-js";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Instances = lazy(() => import("./pages/Instances"));
 const InstanceDetail = lazy(() => import("./pages/InstanceDetail"));
+const Clusters = lazy(() => import("./pages/Clusters"));
+const ConfigEditor = lazy(() => import("./pages/ConfigEditor"));
 
 export default function App(props: ParentProps) {
   return (
@@ -15,6 +17,7 @@ export default function App(props: ParentProps) {
         <h1 class="text-lg font-bold mb-6 px-2">lwauth</h1>
         <NavLink href="/" label="Dashboard" />
         <NavLink href="/instances" label="Instances" />
+        <NavLink href="/clusters" label="Clusters" />
         <NavLink href="/health" label="Health" />
       </nav>
 
@@ -43,4 +46,6 @@ export const routes = [
   { path: "/", component: Dashboard },
   { path: "/instances", component: Instances },
   { path: "/instances/:cluster/:name", component: InstanceDetail },
+  { path: "/instances/:cluster/:name/config", component: ConfigEditor },
+  { path: "/clusters", component: Clusters },
 ];

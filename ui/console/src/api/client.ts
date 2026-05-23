@@ -36,6 +36,37 @@ export interface RegisterRequest {
   tls?: { caBundle?: string; clientCert?: string };
 }
 
+export interface ClusterInfo {
+  name: string;
+  apiServer?: string;
+  instanceCount: number;
+}
+
+export interface ClusterAddRequest {
+  name: string;
+  apiServer?: string;
+  token?: string;
+  caBundle?: string;
+  kubeconfigPath?: string;
+  kubeconfigContext?: string;
+}
+
+export interface ConfigVersion {
+  version: number;
+  content: string;
+  author?: string;
+  timestamp: string;
+  comment?: string;
+  rollback?: boolean;
+  targetVersion?: number;
+}
+
+export interface ConfigPushRequest {
+  content: string;
+  author?: string;
+  comment?: string;
+}
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     headers: { "Content-Type": "application/json" },
@@ -47,6 +78,8 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return res.json();
 }
+
+// --- Instances ---
 
 export function listInstances(cluster?: string): Promise<Instance[]> {
   const qs = cluster ? `?cluster=${encodeURIComponent(cluster)}` : "";
@@ -73,4 +106,56 @@ export function deleteInstance(cluster: string, name: string): Promise<void> {
 
 export function getHealth(): Promise<HealthResponse> {
   return fetchJSON<HealthResponse>("/health");
+}
+
+// --- Clusters ---
+
+export function listClusters(): Promise<ClusterInfo[]> {
+  return fetchJSON<ClusterInfo[]>("/clusters");
+}
+
+export function addCluster(req: ClusterAddRequest): Promise<ClusterAddRequest> {
+  return fetchJSON<ClusterAddRequest>("/clusters", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function deleteCluster(name: string): Promise<void> {
+  return fetchJSON<void>(`/clusters/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+// --- Config ---
+
+export function getConfig(cluster: string, name: string): Promise<ConfigVersion> {
+  return fetchJSON<ConfigVersion>(
+    `/instances/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}/config`,
+  );
+}
+
+export function pushConfig(cluster: string, name: string, req: ConfigPushRequest): Promise<ConfigVersion> {
+  return fetchJSON<ConfigVersion>(
+    `/instances/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}/config`,
+    { method: "POST", body: JSON.stringify(req) },
+  );
+}
+
+export function getConfigHistory(cluster: string, name: string): Promise<ConfigVersion[]> {
+  return fetchJSON<ConfigVersion[]>(
+    `/instances/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}/config/history`,
+  );
+}
+
+export function rollbackConfig(
+  cluster: string,
+  name: string,
+  version: number,
+  author?: string,
+): Promise<ConfigVersion> {
+  return fetchJSON<ConfigVersion>(
+    `/instances/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}/config/rollback`,
+    { method: "POST", body: JSON.stringify({ version, author }) },
+  );
 }

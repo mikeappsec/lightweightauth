@@ -1,5 +1,5 @@
 import { createQuery } from "@tanstack/solid-query";
-import { useParams } from "@solidjs/router";
+import { useParams, A } from "@solidjs/router";
 import { getInstance } from "../api/client";
 
 export default function InstanceDetail() {
@@ -13,9 +13,17 @@ export default function InstanceDetail() {
 
   return (
     <div>
-      <h2 class="text-2xl font-semibold mb-6">
-        Instance: <span class="font-mono">{params.name}</span>
-      </h2>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-semibold">
+          Instance: <span class="font-mono">{params.name}</span>
+        </h2>
+        <A
+          href={`/instances/${params.cluster}/${params.name}/config`}
+          class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+        >
+          Edit Config
+        </A>
+      </div>
 
       {instance.isLoading && <p class="text-gray-500">Loading…</p>}
       {instance.isError && (

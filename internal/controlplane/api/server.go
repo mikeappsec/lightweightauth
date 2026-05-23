@@ -12,20 +12,26 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
 )
 
 // Server is the control-plane REST API server.
 type Server struct {
-	Registry *discovery.Registry
-	Mux      *http.ServeMux
+	Registry       *discovery.Registry
+	ClusterManager *multicluster.Manager
+	ConfigStore    *configmgmt.Store
+	Mux            *http.ServeMux
 }
 
 // NewServer creates a new API server wired to the instance registry.
-func NewServer(registry *discovery.Registry) *Server {
+func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, configStore *configmgmt.Store) *Server {
 	s := &Server{
-		Registry: registry,
-		Mux:      http.NewServeMux(),
+		Registry:       registry,
+		ClusterManager: clusterMgr,
+		ConfigStore:    configStore,
+		Mux:            http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
@@ -38,10 +44,16 @@ func (s *Server) registerRoutes() {
 	s.Mux.HandleFunc("POST /v1/controlplane/instances/register", s.handleRegisterInstance)
 	s.Mux.HandleFunc("DELETE /v1/controlplane/instances/{cluster}/{name}", s.handleDeleteInstance)
 
-	// Cluster endpoints (Phase 2 stubs).
+	// Cluster endpoints.
 	s.Mux.HandleFunc("GET /v1/controlplane/clusters", s.handleListClusters)
-	s.Mux.HandleFunc("POST /v1/controlplane/clusters", s.handleStub)
-	s.Mux.HandleFunc("DELETE /v1/controlplane/clusters/{name}", s.handleStub)
+	s.Mux.HandleFunc("POST /v1/controlplane/clusters", s.handleAddCluster)
+	s.Mux.HandleFunc("DELETE /v1/controlplane/clusters/{name}", s.handleDeleteCluster)
+
+	// Config endpoints (Phase 2).
+	s.Mux.HandleFunc("GET /v1/controlplane/instances/{cluster}/{name}/config", s.handleGetConfig)
+	s.Mux.HandleFunc("POST /v1/controlplane/instances/{cluster}/{name}/config", s.handlePushConfig)
+	s.Mux.HandleFunc("GET /v1/controlplane/instances/{cluster}/{name}/config/history", s.handleConfigHistory)
+	s.Mux.HandleFunc("POST /v1/controlplane/instances/{cluster}/{name}/config/rollback", s.handleConfigRollback)
 
 	// Route endpoints (Phase 3 stubs).
 	s.Mux.HandleFunc("GET /v1/controlplane/routes", s.handleStub)
@@ -115,20 +127,186 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleListClusters returns the list of known clusters.
+// handleListClusters returns all registered clusters with instance counts.
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
-	// Derive cluster list from registered instances.
-	instances := s.Registry.List("")
-	clusterSet := make(map[string]bool)
-	for _, inst := range instances {
-		clusterSet[inst.Cluster] = true
+	clusters := s.ClusterManager.List()
+
+	type clusterInfo struct {
+		Name          string `json:"name"`
+		APIServer     string `json:"apiServer,omitempty"`
+		InstanceCount int    `json:"instanceCount"`
 	}
 
-	clusters := make([]string, 0, len(clusterSet))
-	for c := range clusterSet {
-		clusters = append(clusters, c)
+	result := make([]clusterInfo, 0, len(clusters))
+	for _, c := range clusters {
+		instances := s.Registry.List(c.Name)
+		result = append(result, clusterInfo{
+			Name:          c.Name,
+			APIServer:     c.APIServer,
+			InstanceCount: len(instances),
+		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"clusters": clusters})
+
+	// Also include the local cluster derived from instances.
+	instances := s.Registry.List("")
+	localClusters := make(map[string]int)
+	for _, inst := range instances {
+		localClusters[inst.Cluster]++
+	}
+	registered := make(map[string]bool)
+	for _, c := range clusters {
+		registered[c.Name] = true
+	}
+	for name, count := range localClusters {
+		if !registered[name] {
+			result = append(result, clusterInfo{
+				Name:          name,
+				InstanceCount: count,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleAddCluster registers a new remote cluster.
+func (s *Server) handleAddCluster(w http.ResponseWriter, r *http.Request) {
+	var cfg multicluster.ClusterConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if cfg.Name == "" {
+		writeError(w, http.StatusUnprocessableEntity, "name is required")
+		return
+	}
+	if cfg.APIServer == "" && cfg.KubeconfigPath == "" {
+		writeError(w, http.StatusUnprocessableEntity, "either apiServer or kubeconfigPath is required")
+		return
+	}
+
+	if err := s.ClusterManager.Add(r.Context(), cfg); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	logger := log.FromContext(r.Context())
+	logger.Info("cluster registered", "name", cfg.Name)
+	writeJSON(w, http.StatusCreated, cfg)
+}
+
+// handleDeleteCluster removes a remote cluster.
+func (s *Server) handleDeleteCluster(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if err := s.ClusterManager.Remove(name); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetConfig returns the current config for an instance.
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	name := r.PathValue("name")
+
+	if _, ok := s.Registry.Get(cluster, name); !ok {
+		writeError(w, http.StatusNotFound, "instance not found")
+		return
+	}
+
+	v, ok := s.ConfigStore.Current(cluster, name)
+	if !ok {
+		writeError(w, http.StatusNotFound, "no config stored for this instance")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// handlePushConfig validates and stores a new config version.
+func (s *Server) handlePushConfig(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	name := r.PathValue("name")
+
+	if _, ok := s.Registry.Get(cluster, name); !ok {
+		writeError(w, http.StatusNotFound, "instance not found")
+		return
+	}
+
+	var req struct {
+		Content string `json:"content"`
+		Author  string `json:"author,omitempty"`
+		Comment string `json:"comment,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Content == "" {
+		writeError(w, http.StatusUnprocessableEntity, "content is required")
+		return
+	}
+
+	v, err := s.ConfigStore.PushConfig(r.Context(), cluster, name, req.Content, req.Author, req.Comment)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	logger := log.FromContext(r.Context())
+	logger.Info("config pushed", "cluster", cluster, "instance", name, "version", v.Version)
+	writeJSON(w, http.StatusCreated, v)
+}
+
+// handleConfigHistory returns all config versions for an instance.
+func (s *Server) handleConfigHistory(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	name := r.PathValue("name")
+
+	if _, ok := s.Registry.Get(cluster, name); !ok {
+		writeError(w, http.StatusNotFound, "instance not found")
+		return
+	}
+
+	history := s.ConfigStore.History(cluster, name)
+	if history == nil {
+		history = []configmgmt.ConfigVersion{}
+	}
+	writeJSON(w, http.StatusOK, history)
+}
+
+// handleConfigRollback rolls back to a specific config version.
+func (s *Server) handleConfigRollback(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	name := r.PathValue("name")
+
+	if _, ok := s.Registry.Get(cluster, name); !ok {
+		writeError(w, http.StatusNotFound, "instance not found")
+		return
+	}
+
+	var req struct {
+		Version int    `json:"version"`
+		Author  string `json:"author,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Version <= 0 {
+		writeError(w, http.StatusUnprocessableEntity, "version must be a positive integer")
+		return
+	}
+
+	v, err := s.ConfigStore.Rollback(cluster, name, req.Version, req.Author)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	logger := log.FromContext(r.Context())
+	logger.Info("config rolled back", "cluster", cluster, "instance", name, "toVersion", req.Version, "newVersion", v.Version)
+	writeJSON(w, http.StatusOK, v)
 }
 
 // handleHealth returns aggregated health of all instances.
