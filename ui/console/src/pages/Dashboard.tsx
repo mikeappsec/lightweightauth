@@ -1,5 +1,6 @@
+import { createSignal, createEffect, onCleanup } from "solid-js";
 import { createQuery } from "@tanstack/solid-query";
-import { getHealth, listInstances } from "../api/client";
+import { getHealth, listInstances, metricsStreamUrl, type MetricsSnapshot } from "../api/client";
 
 export default function Dashboard() {
   const health = createQuery(() => ({
@@ -14,12 +15,25 @@ export default function Dashboard() {
     refetchInterval: 15_000,
   }));
 
+  // Real-time metrics via WebSocket.
+  const [metrics, setMetrics] = createSignal<MetricsSnapshot | null>(null);
+
+  createEffect(() => {
+    const ws = new WebSocket(metricsStreamUrl());
+    ws.onmessage = (e) => {
+      try {
+        setMetrics(JSON.parse(e.data));
+      } catch { /* ignore parse errors */ }
+    };
+    onCleanup(() => ws.close());
+  });
+
   return (
     <div>
       <h2 class="text-2xl font-semibold mb-6">Dashboard</h2>
 
       {/* KPI cards */}
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
         <KPICard
           label="Total Instances"
           value={health.data?.totalInstances ?? "—"}
@@ -37,6 +51,30 @@ export default function Dashboard() {
               : "—"
           }
           color="text-red-600"
+        />
+        <KPICard
+          label="Decision Rate"
+          value={metrics() ? `${metrics()!.global.totalDecisionRate.toFixed(1)}/s` : "—"}
+          color="text-blue-600"
+        />
+      </div>
+
+      {/* Live metrics row */}
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <KPICard
+          label="Deny Rate"
+          value={metrics() ? `${metrics()!.global.totalDenyRate.toFixed(1)}/s` : "—"}
+          color="text-orange-600"
+        />
+        <KPICard
+          label="Cache Hit Ratio"
+          value={metrics() ? `${(metrics()!.global.avgCacheHitRatio * 100).toFixed(0)}%` : "—"}
+          color="text-purple-600"
+        />
+        <KPICard
+          label="Error Rate"
+          value={metrics() ? `${metrics()!.global.totalErrorRate.toFixed(2)}/s` : "—"}
+          color="text-red-500"
         />
       </div>
 

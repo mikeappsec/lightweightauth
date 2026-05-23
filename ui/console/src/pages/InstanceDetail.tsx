@@ -1,6 +1,7 @@
+import { createSignal, createEffect, onCleanup, Show } from "solid-js";
 import { createQuery } from "@tanstack/solid-query";
 import { useParams, A } from "@solidjs/router";
-import { getInstance } from "../api/client";
+import { getInstance, getInstanceMetrics, metricsStreamUrl, type InstanceMetrics, type MetricsSnapshot } from "../api/client";
 
 export default function InstanceDetail() {
   const params = useParams<{ cluster: string; name: string }>();
@@ -10,6 +11,28 @@ export default function InstanceDetail() {
     queryFn: () => getInstance(params.cluster, params.name),
     refetchInterval: 10_000,
   }));
+
+  // Sparkline history from WebSocket.
+  const [history, setHistory] = createSignal<InstanceMetrics[]>([]);
+
+  createEffect(() => {
+    const ws = new WebSocket(metricsStreamUrl());
+    ws.onmessage = (e) => {
+      try {
+        const snap: MetricsSnapshot = JSON.parse(e.data);
+        const m = snap.instances.find(
+          (i) => i.instance === params.name && i.cluster === params.cluster,
+        );
+        if (m) {
+          setHistory((prev) => {
+            const next = [...prev, m];
+            return next.length > 60 ? next.slice(-60) : next; // ~2min at 2s intervals
+          });
+        }
+      } catch { /* ignore */ }
+    };
+    onCleanup(() => ws.close());
+  });
 
   return (
     <div>
@@ -90,6 +113,65 @@ export default function InstanceDetail() {
           </div>
         </div>
       )}
+
+      {/* Metrics sparklines (Phase 4) */}
+      <Show when={history().length > 1}>
+        <div class="mt-6">
+          <h3 class="text-lg font-medium mb-3">Live Metrics</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <SparklineCard
+              label="Decision Rate"
+              unit="/s"
+              data={history().map((m) => m.decisionRate)}
+            />
+            <SparklineCard
+              label="Latency P50"
+              unit="ms"
+              data={history().map((m) => m.latencyP50Ms)}
+            />
+            <SparklineCard
+              label="Latency P99"
+              unit="ms"
+              data={history().map((m) => m.latencyP99Ms)}
+            />
+            <SparklineCard
+              label="Cache Hit Ratio"
+              unit="%"
+              data={history().map((m) => m.cacheHitRatio * 100)}
+            />
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function SparklineCard(props: { label: string; unit: string; data: number[] }) {
+  const current = () => props.data[props.data.length - 1] ?? 0;
+  const svgPath = () => {
+    const d = props.data;
+    if (d.length < 2) return "";
+    const max = Math.max(...d, 1);
+    const w = 120;
+    const h = 30;
+    return d
+      .map((v, i) => {
+        const x = (i / (d.length - 1)) * w;
+        const y = h - (v / max) * h;
+        return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join(" ");
+  };
+
+  return (
+    <div class="bg-white border border-gray-200 rounded-lg p-3">
+      <div class="flex justify-between items-baseline mb-1">
+        <span class="text-xs text-gray-500">{props.label}</span>
+        <span class="text-sm font-bold">{current().toFixed(1)}{props.unit}</span>
+      </div>
+      <svg viewBox="0 0 120 30" class="w-full h-8" preserveAspectRatio="none">
+        <path d={svgPath()} fill="none" stroke="#3b82f6" stroke-width="1.5" />
+      </svg>
     </div>
   );
 }

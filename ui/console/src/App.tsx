@@ -1,15 +1,5 @@
 import { type ParentProps } from "solid-js";
 import { A } from "@solidjs/router";
-import { lazy } from "solid-js";
-
-// Lazy-loaded route components.
-const Dashboard = lazy(() => import("./pages/Dashboard"));
-const Instances = lazy(() => import("./pages/Instances"));
-const InstanceDetail = lazy(() => import("./pages/InstanceDetail"));
-const Clusters = lazy(() => import("./pages/Clusters"));
-const ConfigEditor = lazy(() => import("./pages/ConfigEditor"));
-const Routes = lazy(() => import("./pages/Routes"));
-const MeshGraph = lazy(() => import("./pages/MeshGraph"));
 
 export default function App(props: ParentProps) {
   return (
@@ -22,6 +12,7 @@ export default function App(props: ParentProps) {
         <NavLink href="/clusters" label="Clusters" />
         <NavLink href="/routes" label="Routes" />
         <NavLink href="/mesh" label="Mesh" />
+        <NavLink href="/decisions" label="Decisions" />
         <NavLink href="/health" label="Health" />
       </nav>
 
@@ -45,13 +36,3 @@ function NavLink(props: { href: string; label: string }) {
   );
 }
 
-// Export routes for the router.
-export const routes = [
-  { path: "/", component: Dashboard },
-  { path: "/instances", component: Instances },
-  { path: "/instances/:cluster/:name", component: InstanceDetail },
-  { path: "/instances/:cluster/:name/config", component: ConfigEditor },
-  { path: "/clusters", component: Clusters },
-  { path: "/routes", component: Routes },
-  { path: "/mesh", component: MeshGraph },
-];

@@ -21,6 +21,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -31,8 +32,10 @@ import (
 	cpapi "github.com/mikeappsec/lightweightauth/internal/controlplane/api"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/metrics"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/routes"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/streaming"
 	"github.com/mikeappsec/lightweightauth/ui"
 )
 
@@ -70,6 +73,15 @@ func main() {
 
 	// Route store.
 	routeStore := routes.NewStore(registry)
+
+	// Metrics aggregator.
+	aggregator := metrics.NewAggregator(registry)
+
+	// Streaming hub.
+	streamHub := streaming.NewHub(registry, aggregator)
+
+	// Decision collector.
+	decisionCollector := streaming.NewDecisionCollector(registry, streamHub)
 
 	// Register reconcilers.
 	if err := (&controlplane.InstanceReconciler{
@@ -109,7 +121,7 @@ func main() {
 	healthChecker := discovery.NewHealthChecker(registry)
 
 	// REST API server.
-	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore)
+	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore, aggregator, streamHub)
 
 	// Wire the HTTP mux: API + embedded UI.
 	mux := http.NewServeMux()
@@ -154,6 +166,15 @@ func main() {
 
 	// Start route health probes.
 	go routeStore.RunHealthProbes(ctx)
+
+	// Start metrics aggregator.
+	go aggregator.Run(ctx)
+
+	// Start streaming hub.
+	go streamHub.Run(ctx)
+
+	// Start decision collector.
+	go decisionCollector.Run(ctx)
 
 	// Start HTTP API server.
 	go func() {
@@ -205,6 +226,7 @@ func envOrDefault(key, def string) string {
 
 func scheme() *runtime.Scheme {
 	s := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(v1alpha1.AddToScheme(s))
 	return s
 }

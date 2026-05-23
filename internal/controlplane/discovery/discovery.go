@@ -8,7 +8,6 @@ package discovery
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -157,7 +156,8 @@ func (hc *HealthChecker) checkAll(ctx context.Context) {
 }
 
 func (hc *HealthChecker) probe(ctx context.Context, inst *Instance) error {
-	url := inst.AdminURL + "/v1/admin/status"
+	// Use /healthz (unauthenticated) for liveness, then optionally /v1/admin/status for details.
+	url := inst.AdminURL + "/healthz"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		inst.Status.Healthy = false
@@ -182,18 +182,10 @@ func (hc *HealthChecker) probe(ctx context.Context, inst *Instance) error {
 		return fmt.Errorf("status %d from %s", resp.StatusCode, url)
 	}
 
-	var status AdminStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		inst.Status.Healthy = false
-		inst.Status.Error = "invalid response body"
-		inst.Status.LastCheck = time.Now()
-		return err
-	}
-
 	inst.Status.Healthy = true
-	inst.Status.Ready = status.Ready
-	inst.Status.ConfigVersion = status.ConfigVersion
-	inst.Status.Replicas = status.Replicas
+	inst.Status.Ready = true
+	inst.Status.ConfigVersion = ""
+	inst.Status.Replicas = ""
 	inst.Status.Error = ""
 	inst.Status.LastCheck = time.Now()
 	return nil

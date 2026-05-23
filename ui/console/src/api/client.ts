@@ -205,3 +205,77 @@ export function deleteRoute(name: string): Promise<void> {
     if (!r.ok) throw new Error(`DELETE /routes/${name}: ${r.status}`);
   });
 }
+
+// --- Metrics (Phase 4) ---
+
+export interface InstanceMetrics {
+  instance: string;
+  cluster: string;
+  decisionRate: number;
+  denyRate: number;
+  cacheHitRatio: number;
+  errorRate: number;
+  latencyP50Ms: number;
+  latencyP99Ms: number;
+  lastScrape: string;
+  stale: boolean;
+}
+
+export interface ClusterRollup {
+  cluster: string;
+  totalDecisions: number;
+  totalDenies: number;
+  avgCacheHit: number;
+  instanceCount: number;
+}
+
+export interface GlobalRollup {
+  totalDecisionRate: number;
+  totalDenyRate: number;
+  avgCacheHitRatio: number;
+  totalErrorRate: number;
+  clusters: ClusterRollup[];
+}
+
+export interface MetricsSnapshot {
+  timestamp: string;
+  global: GlobalRollup;
+  instances: InstanceMetrics[];
+}
+
+export interface Decision {
+  timestamp: string;
+  instance: string;
+  cluster: string;
+  subject: string;
+  path: string;
+  method: string;
+  verdict: "allow" | "deny";
+  reason?: string;
+  tenant?: string;
+  durationMs: number;
+}
+
+export function getGlobalMetrics(): Promise<GlobalRollup> {
+  return fetchJSON<GlobalRollup>("/metrics");
+}
+
+export function getInstanceMetrics(cluster: string, name: string): Promise<InstanceMetrics> {
+  return fetchJSON<InstanceMetrics>(`/metrics/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}`);
+}
+
+// WebSocket URL helpers.
+export function decisionStreamUrl(filter?: { cluster?: string; tenant?: string; verdict?: string }): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const params = new URLSearchParams();
+  if (filter?.cluster) params.set("cluster", filter.cluster);
+  if (filter?.tenant) params.set("tenant", filter.tenant);
+  if (filter?.verdict) params.set("verdict", filter.verdict);
+  const qs = params.toString();
+  return `${proto}//${location.host}${BASE}/stream/decisions${qs ? "?" + qs : ""}`;
+}
+
+export function metricsStreamUrl(): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}${BASE}/stream/metrics`;
+}

@@ -1,9 +1,19 @@
 /* @refresh reload */
 import { render } from "solid-js/web";
-import { Router } from "@solidjs/router";
+import { Router, Route } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { lazy } from "solid-js";
 import App from "./App";
 import "./index.css";
+
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Instances = lazy(() => import("./pages/Instances"));
+const InstanceDetail = lazy(() => import("./pages/InstanceDetail"));
+const Clusters = lazy(() => import("./pages/Clusters"));
+const ConfigEditor = lazy(() => import("./pages/ConfigEditor"));
+const Routes = lazy(() => import("./pages/Routes"));
+const MeshGraph = lazy(() => import("./pages/MeshGraph"));
+const Decisions = lazy(() => import("./pages/Decisions"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,7 +32,14 @@ render(
   () => (
     <QueryClientProvider client={queryClient}>
       <Router root={App}>
-        {/* Routes are defined in App.tsx via lazy imports */}
+        <Route path="/" component={Dashboard} />
+        <Route path="/instances" component={Instances} />
+        <Route path="/instances/:cluster/:name" component={InstanceDetail} />
+        <Route path="/instances/:cluster/:name/config" component={ConfigEditor} />
+        <Route path="/clusters" component={Clusters} />
+        <Route path="/routes" component={Routes} />
+        <Route path="/mesh" component={MeshGraph} />
+        <Route path="/decisions" component={Decisions} />
       </Router>
     </QueryClientProvider>
   ),

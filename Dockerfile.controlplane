@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1.7
+# Control-plane Dockerfile — builds cmd/lwauth-controlplane with embedded UI.
+
+FROM golang:1.26.2-alpine AS build
+
+RUN apk add --no-cache ca-certificates git nodejs npm
+
+WORKDIR /src
+
+# Cache Go modules.
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Build UI.
+COPY ui/console/package.json ui/console/package-lock.json ./ui/console/
+RUN cd ui/console && npm ci
+
+COPY ui/ ./ui/
+RUN cd ui/console && npx vite build
+
+# Build Go binary.
+COPY . .
+ENV CGO_ENABLED=0 GOOS=linux
+
+RUN go build -trimpath \
+        -ldflags "-s -w" \
+        -o /out/lwauth-controlplane ./cmd/lwauth-controlplane
+
+# ---- runtime stage -----------------------------------------------------------
+FROM alpine:3.22.4
+
+RUN apk add --no-cache ca-certificates tzdata \
+ && addgroup -S lwauth \
+ && adduser -S -G lwauth -u 10001 lwauth
+
+COPY --from=build /out/lwauth-controlplane /usr/local/bin/lwauth-controlplane
+
+USER lwauth
+EXPOSE 8443 9090 8082
+ENTRYPOINT ["lwauth-controlplane"]

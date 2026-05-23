@@ -14,8 +14,10 @@ import (
 
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/metrics"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/routes"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/streaming"
 )
 
 // Server is the control-plane REST API server.
@@ -24,16 +26,20 @@ type Server struct {
 	ClusterManager *multicluster.Manager
 	ConfigStore    *configmgmt.Store
 	RouteStore     *routes.Store
+	Aggregator     *metrics.Aggregator
+	StreamHub      *streaming.Hub
 	Mux            *http.ServeMux
 }
 
 // NewServer creates a new API server wired to the instance registry.
-func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, configStore *configmgmt.Store, routeStore *routes.Store) *Server {
+func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, configStore *configmgmt.Store, routeStore *routes.Store, aggregator *metrics.Aggregator, hub *streaming.Hub) *Server {
 	s := &Server{
 		Registry:       registry,
 		ClusterManager: clusterMgr,
 		ConfigStore:    configStore,
 		RouteStore:     routeStore,
+		Aggregator:     aggregator,
+		StreamHub:      hub,
 		Mux:            http.NewServeMux(),
 	}
 	s.registerRoutes()
@@ -63,6 +69,14 @@ func (s *Server) registerRoutes() {
 	s.Mux.HandleFunc("GET /v1/controlplane/routes/{name}", s.handleGetRoute)
 	s.Mux.HandleFunc("POST /v1/controlplane/routes", s.handleCreateRoute)
 	s.Mux.HandleFunc("DELETE /v1/controlplane/routes/{name}", s.handleDeleteRoute)
+
+	// Metrics endpoints (Phase 4).
+	s.Mux.HandleFunc("GET /v1/controlplane/metrics", s.handleMetrics)
+	s.Mux.HandleFunc("GET /v1/controlplane/metrics/{cluster}/{name}", s.handleInstanceMetrics)
+
+	// WebSocket streaming endpoints (Phase 4).
+	s.Mux.HandleFunc("/v1/controlplane/stream/decisions", s.StreamHub.HandleDecisionStream)
+	s.Mux.HandleFunc("/v1/controlplane/stream/metrics", s.StreamHub.HandleMetricsStream)
 
 	// Health endpoint.
 	s.Mux.HandleFunc("GET /v1/controlplane/health", s.handleHealth)
@@ -400,6 +414,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleStub returns 501 for endpoints not yet implemented.
 func (s *Server) handleStub(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, "endpoint not yet implemented")
+}
+
+// --- Metrics handlers (Phase 4) ---
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	rollup := s.Aggregator.GetGlobalRollup()
+	writeJSON(w, http.StatusOK, rollup)
+}
+
+func (s *Server) handleInstanceMetrics(w http.ResponseWriter, r *http.Request) {
+	cluster := r.PathValue("cluster")
+	name := r.PathValue("name")
+
+	m, ok := s.Aggregator.GetInstanceMetrics(cluster, name)
+	if !ok {
+		writeError(w, http.StatusNotFound, "no metrics for instance")
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
 }
 
 // --- helpers ---
