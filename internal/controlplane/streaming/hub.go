@@ -22,23 +22,23 @@ import (
 
 // Decision represents a single authorization decision from an instance.
 type Decision struct {
-	Timestamp time.Time `json:"timestamp"`
-	Instance  string    `json:"instance"`
-	Cluster   string    `json:"cluster"`
-	Subject   string    `json:"subject"`
-	Path      string    `json:"path"`
-	Method    string    `json:"method"`
-	Verdict   string    `json:"verdict"` // "allow" or "deny"
-	Reason    string    `json:"reason,omitempty"`
-	Tenant    string    `json:"tenant,omitempty"`
-	DurationMs float64  `json:"durationMs"`
+	Timestamp  time.Time `json:"timestamp"`
+	Instance   string    `json:"instance"`
+	Cluster    string    `json:"cluster"`
+	Subject    string    `json:"subject"`
+	Path       string    `json:"path"`
+	Method     string    `json:"method"`
+	Verdict    string    `json:"verdict"` // "allow" or "deny"
+	Reason     string    `json:"reason,omitempty"`
+	Tenant     string    `json:"tenant,omitempty"`
+	DurationMs float64   `json:"durationMs"`
 }
 
 // MetricsSnapshot is a periodic metrics push to connected clients.
 type MetricsSnapshot struct {
-	Timestamp         time.Time                  `json:"timestamp"`
-	Global            metrics.GlobalRollup       `json:"global"`
-	Instances         []*metrics.InstanceMetrics `json:"instances"`
+	Timestamp time.Time                  `json:"timestamp"`
+	Global    metrics.GlobalRollup       `json:"global"`
+	Instances []*metrics.InstanceMetrics `json:"instances"`
 }
 
 // Hub manages WebSocket connections and broadcasts.
@@ -232,10 +232,10 @@ func matchesFilter(d Decision, f DecisionFilter) bool {
 
 // DecisionCollector scrapes audit/decision streams from instances and fans them into the hub.
 type DecisionCollector struct {
-	Registry  *discovery.Registry
-	Hub       *Hub
-	Client    *http.Client
-	Interval  time.Duration
+	Registry *discovery.Registry
+	Hub      *Hub
+	Client   *http.Client
+	Interval time.Duration
 }
 
 // NewDecisionCollector creates a collector that polls instance audit endpoints.

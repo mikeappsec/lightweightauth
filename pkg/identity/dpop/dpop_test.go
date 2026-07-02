@@ -20,7 +20,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jws"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/internal/replay"
 	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
@@ -70,10 +70,6 @@ func newFixture(t *testing.T, inner module.Identifier, skew time.Duration) *dpop
 		t.Fatalf("thumbprint: %v", err)
 	}
 
-	replay, err := cache.NewLRU(64, 2*skew, nil)
-	if err != nil {
-		t.Fatalf("replay cache: %v", err)
-	}
 	id := &identifier{
 		name: "dpop-test",
 		cfg: Config{
@@ -84,7 +80,7 @@ func newFixture(t *testing.T, inner module.Identifier, skew time.Duration) *dpop
 			BearerHeader:    defaultBearerHeader,
 		},
 		inner:  inner,
-		replay: replay,
+		replay: replay.New(nil),
 		now:    time.Now,
 	}
 	return &dpopFixture{priv: priv, pub: pub, thumb: thumb, identity: id}
@@ -595,7 +591,7 @@ func TestDPoP_RejectsUnknownConfigKey(t *testing.T) {
 	_, err := factory("d", map[string]any{
 		"inner":   map[string]any{"type": "jwt", "config": map[string]any{"jwksUrl": "http://localhost/jwks"}},
 		"enforce": true,
-	})
+	}, module.Deps{})
 	if err == nil {
 		t.Fatal("expected error for unknown config key, got nil")
 	}
@@ -688,11 +684,6 @@ func newRotatableFixture(t *testing.T, inner module.Identifier, skew time.Durati
 		t.Fatalf("thumbprint: %v", err)
 	}
 
-	replay, err := cache.NewLRU(64, 2*skew, nil)
-	if err != nil {
-		t.Fatalf("replay cache: %v", err)
-	}
-
 	clk := &fakeClock{now: time.Now()}
 	id := &identifier{
 		name: "dpop-pinned-test",
@@ -704,7 +695,7 @@ func newRotatableFixture(t *testing.T, inner module.Identifier, skew time.Durati
 			BearerHeader:    defaultBearerHeader,
 		},
 		inner:  inner,
-		replay: replay,
+		replay: replay.New(nil),
 		now:    clk.Now,
 	}
 
@@ -965,11 +956,10 @@ func TestPinnedKey_FactoryParsing(t *testing.T) {
 			"type":   "test-stub-pinned",
 			"config": map[string]any{},
 		},
-		"pinnedKeys": []any{
-			map[string]any{
-				"kid":        "v1",
-				"thumbprint": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
-			},
+		"pinnedKeys": []any{map[string]any{
+			"kid":        "v1",
+			"thumbprint": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+		},
 			map[string]any{
 				"kid":         "v2",
 				"thumbprint":  "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
@@ -978,7 +968,7 @@ func TestPinnedKey_FactoryParsing(t *testing.T) {
 				"gracePeriod": "10m",
 			},
 		},
-	})
+	}, module.Deps{})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -1007,7 +997,7 @@ func TestPinnedKey_FactoryMissingThumbprint(t *testing.T) {
 		"pinnedKeys": []any{
 			map[string]any{"kid": "v1"}, // missing thumbprint
 		},
-	})
+	}, module.Deps{})
 	if err == nil {
 		t.Fatal("expected error for missing thumbprint")
 	}

@@ -36,6 +36,91 @@ export interface RegisterRequest {
   tls?: { caBundle?: string; clientCert?: string };
 }
 
+export interface CreateInstanceRequest {
+  name: string;
+  namespace?: string;
+  cluster?: string;
+  replicas?: number;
+  version?: string;
+  image?: string;
+  config?: string;
+  // Structured fields from module-aware wizard.
+  imageTag?: string;
+  preset?: string;
+  identifiers?: ModuleEntry[];
+  authorizers?: ModuleEntry[];
+  mutators?: ModuleEntry[];
+  infrastructure?: InfrastructureReq;
+}
+
+// --- Module catalogue types (Phase A) ---
+
+export interface ModuleField {
+  name: string;
+  type: "string" | "number" | "boolean" | "stringArray" | "object" | "select";
+  required: boolean;
+  default?: unknown;
+  placeholder?: string;
+  description?: string;
+  options?: string[];
+}
+
+export interface ModuleInfo {
+  type: string;
+  displayName: string;
+  description: string;
+  builtIn: boolean;
+  fields: ModuleField[];
+}
+
+export interface ModuleCatalogue {
+  identifiers: ModuleInfo[];
+  authorizers: ModuleInfo[];
+  mutators: ModuleInfo[];
+  cacheBackends: string[];
+  revocationBackends: string[];
+}
+
+export interface ModuleEntry {
+  name: string;
+  type: string;
+  config?: Record<string, unknown>;
+}
+
+export interface InfrastructureReq {
+  cacheBackend?: string;
+  cacheAddr?: string;
+  rateLimiting?: { enabled: boolean; rps?: number; burst?: number };
+  revocation?: { enabled: boolean; backend?: string };
+  gateway?: { enabled: boolean; upstreamHost?: string; upstreamPort?: number };
+  networkPolicy: boolean;
+}
+
+export interface Preset {
+  name: string;
+  displayName: string;
+  description: string;
+  identifiers: ModuleEntry[];
+  authorizers: ModuleEntry[];
+  mutators: ModuleEntry[];
+  infrastructure: InfrastructureReq;
+}
+
+export interface PreviewResponse {
+  authConfig: string;
+  helmValues: string;
+}
+
+export interface ValidationError {
+  field: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors?: ValidationError[];
+}
+
 export interface ClusterInfo {
   name: string;
   apiServer?: string;
@@ -70,13 +155,54 @@ export interface ConfigPushRequest {
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     ...init,
   });
+  if (res.status === 401) {
+    // Session expired or missing — notify the auth layer to show the login screen.
+    window.dispatchEvent(new CustomEvent("lwauth:unauthenticated"));
+    throw new Error("authentication required");
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as any).error || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// --- Authentication ---
+
+export interface SessionInfo {
+  authenticated: boolean;
+  user: string;
+  authEnabled: boolean;
+}
+
+export function getSession(): Promise<SessionInfo> {
+  return fetchJSON<SessionInfo>("/auth/session");
+}
+
+export function login(username: string, password: string): Promise<SessionInfo> {
+  return fetchJSON<SessionInfo>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function logout(): Promise<{ authenticated: boolean }> {
+  return fetchJSON<{ authenticated: boolean }>("/auth/logout", { method: "POST" });
+}
+
+// --- URL probe (JWKS reachability) ---
+
+export interface ProbeResult {
+  reachable: boolean;
+  statusCode: number;
+  error?: string;
+}
+
+export function probeURL(url: string): Promise<ProbeResult> {
+  return fetchJSON<ProbeResult>(`/probe/url?url=${encodeURIComponent(url)}`);
 }
 
 // --- Instances ---
@@ -97,10 +223,101 @@ export function registerInstance(req: RegisterRequest): Promise<Instance> {
   });
 }
 
+export function createInstance(req: CreateInstanceRequest): Promise<Record<string, unknown>> {
+  return fetchJSON<Record<string, unknown>>("/instances/create", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
 export function deleteInstance(cluster: string, name: string): Promise<void> {
   return fetchJSON<void>(
     `/instances/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}`,
     { method: "DELETE" },
+  );
+}
+
+// --- Module catalogue (Phase A) ---
+
+export function listModules(): Promise<ModuleCatalogue> {
+  return fetchJSON<ModuleCatalogue>("/modules");
+}
+
+export function listPresets(): Promise<Preset[]> {
+  return fetchJSON<Preset[]>("/presets");
+}
+
+export function previewCreate(req: Partial<CreateInstanceRequest>): Promise<PreviewResponse> {
+  return fetchJSON<PreviewResponse>("/instances/create/preview", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function validateCreate(req: Partial<CreateInstanceRequest>): Promise<ValidationResult> {
+  return fetchJSON<ValidationResult>("/instances/create/validate", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+// --- Endpoints + Quick Test (Phase B) ---
+
+export interface EndpointPair {
+  internal: string;
+  external?: string;
+}
+
+export interface ExtAuthzInfo {
+  address: string;
+  port: number;
+  envoyClusterConfig: string;
+}
+
+export interface LoadBalancingInfo {
+  strategy: string;
+  readyReplicas: number;
+  totalReplicas: number;
+  podIPs?: string[];
+}
+
+export interface NodeEndpoints {
+  proxyPath: string;     // e.g. /v1/proxy/local/payments-auth — prepend window.location.origin
+  http: EndpointPair;
+  grpc: EndpointPair;
+  extAuthz: ExtAuthzInfo;
+  loadBalancing: LoadBalancingInfo;
+}
+
+export interface QuickTestRequest {
+  protocol: "http" | "grpc" | "ext_authz";
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+export interface QuickTestResponse {
+  status: string;
+  statusCode: number;
+  latency?: string;
+  headers?: Record<string, string>;
+  identity?: Record<string, unknown>;
+  denyReason?: string;
+  rawResponse?: Record<string, unknown>;
+  error?: string;
+}
+
+export function getEndpoints(cluster: string, name: string): Promise<NodeEndpoints> {
+  return fetchJSON<NodeEndpoints>(
+    `/instances/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}/endpoints`,
+  );
+}
+
+export function quickTest(cluster: string, name: string, req: QuickTestRequest): Promise<QuickTestResponse> {
+  return fetchJSON<QuickTestResponse>(
+    `/instances/${encodeURIComponent(cluster)}/${encodeURIComponent(name)}/test`,
+    { method: "POST", body: JSON.stringify(req) },
   );
 }
 

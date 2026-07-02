@@ -27,6 +27,11 @@ type PipelineBuilder struct {
 	identifierDecorators []module.IdentifierDecorator
 	authorizerDecorators []module.AuthorizerDecorator
 	mutatorDecorators    []module.MutatorDecorator
+
+	// deps carries host-provided capabilities (cache pools, engine context)
+	// injected into every module at construction. The zero value is valid:
+	// modules then see no caches and fall back to a no-op provider.
+	deps module.Deps
 }
 
 // NewPipelineBuilder creates a builder using the global module registries.
@@ -53,6 +58,13 @@ func (b *PipelineBuilder) WithAuthorizerRegistry(r *module.Registry[module.Autho
 // WithMutatorRegistry overrides the mutator registry (for testing).
 func (b *PipelineBuilder) WithMutatorRegistry(r *module.Registry[module.ResponseMutator]) *PipelineBuilder {
 	b.mutators = r
+	return b
+}
+
+// WithDeps sets the host dependencies (cache pools, logger, engine context)
+// injected into every module built by this builder.
+func (b *PipelineBuilder) WithDeps(deps module.Deps) *PipelineBuilder {
+	b.deps = deps
 	return b
 }
 
@@ -98,7 +110,7 @@ func (b *PipelineBuilder) BuildModules(ac *AuthConfig) ([]module.Identifier, mod
 func (b *PipelineBuilder) buildIdentifiers(specs []ModuleSpec) ([]module.Identifier, error) {
 	idents := make([]module.Identifier, 0, len(specs))
 	for _, spec := range specs {
-		m, err := b.identifiers.Build(spec.Type, spec.Name, spec.Config)
+		m, err := b.identifiers.Build(spec.Type, spec.Name, spec.Config, b.deps)
 		if err != nil {
 			return nil, fmt.Errorf("identifier %q: %w", spec.Name, err)
 		}
@@ -114,7 +126,7 @@ func (b *PipelineBuilder) buildAuthorizer(specs []ModuleSpec) (module.Authorizer
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("%w: no authorizers configured", module.ErrConfig)
 	}
-	az, err := b.authorizers.Build(specs[0].Type, specs[0].Name, specs[0].Config)
+	az, err := b.authorizers.Build(specs[0].Type, specs[0].Name, specs[0].Config, b.deps)
 	if err != nil {
 		return nil, fmt.Errorf("authorizer %q: %w", specs[0].Name, err)
 	}
@@ -127,7 +139,7 @@ func (b *PipelineBuilder) buildAuthorizer(specs []ModuleSpec) (module.Authorizer
 func (b *PipelineBuilder) buildMutators(specs []ModuleSpec) ([]module.ResponseMutator, error) {
 	muts := make([]module.ResponseMutator, 0, len(specs))
 	for _, spec := range specs {
-		m, err := b.mutators.Build(spec.Type, spec.Name, spec.Config)
+		m, err := b.mutators.Build(spec.Type, spec.Name, spec.Config, b.deps)
 		if err != nil {
 			return nil, fmt.Errorf("mutator %q: %w", spec.Name, err)
 		}

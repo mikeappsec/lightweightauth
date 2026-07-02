@@ -32,6 +32,14 @@ type LwauthInstance struct {
 
 // LwauthInstanceSpec defines the desired state of a lwauth instance.
 type LwauthInstanceSpec struct {
+	// AppClusterID identifies the AppCluster this instance belongs to.
+	// Must match an AppCluster CR's spec.id in the same namespace.
+	// Determines the SPIFFE trust domain and ClusterMembership the
+	// instance_reconciler will register this node into.
+	// If empty, defaults to the namespace name.
+	// +optional
+	AppClusterID string `json:"appClusterID,omitempty"`
+
 	// TargetNamespace is where the lwauth Deployment + Service land.
 	// Defaults to the LwauthInstance's own namespace if empty.
 	TargetNamespace string `json:"targetNamespace,omitempty"`

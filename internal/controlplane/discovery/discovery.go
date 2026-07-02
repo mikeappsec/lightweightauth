@@ -8,6 +8,7 @@ package discovery
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"sync"
@@ -121,6 +122,15 @@ func NewHealthChecker(registry *Registry) *HealthChecker {
 		Registry: registry,
 		Client: &http.Client{
 			Timeout: 5 * time.Second,
+			// Nodes use self-signed TLS certificates scoped to their in-cluster
+			// DNS name (e.g. apikey-node.demo.svc.cluster.local). Standard TLS
+			// verification would always fail for internal certs. Since we are
+			// communicating entirely within the cluster, InsecureSkipVerify is
+			// acceptable here.
+			//nolint:gosec
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
 		},
 		Interval: 15 * time.Second,
 	}
@@ -204,11 +214,12 @@ type KubernetesDiscoveryConfig struct {
 
 // ManualRegistration is the request body for POST /instances/register.
 type ManualRegistration struct {
-	Name     string           `json:"name"`
-	Cluster  string           `json:"cluster"`
-	AdminURL string           `json:"adminUrl"`
-	GRPCURL  string           `json:"grpcUrl,omitempty"`
-	TLS      *TLSRegistration `json:"tls,omitempty"`
+	Name      string           `json:"name"`
+	Cluster   string           `json:"cluster"`
+	Namespace string           `json:"namespace,omitempty"`
+	AdminURL  string           `json:"adminUrl"`
+	GRPCURL   string           `json:"grpcUrl,omitempty"`
+	TLS       *TLSRegistration `json:"tls,omitempty"`
 }
 
 // TLSRegistration holds TLS configuration for manual registration.
@@ -220,11 +231,12 @@ type TLSRegistration struct {
 // RegisterManual creates an Instance from a manual registration request.
 func RegisterManual(reg *ManualRegistration) *Instance {
 	return &Instance{
-		Name:     reg.Name,
-		Cluster:  reg.Cluster,
-		AdminURL: reg.AdminURL,
-		GRPCURL:  reg.GRPCURL,
-		Source:   SourceManual,
+		Name:      reg.Name,
+		Cluster:   reg.Cluster,
+		Namespace: reg.Namespace,
+		AdminURL:  reg.AdminURL,
+		GRPCURL:   reg.GRPCURL,
+		Source:    SourceManual,
 		Status: Status{
 			LastCheck: time.Now(),
 		},

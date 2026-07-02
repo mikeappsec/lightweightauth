@@ -246,7 +246,7 @@ func TestJWT_RejectsNoExp(t *testing.T) {
 
 func TestJWT_FactoryRequiresJWKSURL(t *testing.T) {
 	t.Parallel()
-	_, err := factory("x", map[string]any{})
+	_, err := factory("x", map[string]any{}, module.Deps{})
 	if !errors.Is(err, module.ErrConfig) {
 		t.Fatalf("err = %v, want ErrConfig", err)
 	}
@@ -257,7 +257,7 @@ func TestJWT_RejectsUnknownConfigKey(t *testing.T) {
 	_, err := factory("j", map[string]any{
 		"jwksUrl":     "http://localhost/jwks",
 		"requireAuth": true,
-	})
+	}, module.Deps{})
 	if err == nil {
 		t.Fatal("expected error for unknown config key, got nil")
 	}

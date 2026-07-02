@@ -47,6 +47,9 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&PolicyBinding{}, &PolicyBindingList{},
 		&LwauthInstance{}, &LwauthInstanceList{},
 		&ProxyRoute{}, &ProxyRouteList{},
+		&AppCluster{}, &AppClusterList{},
+		&ClusterMembership{}, &ClusterMembershipList{},
+		&MCPServer{}, &MCPServerList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil

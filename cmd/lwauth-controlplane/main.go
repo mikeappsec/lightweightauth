@@ -1,12 +1,19 @@
 // Copyright 2026 LightweightAuth Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command lwauth-controlplane is the management control plane for
+// Command lwauth-controlplane is the stateless management service for
 // LightweightAuth. It provides a REST API, WebSocket streams, and an
 // embedded SolidJS UI for managing lwauth instances across clusters.
 //
-// This binary shares internal/ and pkg/ with cmd/lwauth (same Go
-// module) but compiles to its own binary and deploys as a separate Pod.
+// Architecture: This is a stateless API gateway / dashboard layer.
+// It does NOT participate in:
+//   - cluster consensus or leader election
+//   - CRD reconciliation (that's cmd/lwauth-operator)
+//   - distributed lock ownership
+//
+// If the control plane dies, the cluster continues operating normally.
+// If the operator dies, the control plane still serves UI/API.
+// CRDs in etcd are the source of truth; this service just reads/writes them.
 package main
 
 import (
@@ -16,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,16 +31,19 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	v1alpha1 "github.com/mikeappsec/lightweightauth/api/crd/v1alpha1"
-	"github.com/mikeappsec/lightweightauth/internal/controlplane"
+	// Register all built-in module types so the wizard module catalogue
+	// and provisioner validation know about jwt, rbac, cel, header-add, etc.
+	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
+
 	cpapi "github.com/mikeappsec/lightweightauth/internal/controlplane/api"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/auth"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/metrics"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/middleware"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/routes"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/streaming"
@@ -47,18 +58,12 @@ func main() {
 	// Parse configuration.
 	cfg := loadConfig()
 
-	// Setup controller-runtime manager.
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme(),
-		Metrics: metricsserver.Options{
-			BindAddress: cfg.MetricsAddr,
-		},
-		HealthProbeBindAddress: cfg.HealthAddr,
-		LeaderElection:         cfg.LeaderElect,
-		LeaderElectionID:       "lwauth-controlplane-leader",
-	})
+	// Create a direct k8s client (no manager, no leader election, no reconcilers).
+	// The control plane is stateless — it reads/writes CRDs but does NOT reconcile them.
+	s := buildScheme()
+	kubeClient, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: s})
 	if err != nil {
-		logger.Error(err, "unable to create manager")
+		logger.Error(err, "unable to create kubernetes client")
 		os.Exit(1)
 	}
 
@@ -83,37 +88,8 @@ func main() {
 	// Decision collector.
 	decisionCollector := streaming.NewDecisionCollector(registry, streamHub)
 
-	// Register reconcilers.
-	if err := (&controlplane.InstanceReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		DefaultImage: cfg.DefaultImage,
-	}).SetupWithManager(mgr); err != nil {
-		logger.Error(err, "unable to setup InstanceReconciler")
-		os.Exit(1)
-	}
-
-	if err := (&controlplane.ProxyRouteReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Registry: registry,
-	}).SetupWithManager(mgr); err != nil {
-		logger.Error(err, "unable to setup ProxyRouteReconciler")
-		os.Exit(1)
-	}
-
-	// Health probes for the manager.
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		logger.Error(err, "unable to set up health check")
-		os.Exit(1)
-	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		logger.Error(err, "unable to set up ready check")
-		os.Exit(1)
-	}
-
 	// Discovery watcher (auto-discovery for the local cluster).
-	watcher := discovery.NewKubernetesWatcher(mgr.GetClient(), registry, discovery.KubernetesDiscoveryConfig{
+	watcher := discovery.NewKubernetesWatcher(kubeClient, registry, discovery.KubernetesDiscoveryConfig{
 		Cluster: cfg.ClusterName,
 	})
 
@@ -121,20 +97,57 @@ func main() {
 	healthChecker := discovery.NewHealthChecker(registry)
 
 	// REST API server.
-	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore, aggregator, streamHub)
+	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore, aggregator, streamHub, kubeClient, cfg.DefaultImage)
 
 	// Wire the HTTP mux: API + embedded UI.
 	mux := http.NewServeMux()
 	mux.Handle("/v1/controlplane/", apiServer.Mux)
+
+	// Node reverse proxy — any path under /v1/proxy/{cluster}/{name}/ is
+	// forwarded to the corresponding registered node. This endpoint is NOT
+	// behind the CP session gate (the node enforces its own auth). Nodes are
+	// ClusterIP services and are not reachable externally without going through
+	// this proxy.
+	mux.Handle("/v1/proxy/", apiServer.ProxyHandler())
+
+	// Console login (single preconfigured admin, cookie session).
+	authMgr := auth.NewManager(auth.Config{
+		Enabled:      cfg.AuthEnabled,
+		Username:     cfg.AuthUsername,
+		PasswordHash: cfg.AuthPasswordHash,
+		SessionTTL:   cfg.AuthSessionTTL,
+		Secure:       cfg.AuthCookieSecure,
+	})
+	if cfg.AuthEnabled && cfg.AuthPasswordHash == "" {
+		logger.Error(errors.New("CP_AUTH_ENABLED=true but no password hash set"),
+			"console login is enabled but CP_AUTH_PASSWORD_HASH(_FILE) is empty; logins will fail")
+	}
+	mux.HandleFunc("POST /v1/controlplane/auth/login", authMgr.HandleLogin)
+	mux.HandleFunc("POST /v1/controlplane/auth/logout", authMgr.HandleLogout)
+	mux.HandleFunc("GET /v1/controlplane/auth/session", authMgr.HandleSession)
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.Handle("/", ui.Handler())
 
+	// Apply middleware stack: rate limiting → session login → auth/RBAC → audit logging.
+	auditLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	rbacCfg := middleware.DefaultRBACConfig()
+	rbacCfg.Enabled = os.Getenv("CP_RBAC_ENABLED") == "true"
+	rlCfg := middleware.DefaultRateLimitConfig()
+	rlCfg.Enabled = os.Getenv("CP_RATELIMIT_DISABLED") != "true"
+
+	var handler http.Handler = mux
+	handler = middleware.AuditLog(auditLogger)(handler)
+	handler = middleware.Auth(rbacCfg)(handler)
+	handler = authMgr.Middleware(handler)
+	handler = middleware.RateLimit(rlCfg)(handler)
+
 	httpServer := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -142,21 +155,6 @@ func main() {
 	// Start all components.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	// Start manager in background.
-	go func() {
-		logger.Info("starting controller-runtime manager")
-		if err := mgr.Start(ctx); err != nil {
-			logger.Error(err, "manager exited with error")
-			cancel()
-		}
-	}()
-
-	// Wait for cache sync before starting discovery.
-	if !mgr.GetCache().WaitForCacheSync(ctx) {
-		logger.Error(nil, "cache sync failed")
-		os.Exit(1)
-	}
 
 	// Start discovery watcher.
 	go watcher.Run(ctx)
@@ -199,21 +197,44 @@ func main() {
 // config holds the control-plane configuration.
 type config struct {
 	APIAddr      string
-	MetricsAddr  string
-	HealthAddr   string
 	ClusterName  string
 	DefaultImage string
-	LeaderElect  bool
+
+	// Console login (single preconfigured admin).
+	AuthEnabled      bool
+	AuthUsername     string
+	AuthPasswordHash string
+	AuthCookieSecure bool
+	AuthSessionTTL   time.Duration
 }
 
 func loadConfig() config {
+	// Password hash may come inline or from a mounted secret file.
+	hash := os.Getenv("CP_AUTH_PASSWORD_HASH")
+	if hash == "" {
+		if f := os.Getenv("CP_AUTH_PASSWORD_HASH_FILE"); f != "" {
+			if b, err := os.ReadFile(f); err == nil {
+				hash = strings.TrimSpace(string(b))
+			}
+		}
+	}
+	ttl := 12 * time.Hour
+	if v := os.Getenv("CP_AUTH_SESSION_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			ttl = d
+		}
+	}
 	return config{
 		APIAddr:      envOrDefault("CP_API_ADDR", ":8443"),
-		MetricsAddr:  envOrDefault("CP_METRICS_ADDR", ":9090"),
-		HealthAddr:   envOrDefault("CP_HEALTH_ADDR", ":8082"),
 		ClusterName:  envOrDefault("CP_CLUSTER_NAME", "local"),
-		DefaultImage: envOrDefault("CP_DEFAULT_IMAGE", "ghcr.io/mikeappsec/lightweightauth:latest"),
-		LeaderElect:  os.Getenv("CP_LEADER_ELECT") == "true",
+		DefaultImage: envOrDefault("CP_DEFAULT_IMAGE", ""),
+
+		AuthEnabled:      os.Getenv("CP_AUTH_ENABLED") == "true",
+		AuthUsername:     envOrDefault("CP_AUTH_USERNAME", "admin"),
+		AuthPasswordHash: hash,
+		// Secure cookie by default; set CP_AUTH_COOKIE_SECURE=false for local HTTP.
+		AuthCookieSecure: os.Getenv("CP_AUTH_COOKIE_SECURE") != "false",
+		AuthSessionTTL:   ttl,
 	}
 }
 
@@ -224,9 +245,8 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-func scheme() *runtime.Scheme {
+func buildScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
-	utilruntime.Must(v1alpha1.AddToScheme(s))
 	return s
 }

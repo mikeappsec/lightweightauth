@@ -59,18 +59,18 @@ type Aggregator struct {
 	Client   *http.Client
 	Interval time.Duration
 
-	mu       sync.RWMutex
-	byInst   map[string]*InstanceMetrics // key: cluster/name
+	mu     sync.RWMutex
+	byInst map[string]*InstanceMetrics // key: cluster/name
 	// Previous scrape counters for rate computation.
 	prevCounters map[string]*counters
 	prevTime     map[string]time.Time
 }
 
 type counters struct {
-	decisions float64
-	denies    float64
-	errors    float64
-	cacheHits float64
+	decisions  float64
+	denies     float64
+	errors     float64
+	cacheHits  float64
 	cacheTotal float64
 }
 

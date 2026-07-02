@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1.7
+# Local-dev Dockerfile for lwauth-controlplane.
+# Uses a pre-cross-compiled linux/amd64 binary from bin/lwauth-controlplane-linux
+# so the full UI + Go build does not need to happen inside Docker.
+#
+# Build sequence:
+#   go build (cross-compile) → bin/lwauth-controlplane-linux
+#   docker build -f Dockerfile.controlplane.local -t lwauth-controlplane:dev .
+
+FROM alpine:3.22.4
+
+RUN apk add --no-cache ca-certificates tzdata \
+ && addgroup -S lwauth \
+ && adduser -S -G lwauth -u 10001 lwauth
+
+COPY bin/lwauth-controlplane-linux /usr/local/bin/lwauth-controlplane
+
+USER lwauth
+EXPOSE 8443 9090
+ENTRYPOINT ["lwauth-controlplane"]

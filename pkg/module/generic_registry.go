@@ -9,9 +9,17 @@ import (
 	"sync"
 )
 
-// ModuleFactory is the generic factory signature. Every built-in module
-// registers one via Registry[T].Register in its init().
-type ModuleFactory[T any] func(name string, cfg map[string]any) (T, error)
+// ModuleFactory is the generic, dependency-aware factory signature. Every
+// built-in module registers one (directly, or via the legacy [SimpleFactory]
+// shim) in its init(). The deps argument carries host-provided capabilities
+// such as cache pools (see [Deps]); modules that need none can register a
+// [SimpleFactory] instead and ignore it.
+type ModuleFactory[T any] func(name string, cfg map[string]any, deps Deps) (T, error)
+
+// SimpleFactory is the legacy, no-dependencies factory signature. It is kept
+// so modules that do not consume host dependencies can register without
+// boilerplate; [Registry.RegisterSimple] adapts it to a [ModuleFactory].
+type SimpleFactory[T any] func(name string, cfg map[string]any) (T, error)
 
 // Registry is a type-safe, concurrency-safe registry of module factories
 // keyed by type name (e.g. "jwt", "apikey", "cel"). It replaces the
@@ -36,8 +44,8 @@ func NewRegistry[T any](kind string) *Registry[T] {
 	}
 }
 
-// Register installs a factory under the given type name. It panics on
-// duplicate registration so that init-time wiring mistakes surface
+// Register installs a deps-aware factory under the given type name. It
+// panics on duplicate registration so that init-time wiring mistakes surface
 // immediately at process start.
 func (r *Registry[T]) Register(typeName string, f ModuleFactory[T]) {
 	r.mu.Lock()
@@ -48,9 +56,18 @@ func (r *Registry[T]) Register(typeName string, f ModuleFactory[T]) {
 	r.factories[typeName] = f
 }
 
-// Build looks up a factory by type name, invokes it with the given
-// instance name and config, and returns the constructed module.
-func (r *Registry[T]) Build(typeName, instanceName string, cfg map[string]any) (T, error) {
+// RegisterSimple installs a legacy no-dependencies factory, adapting it to a
+// deps-aware [ModuleFactory] by discarding the injected [Deps]. Use it for
+// modules that do not consume host capabilities.
+func (r *Registry[T]) RegisterSimple(typeName string, f SimpleFactory[T]) {
+	r.Register(typeName, func(name string, cfg map[string]any, _ Deps) (T, error) {
+		return f(name, cfg)
+	})
+}
+
+// Build looks up a factory by type name, invokes it with the given instance
+// name, config, and host dependencies, and returns the constructed module.
+func (r *Registry[T]) Build(typeName, instanceName string, cfg map[string]any, deps Deps) (T, error) {
 	r.mu.RLock()
 	f, ok := r.factories[typeName]
 	r.mu.RUnlock()
@@ -58,7 +75,7 @@ func (r *Registry[T]) Build(typeName, instanceName string, cfg map[string]any) (
 		var zero T
 		return zero, fmt.Errorf("%w: unknown %s type %q", ErrConfig, r.kind, typeName)
 	}
-	return f(instanceName, cfg)
+	return f(instanceName, cfg, deps)
 }
 
 // Types returns the registered type names in sorted order.

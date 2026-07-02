@@ -16,6 +16,7 @@ serviceAccount:
 service:
   type: ClusterIP
   port: 8443
+  nodePort: ""  # only used when type is NodePort
 
 resources:
   requests:

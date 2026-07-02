@@ -47,8 +47,8 @@ func (r *DecoratedRegistry[T]) AddDecorator(d func(T) T) {
 
 // Build constructs the module via the registered factory, then applies
 // all decorators in order.
-func (r *DecoratedRegistry[T]) Build(typeName, instanceName string, cfg map[string]any) (T, error) {
-	base, err := r.Registry.Build(typeName, instanceName, cfg)
+func (r *DecoratedRegistry[T]) Build(typeName, instanceName string, cfg map[string]any, deps Deps) (T, error) {
+	base, err := r.Registry.Build(typeName, instanceName, cfg, deps)
 	if err != nil {
 		return base, err
 	}

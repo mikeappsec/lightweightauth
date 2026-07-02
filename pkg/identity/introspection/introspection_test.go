@@ -12,8 +12,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mikeappsec/lightweightauth/pkg/cache"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
+
+// testDeps returns module.Deps backed by a fresh in-memory cache pool so each
+// identifier gets its own isolated positive/negative/error caches.
+func testDeps(t *testing.T) module.Deps {
+	t.Helper()
+	pools, err := cache.BuildPools(nil)
+	if err != nil {
+		t.Fatalf("BuildPools: %v", err)
+	}
+	return module.Deps{Caches: pools.For("i/oauth2-introspection/introspect", cache.DefaultPool, nil)}
+}
 
 func mkServer(t *testing.T, hits *atomic.Int32, claims map[string]any) *httptest.Server {
 	t.Helper()
@@ -32,7 +44,7 @@ func mkIdentifier(t *testing.T, url string) *identifier {
 		"clientSecret": "s",
 		"maxCacheTtl":  "5s",
 		"negativeTtl":  "1s",
-	})
+	}, testDeps(t))
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -153,7 +165,7 @@ func TestIntrospection_ErrorCacheTTLExpires(t *testing.T) {
 		"maxCacheTtl":  "5s",
 		"negativeTtl":  "1s",
 		"errorTtl":     "50ms",
-	})
+	}, testDeps(t))
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -319,7 +331,7 @@ func TestIntrospection_RejectsUnknownConfigKey(t *testing.T) {
 	_, err := factory("intro", map[string]any{
 		"url":       "http://localhost/introspect",
 		"rateLimit": 100,
-	})
+	}, testDeps(t))
 	if err == nil {
 		t.Fatal("expected error for unknown config key, got nil")
 	}

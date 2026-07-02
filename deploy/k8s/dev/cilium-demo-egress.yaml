@@ -1,0 +1,54 @@
+---
+# Allow the lwauth data-plane pods to reach:
+# - kube-dns (UDP/TCP 53) for service discovery
+# - other pods in the demo namespace
+# - the IDP on port 9090
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: lwauth-allow-egress
+  namespace: demo
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: lightweightauth
+  egress:
+    # Allow DNS (kube-dns)
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Allow reaching the Kubernetes API server (controller-runtime cache sync)
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
+    # Allow egress to all pods in demo namespace
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: demo
+    # Allow egress to any (for JWKS fetch over HTTP/HTTPS)
+    - toEntities:
+        - cluster
+        - world
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+            - port: "8080"
+              protocol: TCP
+            - port: "443"
+              protocol: TCP
+            - port: "80"
+              protocol: TCP

@@ -99,16 +99,25 @@ func (w *KubernetesWatcher) discover(ctx context.Context) error {
 
 func (w *KubernetesWatcher) serviceToInstance(svc *corev1.Service) *Instance {
 	// Determine the admin URL from the Service.
-	// Convention: port named "admin" or port 8081.
-	adminPort := "8081"
+	// Preference order: port named "http" > port named "admin" > port 8080.
+	adminPort := "8080"
 	for _, p := range svc.Spec.Ports {
-		if p.Name == "admin" {
+		if p.Name == "http" {
 			adminPort = fmt.Sprintf("%d", p.Port)
 			break
+		}
+		if p.Name == "admin" {
+			adminPort = fmt.Sprintf("%d", p.Port)
 		}
 	}
 
 	adminURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", svc.Name, svc.Namespace, adminPort)
+	// If the provisioner flagged this node as TLS-enabled, use https:// so the
+	// CP health-check doesn't get a "client sent HTTP request to HTTPS server"
+	// error and mark the node perpetually unhealthy.
+	if svc.Annotations["lwauth.io/tls"] == "true" {
+		adminURL = fmt.Sprintf("https://%s.%s.svc.cluster.local:%s", svc.Name, svc.Namespace, adminPort)
+	}
 
 	// Instance name from label or Service name.
 	name := svc.Labels["app.kubernetes.io/instance"]
