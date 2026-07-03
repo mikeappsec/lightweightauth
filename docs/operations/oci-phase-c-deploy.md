@@ -350,26 +350,18 @@ oci budgets budget list --compartment-id "$TF_VAR_compartment_id" \
 
 ---
 
-## Step 5 — DNS Zone
+## Step 5 — DNS (external, not OCI DNS)
 
-OCI DNS zones and queries are **always free**.
+> ⚠️ **OCI DNS is NOT free.** It is billed at **$0.85 per million queries**
+> (per Oracle's price list — Networking → DNS). There is no free zone/query
+> allowance, so any real traffic would trip the $0.01 budget guard. We therefore
+> do **not** create an `oci_dns_zone`. Host DNS with any free provider instead
+> (Cloudflare Free, your registrar, etc.).
 
-```bash
-terraform plan -target=oci_dns_zone.lwauth -out=tfplan-dns
-terraform show tfplan-dns | grep "will be created"
-# Must show: oci_dns_zone.lwauth only
-terraform apply tfplan-dns
-```
+Nothing to apply in this step — DNS lives outside Terraform. You will create a
+single A record in Step 7 once the load balancer IP is known.
 
-**Verification:**
-```bash
-oci dns zone list --compartment-id "$TF_VAR_compartment_id" \
-  --query 'data[].{"name":name,"type":"zone-type","state":"lifecycle-state"}' \
-  --output table
-# Expected: lwauth.example.com | PRIMARY | ACTIVE
-```
-
-**Cost check:** DNS is free. $0.
+**Cost check:** external DNS on a free provider = $0 OCI spend.
 
 ---
 
@@ -431,32 +423,34 @@ oci budgets budget list --compartment-id "$TF_VAR_compartment_id" \
 
 ---
 
-## Step 7 — DNS Records
+## Step 7 — DNS Record (external, single A record)
 
-```bash
-terraform plan -target=oci_dns_rrset.apex -target=oci_dns_rrset.wildcard \
-  -out=tfplan-dns-records
-terraform apply tfplan-dns-records
+Create **one** A record with your free DNS provider pointing the console
+hostname at the load balancer IP. **No wildcard is needed** — auth nodes are
+reached through the control-plane reverse proxy (`/v1/proxy/{cluster}/{name}`)
+and are never exposed on their own hostnames.
+
+```
+A   lwauth.example.com   ->   $LB_IP
 ```
 
 **Verification:**
 ```bash
-# Confirm records point to the LB
-dig +short lwauth.example.com @1.1.1.1      # should return $LB_IP (may take a few minutes)
-dig +short "*.lwauth.example.com" @1.1.1.1  # should also return $LB_IP
+# Confirm the record points to the LB (may take a few minutes to propagate)
+dig +short lwauth.example.com @1.1.1.1      # should return $LB_IP
 ```
 
-If you don't control `lwauth.example.com` DNS globally yet, skip this
-test — it will work once the OCI DNS zone is delegated.
+A single resolvable host is also all cert-manager needs for the HTTP-01
+challenge in Step 10.
 
 ---
 
 ## Step 8 — Compute Instance (ARM A1) ⚠️ Most critical for cost
 
 The ARM Ampere A1 shape (`VM.Standard.A1.Flex`) is **Always Free** with a
-**4 OCPU / 24 GB RAM cap across all A1 instances in the tenancy**. Any A1
-instance within this limit is $0. Exceeding it, or choosing any other
-shape, is billed immediately.
+**2 OCPU / 12 GB RAM cap across all A1 instances in the tenancy** (reduced from
+4 OCPU / 24 GB in mid-2026). Any A1 instance within this limit is $0. Exceeding
+it, or choosing any other shape, is billed immediately.
 
 **Pre-apply check:**
 ```bash
@@ -466,7 +460,7 @@ terraform show tfplan-compute
 
 In the plan output, verify ALL of these:
 - `shape = "VM.Standard.A1.Flex"` — any other shape (E2, E3, E4, E5, BM) is billed
-- `ocpus = 4` and `memory_in_gbs = 24` — exactly the free tier cap
+- `ocpus = 2` and `memory_in_gbs = 12` — exactly the free tier cap
 - `source_type = "image"` with an Oracle Linux 9 ARM image OCID
 - Boot volume `size_in_gbs ≤ 100` (free tier allows 200 GB total across 2 volumes)
 
@@ -561,21 +555,26 @@ kubectl get nodes
 
 ---
 
-## Step 10 — OCI DNS Credentials for cert-manager
+## Step 10 — cert-manager challenge (HTTP-01, no credentials needed)
 
-cert-manager uses DNS-01 challenge to issue the wildcard Let's Encrypt cert.
-It needs OCI credentials to create DNS TXT records.
+cert-manager uses an **HTTP-01** challenge to issue a Let's Encrypt cert for the
+single console hostname. The ACME server reaches
+`http://lwauth.example.com/.well-known/acme-challenge/...` over port 80, which
+the NLB forwards to ingress-nginx; cert-manager serves the challenge via a
+temporary solver ingress.
 
-```bash
-# Create an OCI config file for cert-manager (scope to DNS only)
-kubectl create secret generic oci-dns-credentials \
-  -n cert-manager \
-  --from-literal=tenancy="$OCI_TENANCY" \
-  --from-literal=user="$OCI_USER_OCID" \
-  --from-literal=region="$TF_VAR_region" \
-  --from-literal=fingerprint="$OCI_FINGERPRINT" \
-  --from-file=privatekey="$HOME/.oci/oci_api_key.pem"
-```
+**Nothing to create in this step** — HTTP-01 needs no DNS API and no OCI
+credentials secret. Just make sure:
+
+- The Step 7 A record resolves (`dig +short lwauth.example.com`).
+- Port 80 is open end-to-end (NLB http listener + security list — already in the
+  Terraform) so the ACME challenge can reach the cluster.
+
+> Why not DNS-01? DNS-01 would require API access to a managed DNS zone. OCI DNS
+> is billed per query and we deliberately host DNS on a free external provider,
+> so HTTP-01 (which only needs port 80 + one resolvable host) is the right fit.
+> The trade-off is no wildcard certs — which we don't need, since nodes sit
+> behind the control-plane proxy.
 
 ---
 
@@ -683,19 +682,19 @@ curl -s -b cookies.txt -o /dev/null -w "%{http_code}\n" \
 
 ## Step 12 — TLS Certificate Issuance
 
-cert-manager will automatically request the Let's Encrypt wildcard cert
-once the ClusterIssuer is deployed by ArgoCD.
+cert-manager will automatically request the Let's Encrypt cert for the single
+console hostname (HTTP-01) once the ClusterIssuer is deployed by ArgoCD.
 
 ```bash
 # Watch certificate issuance (takes 1–3 minutes after DNS propagates)
 kubectl get certificate -n lwauth-system -w
-# Expected: lwauth-wildcard ... True  (Ready=True)
+# Expected: lwauth-console ... True  (Ready=True)
 
-# Verify the cert covers the wildcard
-kubectl get secret lwauth-wildcard-tls -n lwauth-system \
+# Verify the cert covers the console host
+kubectl get secret lwauth-tls -n lwauth-system \
   -o jsonpath="{.data['tls\.crt']}" | base64 -d | \
   openssl x509 -noout -subject -ext subjectAltName
-# Expected: DNS:*.lwauth.example.com, DNS:lwauth.example.com
+# Expected: DNS:lwauth.example.com
 ```
 
 If `READY=False` after 5 minutes:
@@ -860,12 +859,12 @@ oci search resource structured-search \
 
 | Resource | Count | Always Free Limit | Our Usage | Billed if exceeded |
 |----------|-------|-------------------|-----------|--------------------|
-| ARM A1 compute | 1 | 4 OCPU / 24 GB total | 4 OCPU / 24 GB | Immediately |
+| ARM A1 compute | 1 | 2 OCPU / 12 GB total | 2 OCPU / 12 GB | Immediately |
 | Boot volumes | 1 | 200 GB total | 100 GB | $0.0255/GB-month |
 | Flexible LB | 1 | 1 LB, 10 Mbps | 1 LB | $0.006/Mbps-hour over |
 | Object Storage | 1 bucket | 20 GB | ~1 MB (TF state) | $0.0255/GB-month |
 | VCN / Subnets | 1/2 | 2 VCNs | 1 VCN, 2 subnets | Free (VCN itself) |
-| DNS Zone | 1 | Unlimited zones | 1 zone | Free |
+| DNS | external | — | Free provider (Cloudflare/registrar) | OCI DNS billed $0.85/M queries |
 | Outbound data | — | 10 TB/month | Minimal | $0.0085/GB over |
 
 **The only realistic cost risk is the compute shape.** If `VM.Standard.A1.Flex` is

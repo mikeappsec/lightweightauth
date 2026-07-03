@@ -128,7 +128,7 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	instance.Status.ObservedGeneration = instance.Generation
 
 	readyReplicas := deploy.Status.ReadyReplicas
-	desiredReplicas := int32(2)
+	desiredReplicas := int32(1)
 	if instance.Spec.Replicas != nil {
 		desiredReplicas = *instance.Spec.Replicas
 	}
@@ -154,7 +154,10 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 func (r *InstanceReconciler) reconcileDeployment(ctx context.Context, instance *v1alpha1.LwauthInstance, ns string) (*appsv1.Deployment, error) {
-	replicas := int32(2)
+	// Default to a single replica; a second doubles per-node memory, which is
+	// significant on small clusters (e.g. the 12 GB OCI Always Free tier).
+	// Set spec.replicas explicitly for HA.
+	replicas := int32(1)
 	if instance.Spec.Replicas != nil {
 		replicas = *instance.Spec.Replicas
 	}

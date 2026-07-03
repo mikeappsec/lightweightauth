@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
-	"nhooyr.io/websocket/wsjson"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"

@@ -52,7 +52,7 @@ export default function CreateInstanceWizard(props: Props) {
   const [name, setName] = createSignal("");
   const [namespace, setNamespace] = createSignal("lwauth-system");
   const [cluster, setCluster] = createSignal("local");
-  const [replicas, setReplicas] = createSignal(2);
+  const [replicas, setReplicas] = createSignal(1);
   const [imageTag, setImageTag] = createSignal("");
   const [selectedPreset, setSelectedPreset] = createSignal("");
   const [identifiers, setIdentifiers] = createSignal<ModuleEntry[]>([]);

@@ -311,7 +311,7 @@ func TestGenerateHelmValues_DefaultReplicas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateHelmValues error: %v", err)
 	}
-	mustContain(t, vals, "replicaCount: 2")
+	mustContain(t, vals, "replicaCount: 1")
 }
 
 func TestGenerateHelmValues_ImageTag(t *testing.T) {

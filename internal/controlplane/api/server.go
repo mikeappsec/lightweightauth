@@ -252,7 +252,10 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	replicas := int32(2)
+	// Default to a single replica (see provisioner.GenerateValues for rationale):
+	// a second replica doubles per-node memory, which matters on small clusters
+	// such as the 12 GB OCI Always Free tier. Callers set Replicas for HA.
+	replicas := int32(1)
 	if req.Replicas != nil {
 		replicas = *req.Replicas
 	}

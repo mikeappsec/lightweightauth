@@ -196,7 +196,11 @@ func (req *CreateNodeRequest) GenerateHelmValues() (string, error) {
 		return "", fmt.Errorf("generating auth config: %w", err)
 	}
 
-	replicas := int32(2)
+	// Default to a single replica. Nodes are stateless and Kubernetes restarts
+	// them on failure; a second replica doubles memory, which is significant on
+	// small clusters (e.g. the 12 GB OCI Always Free tier). Callers that need
+	// HA set Replicas explicitly.
+	replicas := int32(1)
 	if req.Replicas != nil {
 		replicas = *req.Replicas
 	}
