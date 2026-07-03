@@ -42,6 +42,12 @@ jobs:
         with:
           go-version: '1.26.2'
           cache: true
+      # go mod tidy is platform-sensitive: Windows adds OS-specific indirect
+      # deps (e.g. go-winio) that Linux tidy removes. Re-running tidy on the
+      # CI platform keeps go.mod clean without requiring developers to use
+      # Linux for every tidy run.
+      - name: tidy go modules
+        run: go mod tidy
       - run: go vet ./...
       - run: go test -race ./...
 
@@ -72,6 +78,8 @@ jobs:
         with:
           go-version: '1.26.2'
           cache: true
+      - name: tidy go modules
+        run: go mod tidy
       - name: vet (FIPS)
         run: GOFIPS140=v1.0.0 go vet ./...
       - name: test (FIPS, race)
