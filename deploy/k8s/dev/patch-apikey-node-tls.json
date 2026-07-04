@@ -1,0 +1,33 @@
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [
+          {
+            "name": "tls",
+            "secret": {
+              "secretName": "apikey-node-tls"
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "lwauth",
+            "args": [
+              "--config=/etc/lwauth/config.yaml",
+              "--tls-cert=/etc/lwauth/tls/tls.crt",
+              "--tls-key=/etc/lwauth/tls/tls.key"
+            ],
+            "volumeMounts": [
+              {
+                "name": "tls",
+                "mountPath": "/etc/lwauth/tls",
+                "readOnly": true
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

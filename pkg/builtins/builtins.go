@@ -29,6 +29,7 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/apikey"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/dpop"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/hmac"
+	_ "github.com/mikeappsec/lightweightauth/pkg/identity/idjag"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/introspection"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/jwt"
 	_ "github.com/mikeappsec/lightweightauth/pkg/identity/mtls"

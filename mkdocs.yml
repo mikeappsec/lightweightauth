@@ -175,12 +175,15 @@ nav:
       - HTTP / gRPC API: API.md
       - Cache architecture: design/cache-architecture.md
       - Control-plane UI design: design/UIDESIGN.md
+      - Node cluster authentication: design/node-cluster-auth.md
+      - Node provisioning & access endpoints: design/ui-controlplane-node-provisioning.md
       - Milestones: MILESTONES.md
   - Operations:
       - Deployment: DEPLOYMENT.md
       - Envoy integration: deployment/envoy.md
       - Admin-plane auth: operations/admin-auth.md
       - GitOps workflow: operations/gitops.md
+      - OCI Always Free deployment: operations/oci-phase-c-deploy.md
       - FIPS 140-3 build: operations/fips.md
       - Key rotation: operations/key-rotation.md
       - Policy rotation: operations/policy-rotation.md

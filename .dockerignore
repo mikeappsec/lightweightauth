@@ -3,6 +3,10 @@ bin/
 dist/
 out/
 
+# Node modules (installed fresh inside Docker)
+ui/console/node_modules/
+ui/console/dist/
+
 # Git / CI
 .git/
 .github/

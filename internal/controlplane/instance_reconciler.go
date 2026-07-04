@@ -66,8 +66,12 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Handle deletion.
 	if !instance.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&instance, instanceFinalizer) {
-			// Clean up owned resources (handled by owner references, but
-			// we remove the finalizer to let the CR be deleted).
+			// Remove from ClusterMembership before releasing the finalizer so
+			// existing peers drop this node from their peer tables promptly.
+			if err := r.removeFromClusterMembership(ctx, &instance); err != nil {
+				logger.Error(err, "failed to remove from ClusterMembership on deletion")
+				return ctrl.Result{}, err
+			}
 			controllerutil.RemoveFinalizer(&instance, instanceFinalizer)
 			if err := r.Client.Update(ctx, &instance); err != nil {
 				return ctrl.Result{}, err
@@ -110,13 +114,21 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	// Register / update this node in its AppCluster's ClusterMembership.
+	// This is the broadcast trigger: existing nodes watch this CRD and
+	// initiate mTLS handshakes when they see a new entry appear.
+	if err := r.reconcileClusterMembership(ctx, &instance, targetNS); err != nil {
+		logger.Error(err, "failed to reconcile ClusterMembership")
+		return ctrl.Result{}, err
+	}
+
 	// Update status.
 	now := metav1.Now()
 	instance.Status.LastReconcile = &now
 	instance.Status.ObservedGeneration = instance.Generation
 
 	readyReplicas := deploy.Status.ReadyReplicas
-	desiredReplicas := int32(2)
+	desiredReplicas := int32(1)
 	if instance.Spec.Replicas != nil {
 		desiredReplicas = *instance.Spec.Replicas
 	}
@@ -142,7 +154,10 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 func (r *InstanceReconciler) reconcileDeployment(ctx context.Context, instance *v1alpha1.LwauthInstance, ns string) (*appsv1.Deployment, error) {
-	replicas := int32(2)
+	// Default to a single replica; a second doubles per-node memory, which is
+	// significant on small clusters (e.g. the 12 GB OCI Always Free tier).
+	// Set spec.replicas explicitly for HA.
+	replicas := int32(1)
 	if instance.Spec.Replicas != nil {
 		replicas = *instance.Spec.Replicas
 	}
@@ -311,4 +326,156 @@ func (r *InstanceReconciler) setCondition(instance *v1alpha1.LwauthInstance, con
 		ObservedGeneration: instance.Generation,
 		LastTransitionTime: metav1.Now(),
 	})
+}
+
+// appClusterID returns the AppClusterID for the instance, falling back
+// to the target namespace name if spec.appClusterID is not set.
+func appClusterID(instance *v1alpha1.LwauthInstance, targetNS string) string {
+	if instance.Spec.AppClusterID != "" {
+		return instance.Spec.AppClusterID
+	}
+	return targetNS
+}
+
+// membershipName returns the conventional name for the ClusterMembership
+// CR that belongs to a given AppCluster.
+func membershipName(clusterID string) string {
+	return clusterID + "-membership"
+}
+
+// spiffeID derives the SPIFFE URI for a node from its AppCluster ID,
+// namespace, and instance name.
+//
+//	spiffe://<appClusterID>.lwauth/<namespace>/<name>
+func spiffeID(clusterID, namespace, name string) string {
+	return "spiffe://" + clusterID + ".lwauth/" + namespace + "/" + name
+}
+
+// peerEndpoint derives the in-cluster gRPC endpoint for a node's Service.
+//
+//	<service-name>.<namespace>.svc:9001
+func peerEndpoint(name, namespace string) string {
+	return name + "." + namespace + ".svc:9001"
+}
+
+// reconcileClusterMembership upserts this LwauthInstance's entry into the
+// AppCluster's ClusterMembership CR. It is idempotent: if the entry already
+// exists with identical fields it is left untouched. Concurrent reconciles
+// for different instances in the same AppCluster are handled by optimistic
+// concurrency — a 409 Conflict triggers a retry with a fresh read.
+func (r *InstanceReconciler) reconcileClusterMembership(ctx context.Context, instance *v1alpha1.LwauthInstance, targetNS string) error {
+	cid := appClusterID(instance, targetNS)
+	mName := membershipName(cid)
+
+	newMember := v1alpha1.ClusterMember{
+		Name:      instance.Name,
+		Namespace: targetNS,
+		Endpoint:  peerEndpoint(instance.Name, targetNS),
+		SPIFFEID:  spiffeID(cid, targetNS, instance.Name),
+		JoinedAt:  metav1.Now(),
+	}
+
+	// Retry loop handles optimistic concurrency conflicts (409) that can
+	// occur when multiple LwauthInstances are created simultaneously and
+	// their reconcilers race to patch the same ClusterMembership.
+	for attempt := 0; attempt < 5; attempt++ {
+		var membership v1alpha1.ClusterMembership
+		err := r.Client.Get(ctx, client.ObjectKey{Name: mName, Namespace: instance.Namespace}, &membership)
+		if apierrors.IsNotFound(err) {
+			// ClusterMembership doesn't exist yet — create it with this
+			// node as the first member. This happens when the first node
+			// in an AppCluster is created via the UI before Helm has run.
+			membership = v1alpha1.ClusterMembership{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      mName,
+					Namespace: instance.Namespace,
+				},
+				Spec: v1alpha1.ClusterMembershipSpec{
+					AppClusterID: cid,
+					Members:      []v1alpha1.ClusterMember{newMember},
+				},
+			}
+			if createErr := r.Client.Create(ctx, &membership); createErr != nil {
+				if apierrors.IsAlreadyExists(createErr) {
+					continue // race with another reconciler — retry
+				}
+				return fmt.Errorf("create ClusterMembership %s/%s: %w", instance.Namespace, mName, createErr)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get ClusterMembership %s/%s: %w", instance.Namespace, mName, err)
+		}
+
+		// Check if this instance is already registered with the same values.
+		alreadyRegistered := false
+		for i, m := range membership.Spec.Members {
+			if m.Name == newMember.Name && m.Namespace == newMember.Namespace {
+				if m.Endpoint == newMember.Endpoint && m.SPIFFEID == newMember.SPIFFEID {
+					return nil // already up to date — no write needed
+				}
+				// Endpoint or SPIFFE ID changed (e.g. namespace moved) — update in place.
+				membership.Spec.Members[i].Endpoint = newMember.Endpoint
+				membership.Spec.Members[i].SPIFFEID = newMember.SPIFFEID
+				alreadyRegistered = true
+				break
+			}
+		}
+		if !alreadyRegistered {
+			membership.Spec.Members = append(membership.Spec.Members, newMember)
+		}
+
+		if updateErr := r.Client.Update(ctx, &membership); updateErr != nil {
+			if apierrors.IsConflict(updateErr) {
+				continue // stale resourceVersion — re-read and retry
+			}
+			return fmt.Errorf("update ClusterMembership %s/%s: %w", instance.Namespace, mName, updateErr)
+		}
+		return nil
+	}
+	return fmt.Errorf("update ClusterMembership %s/%s: too many conflicts", instance.Namespace, mName)
+}
+
+// removeFromClusterMembership removes this instance's entry from the
+// AppCluster's ClusterMembership. Called during deletion before the
+// finalizer is released, so existing peers drop this node from their
+// peer tables before the Pod terminates.
+func (r *InstanceReconciler) removeFromClusterMembership(ctx context.Context, instance *v1alpha1.LwauthInstance) error {
+	targetNS := instance.Spec.TargetNamespace
+	if targetNS == "" {
+		targetNS = instance.Namespace
+	}
+	cid := appClusterID(instance, targetNS)
+	mName := membershipName(cid)
+
+	for attempt := 0; attempt < 5; attempt++ {
+		var membership v1alpha1.ClusterMembership
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: mName, Namespace: instance.Namespace}, &membership); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil // already gone
+			}
+			return fmt.Errorf("get ClusterMembership %s/%s: %w", instance.Namespace, mName, err)
+		}
+
+		filtered := membership.Spec.Members[:0]
+		for _, m := range membership.Spec.Members {
+			if m.Name == instance.Name && m.Namespace == targetNS {
+				continue // drop this entry
+			}
+			filtered = append(filtered, m)
+		}
+		if len(filtered) == len(membership.Spec.Members) {
+			return nil // entry wasn't there
+		}
+		membership.Spec.Members = filtered
+
+		if err := r.Client.Update(ctx, &membership); err != nil {
+			if apierrors.IsConflict(err) {
+				continue
+			}
+			return fmt.Errorf("update ClusterMembership %s/%s: %w", instance.Namespace, mName, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("remove from ClusterMembership %s/%s: too many conflicts", instance.Namespace, mName)
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +17,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/cache"
 	cachevalkey "github.com/mikeappsec/lightweightauth/internal/cache/valkey"
 	"github.com/mikeappsec/lightweightauth/internal/pipeline"
+	pkgcache "github.com/mikeappsec/lightweightauth/pkg/cache"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
 	"github.com/mikeappsec/lightweightauth/pkg/ratelimit"
@@ -97,11 +99,71 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 			}
 			ac.Revocation.Password = val
 		}
+		// Resolve cache pool passwords if they're secretRefs.
+		for i := range ac.Caches {
+			if secrets.IsSecretRef(ac.Caches[i].Password) {
+				val, err := resolver.ResolveString(ctx, ac.Caches[i].Password)
+				if err != nil {
+					return nil, fmt.Errorf("%w: resolve caches[%q].password: %v", module.ErrConfig, ac.Caches[i].Name, err)
+				}
+				ac.Caches[i].Password = val
+			}
+		}
+	}
+
+	// P3: build the module-native cache pools from the caches: block. When
+	// no pools are declared an implicit in-memory "default" pool is
+	// synthesized, so configs that predate this block are unaffected.
+	pools, err := buildCachePools(ac)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fail fast on undeclared cache-pool references before constructing any
+	// module. Module construction may perform network I/O (e.g. the jwt
+	// identifier fetches its JWKS), so a typo'd cache.pool must error here
+	// rather than after a half-built engine.
+	referenced, err := referencedPools(ac)
+	if err != nil {
+		return nil, err
+	}
+	if err := pkgcache.ValidatePools(poolNames(ac.Caches), referenced); err != nil {
+		return nil, fmt.Errorf("%w: %v", module.ErrConfig, err)
+	}
+
+	// Engine-lifecycle context: handed to modules via module.Deps.Ctx so
+	// their background goroutines (JWKS pollers, refreshers) are bound to the
+	// engine's lifetime. Engine.Close cancels it on hot-reload swap. We
+	// cancel here only on the error paths below (engineOK stays false).
+	engCtx, engCancel := context.WithCancel(context.Background())
+	engineOK := false
+	defer func() {
+		if !engineOK {
+			engCancel()
+		}
+	}()
+
+	logger := slog.Default()
+	// depsFor builds the dependency bundle for one module instance. kind is a
+	// short namespace discriminator ("i", "a", "m") so identifiers,
+	// authorizers, and mutators that share a type/name never collide on cache
+	// keys. pool is the module's selected cache pool (from its cache.pool
+	// selector); an empty value falls back to the implicit default pool.
+	depsFor := func(kind, typ, name, pool string) module.Deps {
+		return module.Deps{
+			Caches: pools.For(kind+"/"+typ+"/"+name, pool, nil),
+			Logger: logger,
+			Ctx:    engCtx,
+		}
 	}
 
 	idents := make([]module.Identifier, 0, len(ac.Identifiers))
 	for _, spec := range ac.Identifiers {
-		m, err := module.BuildIdentifier(spec.Type, spec.Name, spec.Config)
+		pool, cfg, err := extractPoolSelector(spec.Config)
+		if err != nil {
+			return nil, fmt.Errorf("identifier %q: %w", spec.Name, err)
+		}
+		m, err := module.BuildIdentifierWithDeps(spec.Type, spec.Name, cfg, depsFor("i", spec.Type, spec.Name, pool))
 		if err != nil {
 			return nil, fmt.Errorf("identifier %q: %w", spec.Name, err)
 		}
@@ -113,14 +175,22 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	}
 	// First authorizer is the top-level. Composite authorizers are spelled
 	// in config (type: composite) and built by their own factory.
-	top, err := module.BuildAuthorizer(ac.Authorizers[0].Type, ac.Authorizers[0].Name, ac.Authorizers[0].Config)
+	topPool, topCfg, err := extractPoolSelector(ac.Authorizers[0].Config)
+	if err != nil {
+		return nil, fmt.Errorf("authorizer %q: %w", ac.Authorizers[0].Name, err)
+	}
+	top, err := module.BuildAuthorizerWithDeps(ac.Authorizers[0].Type, ac.Authorizers[0].Name, topCfg, depsFor("a", ac.Authorizers[0].Type, ac.Authorizers[0].Name, topPool))
 	if err != nil {
 		return nil, fmt.Errorf("authorizer %q: %w", ac.Authorizers[0].Name, err)
 	}
 
 	muts := make([]module.ResponseMutator, 0, len(ac.Response))
 	for _, spec := range ac.Response {
-		m, err := module.BuildMutator(spec.Type, spec.Name, spec.Config)
+		pool, cfg, err := extractPoolSelector(spec.Config)
+		if err != nil {
+			return nil, fmt.Errorf("mutator %q: %w", spec.Name, err)
+		}
+		m, err := module.BuildMutatorWithDeps(spec.Type, spec.Name, cfg, depsFor("m", spec.Type, spec.Name, pool))
 		if err != nil {
 			return nil, fmt.Errorf("mutator %q: %w", spec.Name, err)
 		}
@@ -132,7 +202,7 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		mode = pipeline.AllMust
 	}
 
-	dc, err := buildDecisionCache(ac.Cache)
+	dc, err := buildDecisionCache(ac.Cache, pools)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +268,11 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 				canaryEnforce = true
 			}
 		}
-		az, err := module.BuildAuthorizer(ac.Canary.Authorizer.Type, ac.Canary.Authorizer.Name, ac.Canary.Authorizer.Config)
+		canaryPool, canaryCfg, err := extractPoolSelector(ac.Canary.Authorizer.Config)
+		if err != nil {
+			return nil, fmt.Errorf("canary authorizer %q: %w", ac.Canary.Authorizer.Name, err)
+		}
+		az, err := module.BuildAuthorizerWithDeps(ac.Canary.Authorizer.Type, ac.Canary.Authorizer.Name, canaryCfg, depsFor("a", ac.Canary.Authorizer.Type, ac.Canary.Authorizer.Name, canaryPool))
 		if err != nil {
 			return nil, fmt.Errorf("canary authorizer %q: %w", ac.Canary.Authorizer.Name, err)
 		}
@@ -221,12 +295,12 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 	}
 
 	// E2: Build revocation store (opt-in).
-	revStore, revFailOpen, err := buildRevocationStore(ac.Revocation)
+	revStore, revFailOpen, err := buildRevocationStore(ac.Revocation, pools)
 	if err != nil {
 		return nil, err
 	}
 
-	return pipeline.New(pipeline.Options{
+	eng, err := pipeline.New(pipeline.Options{
 		Identifiers:        idents,
 		Authorizer:         top,
 		Mutators:           muts,
@@ -242,12 +316,143 @@ func Compile(ac *AuthConfig) (*pipeline.Engine, error) {
 		CanarySample:       canarySample,
 		RevocationStore:    revStore,
 		RevocationFailOpen: revFailOpen,
+		LifecycleCancel:    engCancel,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Ownership of engCancel transfers to the Engine; it cancels engCtx on
+	// Close. Suppress the deferred error-path cancel.
+	engineOK = true
+	return eng, nil
+}
+
+// extractPoolSelector pulls an optional cache.pool selector out of a module
+// config. The loader owns pool selection, so it returns a copy of the config
+// with the "cache" key stripped — modules never see it and their
+// CheckUnknownKeys guards stay intact. A module with no cache block (or no
+// cache.pool) selects the implicit default pool (empty pool name).
+func extractPoolSelector(cfg map[string]any) (pool string, cleaned map[string]any, err error) {
+	raw, ok := cfg["cache"]
+	if !ok {
+		return "", cfg, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return "", nil, fmt.Errorf("%w: cache: must be a mapping of pool/ttl settings", module.ErrConfig)
+	}
+	if p, ok := m["pool"]; ok {
+		s, ok := p.(string)
+		if !ok {
+			return "", nil, fmt.Errorf("%w: cache.pool must be a string", module.ErrConfig)
+		}
+		pool = strings.TrimSpace(s)
+	}
+	cleaned = make(map[string]any, len(cfg))
+	for k, v := range cfg {
+		if k == "cache" {
+			continue
+		}
+		cleaned[k] = v
+	}
+	return pool, cleaned, nil
+}
+
+// poolNames returns the declared pool names from the caches: block. The
+// implicit "default" pool is always considered declared by ValidatePools, so
+// it need not appear here.
+func poolNames(caches []CachePoolSpec) []string {
+	out := make([]string, 0, len(caches))
+	for _, p := range caches {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+// referencedPools collects every cache pool named by a module's cache.pool
+// selector across identifiers, the top + canary authorizers, and response
+// mutators. It powers fail-fast validation against the declared pools.
+func referencedPools(ac *AuthConfig) ([]string, error) {
+	var refs []string
+	add := func(kind, name string, cfg map[string]any) error {
+		pool, _, err := extractPoolSelector(cfg)
+		if err != nil {
+			return fmt.Errorf("%s %q: %w", kind, name, err)
+		}
+		if pool != "" {
+			refs = append(refs, pool)
+		}
+		return nil
+	}
+	for _, s := range ac.Identifiers {
+		if err := add("identifier", s.Name, s.Config); err != nil {
+			return nil, err
+		}
+	}
+	if len(ac.Authorizers) > 0 {
+		if err := add("authorizer", ac.Authorizers[0].Name, ac.Authorizers[0].Config); err != nil {
+			return nil, err
+		}
+	}
+	for _, s := range ac.Response {
+		if err := add("mutator", s.Name, s.Config); err != nil {
+			return nil, err
+		}
+	}
+	if ac.Canary != nil {
+		if err := add("canary authorizer", ac.Canary.Authorizer.Name, ac.Canary.Authorizer.Config); err != nil {
+			return nil, err
+		}
+	}
+	// The decision cache may draw its backend from a declared pool too.
+	if ac.Cache != nil && ac.Cache.Pool != "" {
+		refs = append(refs, ac.Cache.Pool)
+	}
+	// The revocation store may also be routed to a declared pool.
+	if ac.Revocation != nil && ac.Revocation.Pool != "" {
+		refs = append(refs, ac.Revocation.Pool)
+	}
+	return refs, nil
+}
+
+// buildCachePools maps the operator's caches: block onto pkg/cache pool
+// configs and constructs them. A nil/empty list is valid: BuildPools
+// synthesizes an implicit in-memory "default" pool so configs that predate
+// the module-native cache layer keep working unchanged. Fail-fast validation
+// of per-module pool references happens separately in Compile via
+// [referencedPools] + cache.ValidatePools.
+func buildCachePools(ac *AuthConfig) (*pkgcache.Pools, error) {
+	cfgs := make([]pkgcache.PoolConfig, 0, len(ac.Caches))
+	for _, p := range ac.Caches {
+		cfgs = append(cfgs, pkgcache.PoolConfig{
+			Name: p.Name,
+			BackendSpec: pkgcache.BackendSpec{
+				Type:      p.Backend,
+				Size:      p.Size,
+				Addr:      p.Addr,
+				Username:  p.Username,
+				Password:  p.Password,
+				KeyPrefix: p.KeyPrefix,
+				TLS:       p.TLS,
+				MaxTTL:    p.MaxTTL,
+				AllowPII:  p.AllowPII,
+				Encrypt:   p.Encrypt,
+				Codec:     p.Codec,
+			},
+		})
+	}
+	pools, err := pkgcache.BuildPools(cfgs)
+	if err != nil {
+		return nil, fmt.Errorf("%w: caches: %v", module.ErrConfig, err)
+	}
+	return pools, nil
 }
 
 // buildDecisionCache turns the YAML CacheSpec into a *cache.Decision. A
-// nil spec or zero TTL disables caching.
-func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
+// nil spec or zero TTL disables caching. When spec.Pool is set, the backend
+// is drawn from that declared pkg/cache pool (pools) instead of being built
+// from the inline backend fields.
+func buildDecisionCache(spec *CacheSpec, pools *pkgcache.Pools) (*cache.Decision, error) {
 	if spec == nil || spec.TTL == "" {
 		return nil, nil
 	}
@@ -272,6 +477,29 @@ func buildDecisionCache(spec *CacheSpec) (*cache.Decision, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: cache.maxStaleness: %v", module.ErrConfig, err)
 		}
+	}
+
+	// Pool-routed backend: draw the decision cache's storage from a declared
+	// pool instead of building a standalone backend. The pool owns backend
+	// infrastructure, so the inline backend fields and the tiered/distributed-
+	// singleflight path are mutually exclusive with it.
+	if spec.Pool != "" {
+		if spec.Backend != "" || spec.Addr != "" || spec.DistributedSingleflight {
+			return nil, fmt.Errorf("%w: cache.pool cannot be combined with cache.backend/addr/distributedSingleflight; the pool owns backend infrastructure", module.ErrConfig)
+		}
+		// pools is non-nil in normal operation (Compile builds it before
+		// calling here); guard defensively for direct callers/tests.
+		if pools == nil {
+			return nil, fmt.Errorf("%w: cache.pool set but no cache pools are configured", module.ErrConfig)
+		}
+		backend := pools.For("decision", spec.Pool, nil).Cache("decisions")
+		return cache.NewDecisionWithBackend(cache.DecisionOptions{
+			PositiveTTL:       pos,
+			NegativeTTL:       neg,
+			KeyFields:         spec.Key,
+			ServeStaleOnError: spec.ServeStaleOnError,
+			MaxStaleness:      maxStale,
+		}, backend, &cache.Stats{})
 	}
 
 	backend := spec.Backend
@@ -407,7 +635,7 @@ func buildDistSF(spec *CacheSpec, tiered *cache.Tiered) (*cache.DistSF, []byte, 
 
 // buildRevocationStore constructs the revocation store from the spec (E2).
 // Returns (nil, false, nil) when revocation is disabled.
-func buildRevocationStore(spec *RevocationSpec) (revocation.Store, bool, error) {
+func buildRevocationStore(spec *RevocationSpec, pools *pkgcache.Pools) (revocation.Store, bool, error) {
 	if spec == nil || !spec.Enabled {
 		return nil, false, nil
 	}
@@ -430,6 +658,24 @@ func buildRevocationStore(spec *RevocationSpec) (revocation.Store, bool, error) 
 			return nil, false, fmt.Errorf("%w: revocation.negCacheTTL: %v", module.ErrConfig, err)
 		}
 		negCacheTTL = d
+	}
+
+	// Pool routing (P6): fold storage onto a declared pool behind the Store
+	// facade. Opt-in and mutually exclusive with the inline backend fields.
+	if spec.Pool != "" {
+		if spec.Backend != "" || spec.Addr != "" {
+			return nil, false, fmt.Errorf("%w: revocation.pool cannot be combined with revocation.backend/addr; the pool owns backend infrastructure", module.ErrConfig)
+		}
+		if pools == nil {
+			return nil, false, fmt.Errorf("%w: revocation.pool set but no cache pools are configured", module.ErrConfig)
+		}
+		backend := pools.For("revocation", spec.Pool, nil).Cache("revocations")
+		store := revocation.Store(revocation.NewCacheStore(backend, defaultTTL))
+		// A pool is shared/remote infrastructure, so wrap with the negative
+		// cache to spare the hot path a round-trip on the common not-revoked
+		// case (Add evicts the local entry, preserving revoke-then-check).
+		store = revocation.NewNegCache(store, revocation.WithNegCacheTTL(negCacheTTL))
+		return store, failOpen, nil
 	}
 
 	var store revocation.Store

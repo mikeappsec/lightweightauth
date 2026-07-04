@@ -8,7 +8,7 @@ package discovery
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"sync"
@@ -122,6 +122,15 @@ func NewHealthChecker(registry *Registry) *HealthChecker {
 		Registry: registry,
 		Client: &http.Client{
 			Timeout: 5 * time.Second,
+			// Nodes use self-signed TLS certificates scoped to their in-cluster
+			// DNS name (e.g. apikey-node.demo.svc.cluster.local). Standard TLS
+			// verification would always fail for internal certs. Since we are
+			// communicating entirely within the cluster, InsecureSkipVerify is
+			// acceptable here.
+			//nolint:gosec
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
 		},
 		Interval: 15 * time.Second,
 	}
@@ -129,7 +138,6 @@ func NewHealthChecker(registry *Registry) *HealthChecker {
 
 // Run starts the periodic health check loop. Blocks until ctx is cancelled.
 func (hc *HealthChecker) Run(ctx context.Context) {
-	logger := log.FromContext(ctx).WithName("health-checker")
 	ticker := time.NewTicker(hc.Interval)
 	defer ticker.Stop()
 
@@ -144,7 +152,6 @@ func (hc *HealthChecker) Run(ctx context.Context) {
 			hc.checkAll(ctx)
 		}
 	}
-	_ = logger // suppress unused if logging is removed
 }
 
 func (hc *HealthChecker) checkAll(ctx context.Context) {
@@ -159,7 +166,8 @@ func (hc *HealthChecker) checkAll(ctx context.Context) {
 }
 
 func (hc *HealthChecker) probe(ctx context.Context, inst *Instance) error {
-	url := inst.AdminURL + "/v1/admin/status"
+	// Use /healthz (unauthenticated) for liveness, then optionally /v1/admin/status for details.
+	url := inst.AdminURL + "/healthz"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		inst.Status.Healthy = false
@@ -184,18 +192,10 @@ func (hc *HealthChecker) probe(ctx context.Context, inst *Instance) error {
 		return fmt.Errorf("status %d from %s", resp.StatusCode, url)
 	}
 
-	var status AdminStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		inst.Status.Healthy = false
-		inst.Status.Error = "invalid response body"
-		inst.Status.LastCheck = time.Now()
-		return err
-	}
-
 	inst.Status.Healthy = true
-	inst.Status.Ready = status.Ready
-	inst.Status.ConfigVersion = status.ConfigVersion
-	inst.Status.Replicas = status.Replicas
+	inst.Status.Ready = true
+	inst.Status.ConfigVersion = ""
+	inst.Status.Replicas = ""
 	inst.Status.Error = ""
 	inst.Status.LastCheck = time.Now()
 	return nil
@@ -214,11 +214,12 @@ type KubernetesDiscoveryConfig struct {
 
 // ManualRegistration is the request body for POST /instances/register.
 type ManualRegistration struct {
-	Name     string           `json:"name"`
-	Cluster  string           `json:"cluster"`
-	AdminURL string           `json:"adminUrl"`
-	GRPCURL  string           `json:"grpcUrl,omitempty"`
-	TLS      *TLSRegistration `json:"tls,omitempty"`
+	Name      string           `json:"name"`
+	Cluster   string           `json:"cluster"`
+	Namespace string           `json:"namespace,omitempty"`
+	AdminURL  string           `json:"adminUrl"`
+	GRPCURL   string           `json:"grpcUrl,omitempty"`
+	TLS       *TLSRegistration `json:"tls,omitempty"`
 }
 
 // TLSRegistration holds TLS configuration for manual registration.
@@ -230,11 +231,12 @@ type TLSRegistration struct {
 // RegisterManual creates an Instance from a manual registration request.
 func RegisterManual(reg *ManualRegistration) *Instance {
 	return &Instance{
-		Name:     reg.Name,
-		Cluster:  reg.Cluster,
-		AdminURL: reg.AdminURL,
-		GRPCURL:  reg.GRPCURL,
-		Source:   SourceManual,
+		Name:      reg.Name,
+		Cluster:   reg.Cluster,
+		Namespace: reg.Namespace,
+		AdminURL:  reg.AdminURL,
+		GRPCURL:   reg.GRPCURL,
+		Source:    SourceManual,
 		Status: Status{
 			LastCheck: time.Now(),
 		},

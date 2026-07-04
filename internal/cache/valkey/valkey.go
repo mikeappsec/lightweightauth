@@ -149,16 +149,22 @@ func factory(spec cache.BackendSpec, _ *cache.Stats) (cache.Backend, error) {
 	if spec.Addr == "" {
 		return nil, errors.New("valkey: addr is required")
 	}
+	return dial(spec.Addr, spec.Username, spec.Password, spec.TLS, spec.KeyPrefix, spec.Extra)
+}
 
+// dial constructs a *Backend from connection settings. It is shared by the
+// internal/cache and pkg/cache factories so both speak to Valkey identically
+// (connection pooling, circuit-breaker guard, optional maxConns cap).
+func dial(addr, username, password string, tls bool, keyPrefix string, extra map[string]any) (*Backend, error) {
 	poolCfg := connpool.ValkeyConfig{
-		Addr:     spec.Addr,
-		Username: spec.Username,
-		Password: spec.Password,
-		TLS:      spec.TLS,
+		Addr:     addr,
+		Username: username,
+		Password: password,
+		TLS:      tls,
 	}
 	// Connection pool cap (CAC9): bound the number of connections to
 	// prevent unbounded FD consumption under memory pressure.
-	if v, ok := spec.Extra["maxConns"]; ok {
+	if v, ok := extra["maxConns"]; ok {
 		if n, ok := v.(int); ok && n > 0 {
 			poolCfg.PipelineMultiplex = n
 		}
@@ -169,9 +175,9 @@ func factory(spec cache.BackendSpec, _ *cache.Stats) (cache.Backend, error) {
 		return nil, fmt.Errorf("valkey: %w", err)
 	}
 
-	guardCfg, gerr := upstream.FromMap(spec.Extra)
+	guardCfg, gerr := upstream.FromMap(extra)
 	if gerr != nil {
 		return nil, fmt.Errorf("valkey: %w", gerr)
 	}
-	return &Backend{client: client, keyPrefix: spec.KeyPrefix, guard: upstream.NewGuard(guardCfg)}, nil
+	return &Backend{client: client, keyPrefix: keyPrefix, guard: upstream.NewGuard(guardCfg)}, nil
 }

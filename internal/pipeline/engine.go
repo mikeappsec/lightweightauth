@@ -84,6 +84,12 @@ type Engine struct {
 	// When true, the pipeline skips the check (fail-open). When false
 	// (default), the pipeline returns 401 on store errors (fail-closed).
 	revocationFailOpen bool
+
+	// lifecycleCancel cancels the engine-lifecycle context handed to modules
+	// via module.Deps.Ctx at construction. Close calls it so module-owned
+	// background goroutines (JWKS pollers, refreshers) stop when this engine
+	// is swapped out on hot-reload. Nil when no context was wired.
+	lifecycleCancel context.CancelFunc
 }
 
 // IdentifierMode controls multi-identifier composition. See DESIGN.md §2.
@@ -136,6 +142,12 @@ type Options struct {
 	// revocation check is skipped on errors (fail-open). Default false
 	// (fail-closed: return 401).
 	RevocationFailOpen bool
+
+	// LifecycleCancel, when non-nil, is invoked by Engine.Close to cancel the
+	// engine-lifecycle context that was injected into modules via
+	// module.Deps.Ctx. This stops module-owned background goroutines when the
+	// engine is replaced on hot-reload.
+	LifecycleCancel context.CancelFunc
 }
 
 // New builds an Engine. Returns an error if required components are missing.
@@ -162,6 +174,7 @@ func New(o Options) (*Engine, error) {
 		canarySample:       o.CanarySample,
 		revocationStore:    o.RevocationStore,
 		revocationFailOpen: o.RevocationFailOpen,
+		lifecycleCancel:    o.LifecycleCancel,
 	}, nil
 }
 
@@ -170,6 +183,9 @@ func New(o Options) (*Engine, error) {
 func (e *Engine) Close() {
 	if e == nil {
 		return
+	}
+	if e.lifecycleCancel != nil {
+		e.lifecycleCancel()
 	}
 	if e.rateLimiter != nil {
 		e.rateLimiter.Close()

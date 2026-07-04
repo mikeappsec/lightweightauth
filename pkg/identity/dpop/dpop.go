@@ -62,7 +62,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jws"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
-	"github.com/mikeappsec/lightweightauth/internal/cache"
+	"github.com/mikeappsec/lightweightauth/internal/replay"
 	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
@@ -98,7 +98,7 @@ type identifier struct {
 	name   string
 	cfg    Config
 	inner  module.Identifier
-	replay *cache.LRU
+	replay *replay.Guard
 	now    func() time.Time
 }
 
@@ -242,16 +242,19 @@ func (i *identifier) verifyProof(ctx context.Context, proof string, r *module.Re
 	if jti == "" {
 		return nil, nil, fmt.Errorf("%w: dpop: missing jti", module.ErrInvalidCredential)
 	}
-	if _, hit, _ := i.replay.Get(ctx, jti); hit {
-		return nil, nil, fmt.Errorf("%w: dpop: jti replay", module.ErrInvalidCredential)
-	}
 	// TTL = iat + 2*skew, bounded so a far-future iat can't keep an
 	// entry alive forever.
 	ttl := time.Until(iat.Add(2 * i.cfg.Skew))
 	if ttl <= 0 || ttl > 5*time.Minute {
 		ttl = 2 * i.cfg.Skew
 	}
-	_ = i.replay.Set(ctx, jti, []byte{1}, ttl)
+	firstUse, rerr := i.replay.Consume(ctx, jti, ttl)
+	if rerr != nil {
+		return nil, nil, fmt.Errorf("%w: dpop: replay check: %v", module.ErrUpstream, rerr)
+	}
+	if !firstUse {
+		return nil, nil, fmt.Errorf("%w: dpop: jti replay", module.ErrInvalidCredential)
+	}
 
 	return hdrJWK, claims, nil
 }
@@ -416,7 +419,7 @@ var knownKeys = map[string]struct{}{
 	"pinnedKeys":      {},
 }
 
-func factory(name string, raw map[string]any) (module.Identifier, error) {
+func factory(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
 	if err := module.CheckUnknownKeys("dpop", name, raw, knownKeys); err != nil {
 		return nil, err
 	}
@@ -462,21 +465,16 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		cfg.Inner.Config = map[string]any{}
 	}
 
-	inner, err := module.BuildIdentifier(cfg.Inner.Type, cfg.Inner.Name, cfg.Inner.Config)
+	inner, err := module.BuildIdentifierWithDeps(cfg.Inner.Type, cfg.Inner.Name, cfg.Inner.Config, deps)
 	if err != nil {
 		return nil, fmt.Errorf("%w: dpop %q inner %q: %v", module.ErrConfig, name, cfg.Inner.Type, err)
-	}
-
-	replay, err := cache.NewLRU(cfg.ReplayCacheSize, 2*cfg.Skew, nil)
-	if err != nil {
-		return nil, fmt.Errorf("%w: dpop %q replay cache: %v", module.ErrConfig, name, err)
 	}
 
 	id := &identifier{
 		name:   name,
 		cfg:    cfg,
 		inner:  inner,
-		replay: replay,
+		replay: replay.New(deps.CacheProvider().Cache("replay")),
 		now:    time.Now,
 	}
 
@@ -561,4 +559,4 @@ func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []stri
 	return keys
 }
 
-func init() { module.RegisterIdentifier("dpop", factory) }
+func init() { module.RegisterIdentifierWithDeps("dpop", factory) }

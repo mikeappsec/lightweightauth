@@ -1,0 +1,31 @@
+replicaCount: 1
+
+image:
+  repository: lightweightauth
+  tag: dev
+  pullPolicy: Never
+
+crds:
+  install: false
+
+networkPolicy:
+  enabled: false
+
+config:
+  inline: |
+    tenantId: tenant-a
+    identifierMode: firstMatch
+    identifiers:
+      - name: dev-apikey
+        type: apikey
+        config:
+          headerName: X-Api-Key
+          static:
+            dev-admin-key: { subject: admin, roles: [admin] }
+    authorizers:
+      - name: rbac
+        type: rbac
+        config:
+          rolesFrom: claim:roles
+          allow:
+            - admin

@@ -20,6 +20,7 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- define "lwauth.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "lwauth.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: authorizer
 {{- end -}}
 
 {{- define "lwauth.serviceAccountName" -}}

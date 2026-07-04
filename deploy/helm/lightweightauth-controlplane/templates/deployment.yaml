@@ -26,16 +26,11 @@ spec:
             - name: metrics
               containerPort: 9090
               protocol: TCP
-            - name: health
-              containerPort: 8082
-              protocol: TCP
           env:
             - name: CP_API_ADDR
               value: ":8443"
             - name: CP_METRICS_ADDR
               value: ":9090"
-            - name: CP_HEALTH_ADDR
-              value: ":8082"
             - name: CP_CLUSTER_NAME
               value: {{ .Values.clusterName | quote }}
             - name: CP_DEFAULT_IMAGE
@@ -45,13 +40,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /healthz
-              port: health
+              port: api
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /healthz
-              port: health
+              port: api
             initialDelaySeconds: 3
             periodSeconds: 5
           resources:
