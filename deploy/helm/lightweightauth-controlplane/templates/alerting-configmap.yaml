@@ -1,0 +1,23 @@
+{{- if .Values.alerting.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lwauth-alerting-rules
+  labels:
+    {{- include "controlplane.labels" . | nindent 4 }}
+  annotations:
+    # Tell ArgoCD not to prune the ConfigMap when an operator commits
+    # rule edits out-of-band (manual kubectl edits). The CP loader
+    # handles the merge itself so ArgoCD's drift detection is not
+    # authoritative for this object.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+data:
+  # rules.json is the JSON-serialised operator override list (see
+  # internal/controlplane/alerting/rules.go MergeRules). The default
+  # catatlogue always applies — overrides here merge by rule `name`.
+  # This chart ships an empty override list on initial install;
+  # operators edit the ConfigMap in-place afterwards.
+  rules.json: |
+    {{- .Values.alerting.rulesOverride | toJson | nindent 4 }}
+{{- end }}

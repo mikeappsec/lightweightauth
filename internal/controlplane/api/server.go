@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/alerting"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/metrics"
@@ -40,6 +41,13 @@ type Server struct {
 	KubeClient     client.Client
 	Mux            *http.ServeMux
 	DefaultImage   string
+
+	// AlertEngine + RulesLoader are the Phase 2 alerting primitives.
+	// Both may be nil in test or local-dev mode — the endpoints gate
+	// on nil checks and return a "not configured" stub rather than
+	// crashing.
+	AlertEngine  *alerting.Engine
+	RulesLoader  *alerting.ConfigMapLoader
 }
 
 // NewServer creates a new API server wired to the instance registry.
@@ -56,6 +64,17 @@ func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, c
 		DefaultImage:   defaultImage,
 	}
 	s.registerRoutes()
+	return s
+}
+
+// WithAlerting wires the alert engine + ConfigMap loader into the
+// server. Optional — alerting endpoints degrade gracefully when this
+// is not called (local-dev and unit tests run without it). Returned
+// Server pointer is the same one for chainability.
+func (s *Server) WithAlerting(engine *alerting.Engine, loader *alerting.ConfigMapLoader) *Server {
+	s.AlertEngine = engine
+	s.RulesLoader = loader
+	s.registerAlertRoutes()
 	return s
 }
 
@@ -107,6 +126,26 @@ func (s *Server) registerRoutes() {
 
 	// URL probe (JWKS reachability check for the create wizard).
 	s.Mux.HandleFunc("GET /v1/controlplane/probe/url", s.handleProbeURL)
+
+	// Alerting endpoints (Phase 2). Sub-registration is gated on
+	// WithAlerting having been called; the methods themselves also
+	// nil-check so direct calls via s.Mux dispatch degrade cleanly
+	// in local-dev where alerting is intentionally disabled.
+	s.registerAlertRoutes()
+}
+
+// registerAlertRoutes wires the alert REST + WS endpoints. Safe to
+// call multiple times — the routes are idempotent on the same mux.
+// The handlers nil-check s.AlertEngine and s.RulesLoader so endpoints
+// respond with a "not configured" stub rather than crashing when
+// alerting is disabled in local-dev.
+func (s *Server) registerAlertRoutes() {
+	s.Mux.HandleFunc("GET /v1/controlplane/alerts", s.handleListAlerts)
+	s.Mux.HandleFunc("POST /v1/controlplane/alerts/{id}/ack", s.handleAckAlert)
+	s.Mux.HandleFunc("GET /v1/controlplane/alerts/rules", s.handleListRules)
+	s.Mux.HandleFunc("PUT /v1/controlplane/alerts/rules", s.handlePutRules)
+	s.Mux.HandleFunc("POST /v1/controlplane/alerts/rules", s.handlePutRules)
+	s.Mux.HandleFunc("/v1/controlplane/stream/alerts", s.handleAlertStream)
 }
 
 // handleListInstances returns all instances, optionally filtered by cluster.
