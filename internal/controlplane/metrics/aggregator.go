@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -246,9 +247,12 @@ func (a *Aggregator) scrapeInstance(ctx context.Context, inst *discovery.Instanc
 		m.CacheHitRatio = cur.cacheHits / cur.cacheTotal
 	}
 
-	// Parse histogram quantiles from body.
-	m.LatencyP50Ms = parseQuantile(string(body), "lwauth_decision_duration_seconds", "0.5") * 1000
-	m.LatencyP99Ms = parseQuantile(string(body), "lwauth_decision_duration_seconds", "0.99") * 1000
+	// lwauth_decision_latency_seconds is a HistogramVec — it exposes
+	// `_bucket{le="..."}` cumulative series rather than summary
+	// `{quantile="..."}` lines, so compute P50/P99 from the bucket
+	// counts aggregated across all label combinations.
+	m.LatencyP50Ms = parseHistogramQuantile(string(body), "lwauth_decision_latency_seconds", 0.5) * 1000
+	m.LatencyP99Ms = parseHistogramQuantile(string(body), "lwauth_decision_latency_seconds", 0.99) * 1000
 
 	a.byInst[key] = m
 	a.prevCounters[key] = cur
@@ -257,7 +261,11 @@ func (a *Aggregator) scrapeInstance(ctx context.Context, inst *discovery.Instanc
 	return nil
 }
 
-// parsePrometheusCounters extracts counter values from Prometheus text format.
+// parsePrometheusCounters extracts counter values from Prometheus text
+// format. lwauth_decisions_total{outcome,authorizer,tenant} is a
+// CounterVec so each label combination appears as its own line — the
+// totals are the sum across every series. Cache hits/misses are likewise
+// summed across every registered cache name.
 func parsePrometheusCounters(body string) *counters {
 	c := &counters{}
 	for _, line := range strings.Split(body, "\n") {
@@ -266,18 +274,42 @@ func parsePrometheusCounters(body string) *counters {
 		}
 		switch {
 		case strings.HasPrefix(line, "lwauth_decisions_total"):
-			c.decisions = parseMetricValue(line)
-		case strings.HasPrefix(line, "lwauth_decisions_denied_total"):
-			c.denies = parseMetricValue(line)
-		case strings.HasPrefix(line, "lwauth_errors_total"):
-			c.errors = parseMetricValue(line)
+			// lwauth_decisions_total appears once per outcome+authorizer+tenant
+			// label combination; all of them must be summed.
+			c.decisions += parseMetricValue(line)
+			switch extractLabel(line, "outcome") {
+			case "deny":
+				c.denies += parseMetricValue(line)
+			case "error":
+				c.errors += parseMetricValue(line)
+			}
 		case strings.HasPrefix(line, "lwauth_cache_hits_total"):
-			c.cacheHits = parseMetricValue(line)
-		case strings.HasPrefix(line, "lwauth_cache_requests_total"):
-			c.cacheTotal = parseMetricValue(line)
+			c.cacheHits += parseMetricValue(line)
+		case strings.HasPrefix(line, "lwauth_cache_misses_total"):
+			c.cacheTotal += parseMetricValue(line)
 		}
 	}
+	// There is no `lwauth_cache_requests_total` metric; total = hits +
+	// misses models the full-request denominator.
+	c.cacheTotal += c.cacheHits
 	return c
+}
+
+// extractLabel reads the value of a single Prometheus label from a metric
+// line, e.g. `lwauth_decisions_total{outcome="deny",tenant="acme"} 3`
+// with `outcome` returns "deny". Returns "" if the label is absent.
+func extractLabel(line, name string) string {
+	marker := name + "=\""
+	i := strings.Index(line, marker)
+	if i < 0 {
+		return ""
+	}
+	start := i + len(marker)
+	j := strings.IndexByte(line[start:], '"')
+	if j < 0 {
+		return ""
+	}
+	return line[start : start+j]
 }
 
 func parseMetricValue(line string) float64 {
@@ -289,12 +321,58 @@ func parseMetricValue(line string) float64 {
 	return v
 }
 
-func parseQuantile(body, metric, quantile string) float64 {
-	prefix := metric + `{quantile="` + quantile + `"}`
+// parseHistogramQuantile computes a per-instance aggregate quantile (0..1)
+// from a Prometheus HistogramVec scrape body by summing the cumulative
+// `_bucket{le="..."}` counts across every label combination, then
+// finding the smallest bucket boundary whose cumulative count crosses the
+// requested quantile of the total. Returns 0 if there are no samples.
+//
+// `+Inf` buckets are skipped as bucket candidates (they hold the total
+// but are not a usable upper-bound value); the total count is taken from
+// them. When the quantile falls above the highest finite bucket boundary,
+// the highest finite boundary is returned — consistent with Prometheus'
+// histogram_quantile behavior on histograms with finite +Inf only.
+func parseHistogramQuantile(body, metric string, q float64) float64 {
+	bucketPrefix := metric + "_bucket"
+	leCounts := map[float64]float64{}
+	infCount := 0.0
 	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return parseMetricValue(line)
+		if !strings.HasPrefix(line, bucketPrefix) || strings.HasPrefix(line, bucketPrefix+"_") {
+			continue
+		}
+		// Only finite `le` boundaries accumulate into leCounts; +Inf
+		// holds the total count and is used as the denominator.
+		le := extractLabel(line, "le")
+		v := parseMetricValue(line)
+		if le == "+Inf" {
+			infCount += v
+			continue
+		}
+		f, err := strconv.ParseFloat(le, 64)
+		if err != nil {
+			continue
+		}
+		leCounts[f] += v
+	}
+	total := infCount
+	if total <= 0 {
+		return 0
+	}
+	// Histogram `_bucket{le="..."}` counters are cumulative, so summing
+	// them across label combinations yields the aggregated cumulative
+	// count at each boundary — no extra accumulation is needed during
+	// the boundary walk.
+	boundaries := make([]float64, 0, len(leCounts))
+	for le := range leCounts {
+		boundaries = append(boundaries, le)
+	}
+	sort.Float64s(boundaries)
+	var last float64
+	for _, le := range boundaries {
+		last = le
+		if leCounts[le] >= q*total {
+			return le
 		}
 	}
-	return 0
+	return last
 }

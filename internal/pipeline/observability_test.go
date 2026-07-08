@@ -73,6 +73,7 @@ func TestEvaluate_EmitsMetricsAndAudit(t *testing.T) {
 	wants := []string{
 		`lwauth_decisions_total{authorizer="az",outcome="allow",tenant="acme"} 1`,
 		`lwauth_identifier_total{identifier="jwt",outcome="match"} 1`,
+		`lwauth_authorizer_total{authorizer="az",outcome="allow"} 1`,
 	}
 	for _, w := range wants {
 		if !strings.Contains(body, w) {

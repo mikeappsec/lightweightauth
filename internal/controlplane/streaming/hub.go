@@ -18,6 +18,7 @@ import (
 
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/metrics"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 )
 
 // Decision represents a single authorization decision from an instance.
@@ -289,16 +290,31 @@ func (dc *DecisionCollector) collectFromInstance(ctx context.Context, inst *disc
 		return
 	}
 
-	var decisions []Decision
-	if err := json.NewDecoder(resp.Body).Decode(&decisions); err != nil {
+	// The data plane returns its canonical audit.Event schema (json
+	// tags: ts, decision, latency_ms, …). The control-plane Decision
+	// struct uses different json tags (timestamp, verdict, …) so the
+	// events are decoded as audit.Event and mapped locally — keeping
+	// the WS stream's on-wire Decision shape unchanged for clients.
+	var events []audit.Event
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
 		return
 	}
 
-	for i := range decisions {
-		decisions[i].Instance = inst.Name
-		decisions[i].Cluster = inst.Cluster
+	for _, e := range events {
+		dec := Decision{
+			Timestamp:  e.Timestamp,
+			Instance:   inst.Name,
+			Cluster:    inst.Cluster,
+			Subject:    e.Subject,
+			Path:       e.Path,
+			Method:     e.Method,
+			Verdict:    e.Decision,
+			Reason:     e.DenyReason,
+			Tenant:     e.Tenant,
+			DurationMs: e.LatencyMs,
+		}
 		select {
-		case dc.Hub.Decisions <- decisions[i]:
+		case dc.Hub.Decisions <- dec:
 		default:
 			// Drop if buffer full.
 		}

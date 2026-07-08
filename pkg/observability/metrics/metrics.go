@@ -14,6 +14,7 @@
 //	lwauth_decisions_total{outcome,authorizer,tenant}
 //	lwauth_decision_latency_seconds{outcome,authorizer,tenant}
 //	lwauth_identifier_total{identifier,outcome}
+//	lwauth_authorizer_total{authorizer,outcome}
 //	lwauth_cache_hits_total{cache}
 //	lwauth_cache_misses_total{cache}
 //	lwauth_cache_evictions_total{cache}
@@ -40,6 +41,7 @@ type Recorder struct {
 	decisions            *prometheus.CounterVec
 	decisionLatency      *prometheus.HistogramVec
 	identifierTotal      *prometheus.CounterVec
+	authorizerTotal      *prometheus.CounterVec
 	shadowDisagreements  *prometheus.CounterVec
 	canaryAgreements     *prometheus.CounterVec
 	revocationChecks     *prometheus.CounterVec
@@ -69,6 +71,10 @@ func New() *Recorder {
 			Name: "lwauth_identifier_total",
 			Help: "Identifier outcomes (match, no_match, error).",
 		}, []string{"identifier", "outcome"}),
+		authorizerTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lwauth_authorizer_total",
+			Help: "Authorizer outcomes (allow, deny, error).",
+		}, []string{"authorizer", "outcome"}),
 		shadowDisagreements: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "lwauth_shadow_disagreement_total",
 			Help: "Requests where a shadow policy would deny but production allows (D2).",
@@ -94,7 +100,7 @@ func New() *Recorder {
 			Help: "Requests denied by per-tenant rate limiting / quota enforcement (E6).",
 		}, []string{"tenant"}),
 	}
-	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed, r.cacheDistSF, r.rateLimitDenied)
+	reg.MustRegister(r.decisions, r.decisionLatency, r.identifierTotal, r.authorizerTotal, r.shadowDisagreements, r.canaryAgreements, r.revocationChecks, r.cacheStaleServed, r.cacheDistSF, r.rateLimitDenied)
 
 	// K-CRYPTO-2: lwauth_fips_enabled is a constant gauge (1 = the
 	// running binary is using a FIPS 140-3 validated cryptographic
@@ -165,6 +171,28 @@ func (r *Recorder) ObserveIdentifier(identifier, outcome string) {
 		return
 	}
 	r.identifierTotal.WithLabelValues(identifier, outcome).Inc()
+}
+
+// ObserveAuthorizer records one authorizer module invocation. This
+// counter is distinct from `lwauth_decisions_total{authorizer,outcome}`:
+// the latter is emitted once per terminal pipeline decision in `report()`
+// and only reflects the post-shadow / post-canary override verdict, while
+// ObserveAuthorizer fires per Authorize call at the point the module is
+// actually invoked (i.e. it captures the authorizer-stage outcome before
+// shadow mode or canary enforcement replaces the decision). It catches the
+// top-level authorizer invocation (incl. composites — under their
+// composite name) and the canary authorizer invocation (under the canary
+// module's own name). Children inside a composite authorizer are NOT
+// observed here at this stage — they would require composite-package
+// wiring; falls back to the composite's own outcome until that ships.
+//
+// outcome is one of "allow", "deny", "error", consistent with the strings
+// produced by pkg/module.MetricsAuthorizer.
+func (r *Recorder) ObserveAuthorizer(authorizer, outcome string) {
+	if r == nil {
+		return
+	}
+	r.authorizerTotal.WithLabelValues(authorizer, outcome).Inc()
 }
 
 // ObserveShadowDisagreement records a shadow-mode disagreement: the shadow
