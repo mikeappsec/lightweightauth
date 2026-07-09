@@ -10,6 +10,7 @@ import {
   type Alert,
   type AlertEvent,
 } from "../api/client";
+import { pickTopCritical } from "../lib/alerts-merge";
 import {
   Server,
   HeartPulse,
@@ -61,7 +62,7 @@ export default function Dashboard() {
         const evt: AlertEvent = JSON.parse(e.data);
         if (evt.alert.severity !== "critical") return;
         if (evt.type === "open") {
-          setTopAlert((prev) => pickTop(prev, evt.alert));
+          setTopAlert((prev) => pickTopCritical(prev, evt.alert));
         } else if (evt.type === "resolved") {
           setTopAlert((prev) => (prev?.id === evt.alert.id ? null : prev));
         } else if (evt.type === "acked") {
@@ -74,18 +75,6 @@ export default function Dashboard() {
     };
     onCleanup(() => ws.close());
   });
-
-  // pickTop keeps whichever critical open alert has the earliest
-  // fired_at — first-breach-wins so the banner doesn't flicker
-  // between co-firing criticals.
-  function pickTop(prev: Alert | null, incoming: Alert): Alert | null {
-    if (incoming.state !== "open" && incoming.state !== "acknowledged") {
-      return prev;
-    }
-    if (!prev) return incoming;
-    if (prev.severity !== "critical") return incoming;
-    return +new Date(incoming.fired_at) < +new Date(prev.fired_at) ? incoming : prev;
-  }
 
   const unhealthy = () =>
     health.data ? health.data.totalInstances - health.data.healthyInstances : 0;

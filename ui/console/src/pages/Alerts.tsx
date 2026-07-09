@@ -8,6 +8,7 @@ import {
   type AlertEvent,
   type Severity,
 } from "../api/client";
+import { mergeAlert, replayBuffer } from "../lib/alerts-merge";
 import {
   AlertTriangle,
   ShieldCheck,
@@ -81,31 +82,11 @@ export default function Alerts() {
     });
   }
 
-  // mergeAlert applies an open/ack/resolve transition in-place or
-  // prepends a fresh open alert (the engine may reopen an alert after
-  // an ack-cooldown expires — that re-open is encoded by the engine as
-  // an `EventOpen` for the same alert ID, so we mutate in-place).
-  function mergeAlert(prev: Alert[], incoming: Alert, evt: string): Alert[] {
-    const idx = prev.findIndex((a) => a.id === incoming.id);
-    if (idx === -1) return [incoming, ...prev];
-    const copy = prev.slice();
-    copy[idx] = { ...copy[idx], ...incoming };
-    // Resolved alerts remain in the list so the operator sees the
-    // closure context — they're styled "resolved" via state. The
-    // engine's history ring is the durable store; the UI keeps them
-    // in-session until displaced.
-    if (evt === "resolved") {
-      // Keep at end of chronological list — resolved alerts fall to
-      // the bottom via the sort below on render rather than here.
-    }
-    return copy;
-  }
-
   function resume() {
     setPaused(false);
     if (buffer.length > 0) {
       setAlerts((prev) => {
-        const merged = [...buffer, ...prev];
+        const merged = replayBuffer(prev, buffer);
         buffer = [];
         return merged.slice(0, MAX_ALERTS);
       });
