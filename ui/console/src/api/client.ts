@@ -496,3 +496,134 @@ export function metricsStreamUrl(): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}${BASE}/stream/metrics`;
 }
+
+// --- Alerts (Phase 2 — request/policy-engine triage) ---
+
+// Severity/state string unions mirror the Go
+// internal/controlplane/alerting/types.go constants. Asserted via TS
+// only — the wire stays string-typed so the backend extending the
+// catalog never breaks the client.
+export type Severity = "info" | "warning" | "critical";
+export type AlertState = "open" | "acknowledged" | "resolved";
+export type AlertEventType = "open" | "acked" | "resolved";
+
+export interface MetricValue {
+  value: number;
+  threshold: number;
+  window: number; // seconds (Go time.Duration.ns / 1e9)
+  comparator: ">" | "<" | ">=" | "<=";
+}
+
+export interface ReasonContributor {
+  dimension: string;
+  value: string;
+  share?: number;
+}
+
+export interface ReasonFailure {
+  timestamp: string;
+  method?: string;
+  path?: string;
+  subject_hash?: string;
+  reason?: string;
+  tenant?: string;
+}
+
+export interface ReasonCorrelated {
+  rule: string;
+  value?: string;
+  note?: string;
+}
+
+export interface ReasonPayload {
+  headline: string;
+  top_contributors?: ReasonContributor[];
+  recent_failures?: ReasonFailure[];
+  correlated?: ReasonCorrelated[];
+}
+
+export interface Scope { [key: string]: string }
+
+export interface Alert {
+  id: string;
+  rule: string;
+  severity: Severity;
+  state: AlertState;
+  fired_at: string;
+  resolved_at?: string;
+  acked_at?: string;
+  acked_by?: string;
+  ack_note?: string;
+  snooze_until?: string;
+  scope: Scope;
+  metric?: MetricValue;
+  reason?: ReasonPayload;
+}
+
+export interface ListAlertsResponse {
+  alerts: Alert[];
+  enabled: boolean;
+  degraded: { prometheus: boolean; loki: boolean };
+}
+
+export interface Rule {
+  name: string;
+  description?: string;
+  severity: Severity;
+  source: "prometheus" | "loki";
+  query: string;
+  comparator: ">" | "<" | ">=" | "<=";
+  threshold: number;
+  for: number;      // seconds
+  window: number;   // seconds
+  scope_labels?: string[];
+  enabled: boolean;
+  is_default?: boolean;
+}
+
+export interface AlertEvent {
+  type: AlertEventType;
+  alert: Alert;
+  timestamp: string;
+}
+
+export function listAlerts(filter?: {
+  state?: string;
+  severity?: string;
+  rule?: string;
+}): Promise<ListAlertsResponse> {
+  const params = new URLSearchParams();
+  if (filter?.state) params.set("state", filter.state);
+  if (filter?.severity) params.set("severity", filter.severity);
+  if (filter?.rule) params.set("rule", filter.rule);
+  const qs = params.toString();
+  return fetchJSON<ListAlertsResponse>(`/alerts${qs ? "?" + qs : ""}`);
+}
+
+export function ackAlert(id: string, note?: string): Promise<{ acked: boolean; id: string; by: string }> {
+  return fetchJSON<{ acked: boolean; id: string; by: string }>(
+    `/alerts/${encodeURIComponent(id)}/ack`,
+    { method: "POST", body: JSON.stringify({ note: note ?? "" }) },
+  );
+}
+
+export function listAlertRules(): Promise<Rule[]> {
+  return fetchJSON<Rule[]>("/alerts/rules");
+}
+
+export function putAlertRules(overrides: Rule[]): Promise<{ accepted: boolean; overrides: number }> {
+  return fetchJSON<{ accepted: boolean; overrides: number }>("/alerts/rules", {
+    method: "PUT",
+    body: JSON.stringify({ overrides }),
+  });
+}
+
+export function alertStreamUrl(filter?: { severity?: string; state?: string; rule?: string }): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const params = new URLSearchParams();
+  if (filter?.severity) params.set("severity", filter.severity);
+  if (filter?.state) params.set("state", filter.state);
+  if (filter?.rule) params.set("rule", filter.rule);
+  const qs = params.toString();
+  return `${proto}//${location.host}${BASE}/stream/alerts${qs ? "?" + qs : ""}`;
+}

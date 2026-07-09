@@ -1,7 +1,15 @@
-import { createSignal, createEffect, onCleanup } from "solid-js";
+import { createSignal, createEffect, onCleanup, Show, createMemo } from "solid-js";
 import { createQuery } from "@tanstack/solid-query";
-import { A } from "@solidjs/router";
-import { getHealth, listInstances, metricsStreamUrl, type MetricsSnapshot } from "../api/client";
+import { A, useNavigate } from "@solidjs/router";
+import {
+  getHealth,
+  listInstances,
+  metricsStreamUrl,
+  alertStreamUrl,
+  type MetricsSnapshot,
+  type Alert,
+  type AlertEvent,
+} from "../api/client";
 import {
   Server,
   HeartPulse,
@@ -10,9 +18,12 @@ import {
   ShieldOff,
   Database,
   Zap,
+  XCircle,
+  ArrowRight,
 } from "lucide-solid";
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const health = createQuery(() => ({
     queryKey: ["health"],
     queryFn: () => getHealth(),
@@ -38,6 +49,44 @@ export default function Dashboard() {
     onCleanup(() => ws.close());
   });
 
+  // Request-Health banner — listens to the alert stream and surfaces
+  // the single top critical open alert so the operator sees "why
+  // requests aren't responding" before navigating to /alerts.
+  const [topAlert, setTopAlert] = createSignal<Alert | null>(null);
+
+  createEffect(() => {
+    const ws = new WebSocket(alertStreamUrl({ severity: "critical" }));
+    ws.onmessage = (e) => {
+      try {
+        const evt: AlertEvent = JSON.parse(e.data);
+        if (evt.alert.severity !== "critical") return;
+        if (evt.type === "open") {
+          setTopAlert((prev) => pickTop(prev, evt.alert));
+        } else if (evt.type === "resolved") {
+          setTopAlert((prev) => (prev?.id === evt.alert.id ? null : prev));
+        } else if (evt.type === "acked") {
+          // An acked critical alert stays surfaced — the banner reads
+          // "acked by alice · investigating" so the operator at the
+          // Dashboard knows someone is on it.
+          setTopAlert((prev) => (prev?.id === evt.alert.id ? evt.alert : prev));
+        }
+      } catch { /* ignore */ }
+    };
+    onCleanup(() => ws.close());
+  });
+
+  // pickTop keeps whichever critical open alert has the earliest
+  // fired_at — first-breach-wins so the banner doesn't flicker
+  // between co-firing criticals.
+  function pickTop(prev: Alert | null, incoming: Alert): Alert | null {
+    if (incoming.state !== "open" && incoming.state !== "acknowledged") {
+      return prev;
+    }
+    if (!prev) return incoming;
+    if (prev.severity !== "critical") return incoming;
+    return +new Date(incoming.fired_at) < +new Date(prev.fired_at) ? incoming : prev;
+  }
+
   const unhealthy = () =>
     health.data ? health.data.totalInstances - health.data.healthyInstances : 0;
 
@@ -48,6 +97,34 @@ export default function Dashboard() {
         <h1 class="text-2xl font-bold text-gray-900">Dashboard</h1>
         <p class="text-sm text-gray-500 mt-1">Real-time overview of your LightweightAuth deployment</p>
       </div>
+
+      {/* Request-Health banner — surfaces top critical open alert. */}
+      <Show when={topAlert() && topAlert()!.state !== "resolved"}>
+        <button
+          class="group w-full mb-6 flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-5 py-3.5 text-left hover:bg-red-100/70 transition-colors"
+          onClick={() => navigate("/alerts")}
+          title="Open the Alerts panel for the full triage reason"
+        >
+          <XCircle size={20} class="text-red-500 shrink-0" />
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-sm font-semibold text-red-700 uppercase tracking-wide">
+                Request Health
+              </span>
+              <span class="text-xs text-red-500 font-mono">{topAlert()!.rule}</span>
+            </div>
+            <p class="text-sm text-red-800 mt-0.5 truncate">
+              {topAlert()!.reason?.headline ?? `${topAlert()!.rule} firing in ${topAlert()!.scope["cluster"] ?? "cluster"}`}
+            </p>
+          </div>
+          <Show when={topAlert()!.state === "acknowledged"}>
+            <span class="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full shrink-0">
+              acked by {topAlert()!.acked_by ?? "operator"}
+            </span>
+          </Show>
+          <ArrowRight size={16} class="text-red-400 group-hover:text-red-600 transition-colors shrink-0" />
+        </button>
+      </Show>
 
       {/* Primary KPI row */}
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
