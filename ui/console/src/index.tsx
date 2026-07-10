@@ -16,6 +16,7 @@ const ConfigEditor = lazy(() => import("./pages/ConfigEditor"));
 const Routes = lazy(() => import("./pages/Routes"));
 const MeshGraph = lazy(() => import("./pages/MeshGraph"));
 const Decisions = lazy(() => import("./pages/Decisions"));
+const Alerts = lazy(() => import("./pages/Alerts"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,6 +44,7 @@ render(
           <Route path="/routes" component={Routes} />
           <Route path="/mesh" component={MeshGraph} />
           <Route path="/decisions" component={Decisions} />
+          <Route path="/alerts" component={Alerts} />
         </Router>
       </AuthGate>
     </QueryClientProvider>

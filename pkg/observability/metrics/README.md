@@ -7,55 +7,71 @@ Prometheus metrics recorder for the lwauth decision pipeline.
 ```go
 import (
     "github.com/mikeappsec/lightweightauth/pkg/observability/metrics"
-    "github.com/prometheus/client_golang/prometheus"
 )
 
-reg := prometheus.NewRegistry()
-rec := metrics.New(reg)
+// Construct an isolated Recorder (owns its own *prometheus.Registry).
+// In production, call metrics.SetDefault(...) from main() before
+// invoking lwauthd.Run; the pipeline reads metrics.Default() on the
+// hot path.
+rec := metrics.New()
 
-// Record a decision
-rec.ObserveDecision("allow", "jwt", time.Since(start))
+// Record a terminal decision (one per Evaluate call).
+rec.ObserveDecision("allow", "rbac", "acme", 12*time.Millisecond)
 
-// Record an identifier result
-rec.ObserveIdentifier("jwt", true, time.Since(start))
+// Record an identifier module invocation.
+rec.ObserveIdentifier("jwt", "match")
 
-// Record shadow-mode evaluation
-rec.ObserveShadow("new-policy", "deny", time.Since(start))
+// Record an authorizer module invocation (per-Authorize call,
+// incl. canary candidates). Children inside a `composite`
+// authorizer are NOT individually observed at this stage  E they
+// surface under the composite's own outcome unless the composite
+// package itself wires the decorator (planned follow-on).
+rec.ObserveAuthorizer("rbac", "deny")
 
-// Record canary split
-rec.ObserveCanary("canary-v2", "allow", 0.1)
-
-// Record revocation check
-rec.ObserveRevocation("hit", time.Since(start))
+// Shadow / canary / revocation outcomes.
+rec.ObserveShadowDisagreement("opa-v2", "acme")
+rec.ObserveCanaryAgreement("opa-v2", "acme", "match")
+rec.ObserveRevocationCheck("acme", "revoked")
+rec.ObserveCacheStaleServed("acme", "allow")
+rec.ObserveCacheDistSF("won")
+rec.ObserveRateLimitDenied("acme")
 ```
 
 ## Metrics
 
+All histograms use seconds; all counters are monotonic.
+
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `lwauth_decisions_total` | Counter | `result`, `identifier` | Total auth decisions |
-| `lwauth_decision_duration_seconds` | Histogram | `result`, `identifier` | Decision latency |
-| `lwauth_identifier_total` | Counter | `type`, `success` | Identifier evaluations |
-| `lwauth_identifier_duration_seconds` | Histogram | `type` | Identifier latency |
-| `lwauth_shadow_decisions_total` | Counter | `policy`, `result` | Shadow mode evaluations |
-| `lwauth_canary_decisions_total` | Counter | `canary`, `result` | Canary split decisions |
-| `lwauth_revocation_checks_total` | Counter | `result` | Revocation lookups (hit/miss) |
-| `lwauth_revocation_duration_seconds` | Histogram | `result` | Revocation check latency |
-| `lwauth_key_verify_total` | Counter | `kid`, `result` | Key verification attempts |
-| `lwauth_key_state` | Gauge | `kid`, `state` | Current key lifecycle state |
-| `lwauth_config_reloads_total` | Counter | `result` | Config reload attempts |
+| `lwauth_decisions_total` | Counter | `outcome`, `authorizer`, `tenant` | Terminal pipeline decisions (allow / deny / error) |
+| `lwauth_decision_latency_seconds` | Histogram | `outcome`, `authorizer`, `tenant` | End-to-end pipeline.Evaluate latency |
+| `lwauth_identifier_total` | Counter | `identifier`, `outcome` | Identifier module outcomes (match / no_match / error) |
+| `lwauth_authorizer_total` | Counter | `authorizer`, `outcome` | Authorizer module invocation outcomes (allow / deny / error) |
+| `lwauth_shadow_disagreement_total` | Counter | `policy_version`, `tenant` | Shadow-mode disagreements (D2) |
+| `lwauth_canary_agreement_total` | Counter | `policy_version`, `tenant`, `agreement` | Canary vs production verdict comparisons (D3) |
+| `lwauth_revocation_checks_total` | Counter | `tenant`, `result` | Revocation lookups (revoked / not_revoked / error) (E2) |
+| `lwauth_cache_stale_served_total` | Counter | `tenant`, `decision` | Stale cache entries served during upstream outage (E3) |
+| `lwauth_cache_distsf_total` | Counter | `outcome` | Cross-replica distributed singleflight outcomes (E4) |
+| `lwauth_ratelimit_denied_total` | Counter | `tenant` | Per-tenant rate-limit denials (E6) |
+| `lwauth_cache_hits_total` | CounterFunc | `cache` | Cache hits by named cache |
+| `lwauth_cache_misses_total` | CounterFunc | `cache` | Cache misses by named cache |
+| `lwauth_cache_evictions_total` | CounterFunc | `cache` | Cache evictions by named cache |
+| `lwauth_cache_layer_hits_total` | CounterFunc | `cache`, `layer` | Per-layer (`l1`/`l2`) cache hits |
+| `lwauth_cache_layer_misses_total` | CounterFunc | `cache`, `layer` | Per-layer cache misses |
+| `lwauth_fips_enabled` | Gauge |  E | 1 = binary uses a FIPS 140-3 validated crypto module, 0 otherwise |
+| `lwauth_build_info` | Gauge | `version`, `commit`, `go_version`, `fips` | Constant 1 with build attributes |
 
 ## Features
 
 - Nil-safe: a nil `*Recorder` is valid (all methods are no-ops)
-- Standard Prometheus registration via `prometheus.Registerer`
-- Histogram buckets tuned for auth latency (sub-millisecond to 10s)
-- Per-identifier and per-policy cardinality for granular SLO tracking
-- Zero allocation on the hot path (pre-allocated label sets)
+- Process-wide singleton via `Default()` / `SetDefault(...)`
+- Private `*prometheus.Registry` per Recorder so tests can assert on a clean metric surface
+- Histogram buckets tuned for auth latency (100µs … ~3.3s, 16 exponential buckets)
+- Per-identifier and per-authorizer cardinality for granular SLO and health tracking
 
 ## How It Works
 
-1. `New(reg)` registers all metric descriptors with the Prometheus registry.
-2. Pipeline stages call the appropriate `Observe*` method after each operation.
-3. Prometheus scraper hits `/metrics` endpoint to collect counters and histograms.
-4. A nil recorder is safe to pass anywhere — all method calls become no-ops.
+1. `New()` registers all metric descriptors with a fresh private Prometheus registry.
+2. The pipeline (`internal/pipeline/engine.go`) and admin handlers call the appropriate `Observe*` method after each operation via `metrics.Default()` on the hot path.
+3. The `/metrics` HTTP endpoint (mounted at `internal/server/http.go`) exposes the Prometheus text-format scrape surface.
+4. A nil recorder is safe to pass anywhere  E the process-wide default is always lazily initialised and never nil.

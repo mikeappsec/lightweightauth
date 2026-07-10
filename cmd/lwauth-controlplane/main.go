@@ -39,6 +39,7 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 
 	cpapi "github.com/mikeappsec/lightweightauth/internal/controlplane/api"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/alerting"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/auth"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
@@ -84,6 +85,21 @@ func main() {
 
 	// Streaming hub.
 	streamHub := streaming.NewHub(registry, aggregator)
+	streamHub.AllowedOrigin = cfg.ConsoleOrigin
+
+	// Alerting engine (Phase 2). Pulls rule evaluations from
+	// Prometheus and Loki when configured; degrades to a readonly
+	// catalog with running rule definitions but no firings when the
+	// backends are unset. Operators wire PROMETHEUS_URL /
+	// LOKI_URL via the Helm chart's alerting block.
+	promClient := &alerting.PromClient{BaseURL: cfg.PrometheusURL}
+	lokiClient := &alerting.LokiClient{BaseURL: cfg.LokiURL}
+	alertSink := alerting.NewMultiSink(
+		alerting.NewAuditSink(),
+		alerting.NewWebhookSink(cfg.AlertWebhookURL),
+	)
+	alertEngine := alerting.NewEngine(cfg.ClusterName, promClient, lokiClient, alertSink, nil)
+	rulesLoader := alerting.NewConfigMapLoader(kubeClient, cfg.AlertRulesNamespace, alertEngine)
 
 	// Decision collector.
 	decisionCollector := streaming.NewDecisionCollector(registry, streamHub)
@@ -96,8 +112,12 @@ func main() {
 	// Health checker.
 	healthChecker := discovery.NewHealthChecker(registry)
 
-	// REST API server.
+	// REST API server. WithAlerting wires the Phase 2 alert endpoints;
+	// local-dev pipelines and units run without it (the api package's
+	// methods nil-check the engine).
 	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore, aggregator, streamHub, kubeClient, cfg.DefaultImage)
+	apiServer = apiServer.WithAlerting(alertEngine, rulesLoader)
+	apiServer.AllowedOrigin = cfg.ConsoleOrigin
 
 	// Wire the HTTP mux: API + embedded UI.
 	mux := http.NewServeMux()
@@ -174,6 +194,16 @@ func main() {
 	// Start decision collector.
 	go decisionCollector.Run(ctx)
 
+	// Start alerting engine (Phase 2). Polls Prometheus/Loki every
+	// 15s, evaluates the active rule catalog, transitions alerts,
+	// fans out to sinks + WS subscribers. Degraded backends no-op
+	// silently — the loop runs unconditionally so config becomes
+	// active the moment an operator wires PROMETHEUS_URL.
+	go alertEngine.Run(ctx)
+	// ConfigMap loader — polls lwauth-alerting-rules every 30s and
+	// applies merge(defaults, overrides) to the engine live.
+	go rulesLoader.Run(ctx)
+
 	// Start HTTP API server.
 	go func() {
 		slog.Info("starting API server", "addr", cfg.APIAddr)
@@ -206,6 +236,19 @@ type config struct {
 	AuthPasswordHash string
 	AuthCookieSecure bool
 	AuthSessionTTL   time.Duration
+
+	// Alerting (Phase 2). Empty URLs degrade silently — the rule
+	// catalog still runs but no rule fires. The ConfigMap loader
+	// reads overrides from AlertRulesNamespace (defaults to the CP
+	// pod's namespace or "default" in local-dev).
+	PrometheusURL     string
+	LokiURL           string
+	AlertWebhookURL   string
+	AlertRulesNamespace string
+
+	// ConsoleOrigin is the trusted origin for WebSocket upgrades
+	// (e.g. "https://lwauth.example.com"). Empty = dev mode (any origin).
+	ConsoleOrigin string
 }
 
 func loadConfig() config {
@@ -235,6 +278,14 @@ func loadConfig() config {
 		// Secure cookie by default; set CP_AUTH_COOKIE_SECURE=false for local HTTP.
 		AuthCookieSecure: os.Getenv("CP_AUTH_COOKIE_SECURE") != "false",
 		AuthSessionTTL:   ttl,
+
+		PrometheusURL:       envOrDefault("PROMETHEUS_URL", ""),
+		LokiURL:            envOrDefault("LOKI_URL", ""),
+		AlertWebhookURL:    envOrDefault("ALERT_WEBHOOK_URL", ""),
+		// In-cluster the CP pod runs in the project's lwauth-system
+		// namespace; default to that. Local-dev falls back to "default".
+		AlertRulesNamespace: envOrDefault("ALERT_RULES_NAMESPACE", "default"),
+		ConsoleOrigin:       envOrDefault("CP_CONSOLE_ORIGIN", ""),
 	}
 }
 

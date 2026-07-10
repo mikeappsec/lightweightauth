@@ -18,6 +18,7 @@ import (
 
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/metrics"
+	"github.com/mikeappsec/lightweightauth/pkg/observability/audit"
 )
 
 // Decision represents a single authorization decision from an instance.
@@ -45,6 +46,12 @@ type MetricsSnapshot struct {
 type Hub struct {
 	Registry   *discovery.Registry
 	Aggregator *metrics.Aggregator
+
+	// AllowedOrigin restricts WebSocket upgrades to a single trusted
+	// origin (e.g. "https://lwauth.example.com"). Empty means any
+	// origin is accepted — safe for local development where the SPA
+	// and API run on different ports.
+	AllowedOrigin string
 
 	mu              sync.RWMutex
 	decisionClients map[*wsClient]bool
@@ -89,11 +96,18 @@ func (h *Hub) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// wsAcceptOpts returns WebSocket accept options that enforce the
+// hub's AllowedOrigin when set, or skip origin checks in dev mode.
+func (h *Hub) wsAcceptOpts() *websocket.AcceptOptions {
+	if h.AllowedOrigin != "" {
+		return &websocket.AcceptOptions{OriginPatterns: []string{h.AllowedOrigin}}
+	}
+	return &websocket.AcceptOptions{InsecureSkipVerify: true}
+}
+
 // HandleDecisionStream is the HTTP handler for WS /v1/controlplane/stream/decisions.
 func (h *Hub) HandleDecisionStream(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // Allow any origin for dev.
-	})
+	conn, err := websocket.Accept(w, r, h.wsAcceptOpts())
 	if err != nil {
 		return
 	}
@@ -130,9 +144,7 @@ func (h *Hub) HandleDecisionStream(w http.ResponseWriter, r *http.Request) {
 
 // HandleMetricsStream is the HTTP handler for WS /v1/controlplane/stream/metrics.
 func (h *Hub) HandleMetricsStream(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, h.wsAcceptOpts())
 	if err != nil {
 		return
 	}
@@ -289,16 +301,31 @@ func (dc *DecisionCollector) collectFromInstance(ctx context.Context, inst *disc
 		return
 	}
 
-	var decisions []Decision
-	if err := json.NewDecoder(resp.Body).Decode(&decisions); err != nil {
+	// The data plane returns its canonical audit.Event schema (json
+	// tags: ts, decision, latency_ms, …). The control-plane Decision
+	// struct uses different json tags (timestamp, verdict, …) so the
+	// events are decoded as audit.Event and mapped locally — keeping
+	// the WS stream's on-wire Decision shape unchanged for clients.
+	var events []audit.Event
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
 		return
 	}
 
-	for i := range decisions {
-		decisions[i].Instance = inst.Name
-		decisions[i].Cluster = inst.Cluster
+	for _, e := range events {
+		dec := Decision{
+			Timestamp:  e.Timestamp,
+			Instance:   inst.Name,
+			Cluster:    inst.Cluster,
+			Subject:    e.Subject,
+			Path:       e.Path,
+			Method:     e.Method,
+			Verdict:    e.Decision,
+			Reason:     e.DenyReason,
+			Tenant:     e.Tenant,
+			DurationMs: e.LatencyMs,
+		}
 		select {
-		case dc.Hub.Decisions <- decisions[i]:
+		case dc.Hub.Decisions <- dec:
 		default:
 			// Drop if buffer full.
 		}

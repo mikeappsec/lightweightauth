@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 	"unicode"
 
@@ -116,6 +117,11 @@ func NewAdminMux(mw *Middleware, deps *AdminDeps) http.Handler {
 	// GET /v1/admin/audit — audit log query (stub for D4).
 	mux.Handle("/v1/admin/audit", rl(mw.Require(VerbReadAudit,
 		http.HandlerFunc(handleAuditQuery))))
+
+	// GET /v1/admin/audit/recent — bounded recent-decisions snapshot
+	// used by the control-plane DecisionCollector and the alerting reason step.
+	mux.Handle("/v1/admin/audit/recent", rl(mw.Require(VerbReadAudit,
+		http.HandlerFunc(handleAuditRecent))))
 
 	// POST /v1/admin/explain — decision explainability (G6 — EXPLAIN-API-1).
 	mux.Handle("/v1/admin/explain", rl(mw.Require(VerbExplain,
@@ -248,7 +254,7 @@ func makeInvalidateHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Requ
 
 		// TC3: Formal audit event for cache invalidation (consistent with revoke).
 		adminID := IdentityFromContext(r.Context())
-		audit.Default().Record(r.Context(), &audit.Event{
+		auditEvent := &audit.Event{
 			Timestamp:      time.Now(),
 			Tenant:         req.Tenant,
 			Subject:        req.Subject,
@@ -257,7 +263,9 @@ func makeInvalidateHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Requ
 			DenyReason:     "scope=" + req.Scope,
 			Method:         r.Method,
 			Path:           r.URL.Path,
-		})
+		}
+		audit.Default().Record(r.Context(), auditEvent)
+		audit.DefaultRecentRing().Record(r.Context(), auditEvent)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -382,7 +390,7 @@ func makeRevokeHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Request)
 
 		// REV6: Emit audit event for every revocation action.
 		adminID := IdentityFromContext(r.Context())
-		audit.Default().Record(r.Context(), &audit.Event{
+		auditEvent := &audit.Event{
 			Timestamp:      time.Now(),
 			Tenant:         req.Tenant,
 			Subject:        req.Subject,
@@ -391,7 +399,9 @@ func makeRevokeHandler(deps *AdminDeps) func(http.ResponseWriter, *http.Request)
 			DenyReason:     req.Reason,
 			Method:         r.Method,
 			Path:           r.URL.Path,
-		})
+		}
+		audit.Default().Record(r.Context(), auditEvent)
+		audit.DefaultRecentRing().Record(r.Context(), auditEvent)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -468,17 +478,108 @@ func isHexOrBase64(s string) bool {
 	return true
 }
 
-// handleAuditQuery serves audit log queries.
-// Full implementation lands in D4 (ENT-AUDIT-1).
+// maxRecentLimit caps the page size callers can request from audit
+// query / recent endpoints to prevent abusive read patterns.
+const maxRecentLimit = 1024
+
+// defaultRecentLimit is returned when callers omit ?limit.
+const defaultRecentLimit = 100
+
+// parseRecentLimit validates and clamps the ?limit query parameter.
+func parseRecentLimit(r *http.Request) int {
+	limit := defaultRecentLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return defaultRecentLimit
+		}
+		if n > maxRecentLimit {
+			n = maxRecentLimit
+		}
+		limit = n
+	}
+	return limit
+}
+
+// validateRecentField enforces printable-ASCII + length constraints on
+// audit-query filter inputs to prevent storage/regex abuse. Same
+// intern eine as the revoke handler (TC6 / REV1).
+func validateRecentField(s string, maxint int) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) > maxint {
+		return ""
+	}
+	if !isPrintableASCII(s) {
+		return ""
+	}
+	return s
+}
+
+// handleAuditQuery serves audit log queries against the in-memory
+// RecentRing only. Durable query (Loki/SIEM) is the operator's
+// responsibility via audit sink configuration — this endpoint exists
+// for fast operational triage without leaving the admin API.
 func handleAuditQuery(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAdminError(w, http.StatusMethodNotAllowed, "GET only")
 		return
 	}
-
-	// TODO(ENT-AUDIT-1): query audit sink backend.
+	ring := audit.DefaultRecentRing()
+	filters := buildAuditFilters(r)
+	limit := parseRecentLimit(r)
+	events := ring.Snapshot(limit, filters...)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"note": "audit query not yet implemented (Tier D4)",
+		"events": events,
+		"count":  len(events),
+		"scope":  "in_memory_ring",
 	})
+}
+
+// handleAuditRecent returns the most recent redacted audit events for
+// control-plane consumption (DecisionCollector / alert enrichment).
+// Same shape as /v1/admin/audit but does not surface the "scope" hint
+// — useful as a trickle feed because callers know they are reading the
+// short-lived in-memory ring only.
+func handleAuditRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAdminError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	ring := audit.DefaultRecentRing()
+	filters := buildAuditFilters(r)
+	limit := parseRecentLimit(r)
+	events := ring.Snapshot(limit, filters...)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(events)
+}
+
+// buildAuditFilters translates query-string parameters into
+// audit.RecentFilter predicates. All inputs are validated for
+// printable-ASCII + length to prevent character-set abuse. Unknown
+// filters are simply ignored (fail-open semantics — the caller still
+// receives some events).
+func buildAuditFilters(r *http.Request) []audit.RecentFilter {
+	var filters []audit.RecentFilter
+	q := r.URL.Query()
+	if t := validateRecentField(q.Get("tenant"), maxTenantLength); t != "" {
+		filters = append(filters, audit.FilterByTenant(t))
+	}
+	if v := validateRecentField(q.Get("verdict"), 16); v != "" {
+		filters = append(filters, audit.FilterByVerdict(v))
+	}
+	if a := validateRecentField(q.Get("authorizer"), 128); a != "" {
+		filters = append(filters, audit.FilterByAuthorizer(a))
+	}
+	// subject_hash is expected to already be HMAC-hex; the caller
+	// computes it from the same per-ring seed (or compares against
+	// row previews returned from /v1/admin/audit). 64 hex chars is
+	// HMAC-SHA-256 output; accept anything printable-ASCII within
+	// that bound — this is a tolerant read, not identity binding.
+	if h := validateRecentField(q.Get("subject_hash"), 128); h != "" {
+		filters = append(filters, audit.FilterBySubjectHash(h))
+	}
+	return filters
 }

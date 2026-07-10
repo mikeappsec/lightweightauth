@@ -18,6 +18,9 @@ func TestRecorder_DecisionAndIdentifier(t *testing.T) {
 	r.ObserveDecision("deny", "rbac", "acme", 5*time.Millisecond)
 	r.ObserveIdentifier("jwt", "match")
 	r.ObserveIdentifier("jwt", "no_match")
+	r.ObserveAuthorizer("rbac", "allow")
+	r.ObserveAuthorizer("rbac", "deny")
+	r.ObserveAuthorizer("opa", "error")
 
 	body := scrape(t, r)
 	for _, want := range []string{
@@ -25,6 +28,9 @@ func TestRecorder_DecisionAndIdentifier(t *testing.T) {
 		`lwauth_decisions_total{authorizer="rbac",outcome="deny",tenant="acme"} 1`,
 		`lwauth_identifier_total{identifier="jwt",outcome="match"} 1`,
 		`lwauth_identifier_total{identifier="jwt",outcome="no_match"} 1`,
+		`lwauth_authorizer_total{authorizer="rbac",outcome="allow"} 1`,
+		`lwauth_authorizer_total{authorizer="rbac",outcome="deny"} 1`,
+		`lwauth_authorizer_total{authorizer="opa",outcome="error"} 1`,
 		`lwauth_decision_latency_seconds_bucket`,
 	} {
 		if !strings.Contains(body, want) {
@@ -76,6 +82,7 @@ func TestNilRecorderTolerated(t *testing.T) {
 	var r *Recorder
 	r.ObserveDecision("allow", "rbac", "", time.Millisecond)
 	r.ObserveIdentifier("jwt", "match")
+	r.ObserveAuthorizer("rbac", "allow")
 	r.RegisterCacheStats("x", func() uint64 { return 0 }, func() uint64 { return 0 }, func() uint64 { return 0 })
 }
 

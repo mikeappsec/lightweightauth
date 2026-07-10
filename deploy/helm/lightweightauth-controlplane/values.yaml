@@ -18,6 +18,25 @@ service:
   port: 8443
   nodePort: ""  # only used when type is NodePort
 
+# Ingress exposes the control plane outside the cluster. Disabled by
+# default — operators enable by setting `ingress.enabled: true` and
+# populating the `hosts` list. Template requires the `ingress` block
+# to exist (even when disabled) so this section is preserved as a
+# stub rather than relying on nil-evaluation of `.Values.ingress`.
+ingress:
+  enabled: false
+  ingressClassName: ""
+  annotations: {}
+  hosts: []
+    # - host: console.example.com
+    #   paths:
+    #     - path: /
+    #       pathType: Prefix
+  tls: []
+    # - secretName: console-tls
+    #   hosts:
+    #     - console.example.com
+
 resources:
   requests:
     cpu: 100m
@@ -32,6 +51,11 @@ leaderElection:
 clusterName: "local"
 defaultImage: "ghcr.io/mikeappsec/lightweightauth:latest"
 
+# consoleOrigin restricts WebSocket upgrades to a single trusted origin.
+# Set to the full scheme+host of the UI (e.g. https://lwauth.example.com).
+# Empty string disables the check (dev mode — any origin accepted).
+consoleOrigin: ""
+
 # Additional clusters to watch (Phase 2).
 # clusters:
 #   - name: prod-us-east
@@ -40,3 +64,23 @@ defaultImage: "ghcr.io/mikeappsec/lightweightauth:latest"
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Alerting (Phase 2): the control-plane engine pulls rule evaluations
+# from Prometheus and/or Loki and surfaces triage answers in the UI.
+# All URLs are optional — unset backends degrade silently to a
+# readonly rule catalog (no firings, dashboard banner reports
+# "degraded"). The rules ConfigMap ships as part of this chart with
+# the 10 locked defaults; operators commit JSON overrides under the
+# `rules.json` key to customize thresholds, severities, or disable a
+# built-in.
+alerting:
+  enabled: true
+  prometheusURL: ""      # e.g. http://prometheus-server.monitoring.svc.cluster.local:9090
+  lokiURL: ""             # e.g. http://loki.monitoring.svc.cluster.local:3100
+  webhookURL: ""          # Slack/PagerDuty-compatible JSON webhook
+  rulesNamespace: ""      # defaults to the release namespace
+  # rulesOverride is serialised to the lwauth-alerting-rules
+  # ConfigMap as rules.json on chart install/upgrade. Defaults to an
+  # empty array — operators edit the ConfigMap in-place afterwards
+  # via kubectl or commit changes via GitOps to this values block.
+  rulesOverride: []

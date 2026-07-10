@@ -37,6 +37,20 @@ spec:
               value: {{ .Values.defaultImage | quote }}
             - name: CP_LEADER_ELECT
               value: {{ .Values.leaderElection.enabled | quote }}
+            {{- if .Values.alerting.enabled }}
+            - name: PROMETHEUS_URL
+              value: {{ .Values.alerting.prometheusURL | quote }}
+            - name: LOKI_URL
+              value: {{ .Values.alerting.lokiURL | quote }}
+            - name: ALERT_WEBHOOK_URL
+              value: {{ .Values.alerting.webhookURL | quote }}
+            - name: ALERT_RULES_NAMESPACE
+              value: {{ .Values.alerting.rulesNamespace | default .Release.Namespace | quote }}
+            {{- end }}
+            {{- if .Values.consoleOrigin }}
+            - name: CP_CONSOLE_ORIGIN
+              value: {{ .Values.consoleOrigin | quote }}
+            {{- end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

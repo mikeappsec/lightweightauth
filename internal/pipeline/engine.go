@@ -267,6 +267,7 @@ func (e *Engine) Evaluate(ctx context.Context, r *module.Request) (*module.Decis
 	var canaryAgreement string
 	if e.canary != nil && e.shouldCanary(r, id) {
 		canaryDec, canaryErr := e.canary.Authorize(ctx, r, id)
+		observeAuthzOutcome(e.canary.Name(), canaryDec, canaryErr)
 		canaryAgreement = e.classifyAgreement(dec, evalErr, canaryDec, canaryErr)
 		metrics.Default().ObserveCanaryAgreement(e.policyVersion, r.TenantID, canaryAgreement)
 		// If enforce mode, swap canary verdict in as production.
@@ -462,7 +463,7 @@ func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Ident
 		denyReason = evalErr.Error()
 	}
 
-	audit.Default().Record(ctx, &audit.Event{
+	auditEvent := &audit.Event{
 		Timestamp:          time.Now().UTC(),
 		Tenant:             r.TenantID,
 		Subject:            subject,
@@ -480,7 +481,11 @@ func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Ident
 		PolicyVersion:      e.policyVersion,
 		ShadowDisagreement: shadowDisagreement,
 		CanaryAgreement:    canaryAgreement,
-	})
+	}
+	audit.Default().Record(ctx, auditEvent)
+	// Side-band capture for /v1/admin/audit/recent — the ring hashes the
+	// Subject field on write so the in-memory buffer never retains PII.
+	audit.DefaultRecentRing().Record(ctx, auditEvent)
 
 	span.SetAttributes(
 		attribute.String("lwauth.decision", outcome),
@@ -497,13 +502,32 @@ func (e *Engine) report(ctx context.Context, r *module.Request, id *module.Ident
 func (e *Engine) runAuthorize(ctx context.Context, r *module.Request, id *module.Identity) (*module.Decision, bool, error) {
 	if e.decisionCache == nil {
 		dec, err := e.authorizer.Authorize(ctx, r, id)
+		observeAuthzOutcome(e.authorizer.Name(), dec, err)
 		return dec, false, err
 	}
 	key := e.decisionCache.Key(r, id)
 	tags := e.deriveCacheTags(r, id)
-	return e.decisionCache.Do(ctx, key, tags, func(sfCtx context.Context) (*module.Decision, error) {
-		return e.authorizer.Authorize(sfCtx, r, id)
+	dec, hit, err := e.decisionCache.Do(ctx, key, tags, func(sfCtx context.Context) (*module.Decision, error) {
+		dec, err := e.authorizer.Authorize(sfCtx, r, id)
+		observeAuthzOutcome(e.authorizer.Name(), dec, err)
+		return dec, err
 	})
+	return dec, hit, err
+}
+
+// observeAuthzOutcome records one authorizer invocation outcome to
+// lwauth_authorizer_total{authorizer,outcome}. Mirrors the outcome
+// derivation used by pkg/module.MetricsAuthorizer so the metric line
+// emitted by the engine stays consistent with the decorator path:
+// errors > deny > allow. Safe with a nil Decision.
+func observeAuthzOutcome(name string, dec *module.Decision, err error) {
+	outcome := "allow"
+	if err != nil {
+		outcome = "error"
+	} else if dec != nil && !dec.Allow {
+		outcome = "deny"
+	}
+	metrics.Default().ObserveAuthorizer(name, outcome)
 }
 
 // deriveCacheTags produces the tag set for a cache entry. Tags enable
