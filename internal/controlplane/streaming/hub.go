@@ -47,6 +47,12 @@ type Hub struct {
 	Registry   *discovery.Registry
 	Aggregator *metrics.Aggregator
 
+	// AllowedOrigin restricts WebSocket upgrades to a single trusted
+	// origin (e.g. "https://lwauth.example.com"). Empty means any
+	// origin is accepted — safe for local development where the SPA
+	// and API run on different ports.
+	AllowedOrigin string
+
 	mu              sync.RWMutex
 	decisionClients map[*wsClient]bool
 	metricsClients  map[*wsClient]bool
@@ -90,11 +96,18 @@ func (h *Hub) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// wsAcceptOpts returns WebSocket accept options that enforce the
+// hub's AllowedOrigin when set, or skip origin checks in dev mode.
+func (h *Hub) wsAcceptOpts() *websocket.AcceptOptions {
+	if h.AllowedOrigin != "" {
+		return &websocket.AcceptOptions{OriginPatterns: []string{h.AllowedOrigin}}
+	}
+	return &websocket.AcceptOptions{InsecureSkipVerify: true}
+}
+
 // HandleDecisionStream is the HTTP handler for WS /v1/controlplane/stream/decisions.
 func (h *Hub) HandleDecisionStream(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // Allow any origin for dev.
-	})
+	conn, err := websocket.Accept(w, r, h.wsAcceptOpts())
 	if err != nil {
 		return
 	}
@@ -131,9 +144,7 @@ func (h *Hub) HandleDecisionStream(w http.ResponseWriter, r *http.Request) {
 
 // HandleMetricsStream is the HTTP handler for WS /v1/controlplane/stream/metrics.
 func (h *Hub) HandleMetricsStream(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, h.wsAcceptOpts())
 	if err != nil {
 		return
 	}

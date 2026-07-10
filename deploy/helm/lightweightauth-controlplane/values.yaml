@@ -51,6 +51,11 @@ leaderElection:
 clusterName: "local"
 defaultImage: "ghcr.io/mikeappsec/lightweightauth:latest"
 
+# consoleOrigin restricts WebSocket upgrades to a single trusted origin.
+# Set to the full scheme+host of the UI (e.g. https://lwauth.example.com).
+# Empty string disables the check (dev mode — any origin accepted).
+consoleOrigin: ""
+
 # Additional clusters to watch (Phase 2).
 # clusters:
 #   - name: prod-us-east

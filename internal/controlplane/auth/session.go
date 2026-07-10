@@ -14,6 +14,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -28,6 +29,18 @@ import (
 
 // SessionCookieName is the name of the cookie carrying the session token.
 const SessionCookieName = "lwauth_session"
+
+// ctxSubjectKey is the private context key for the authenticated subject.
+type ctxSubjectKey struct{}
+
+// ContextSubject returns the authenticated operator name injected by
+// Middleware, or "" when authentication is disabled or the request is
+// unauthenticated. Callers outside this package use this instead of
+// reading headers so the identity always comes from the validated session.
+func ContextSubject(r *http.Request) string {
+	v, _ := r.Context().Value(ctxSubjectKey{}).(string)
+	return v
+}
 
 // Config configures the login manager.
 type Config struct {
@@ -189,11 +202,12 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if m.validate(r) == "" {
+		subject := m.validate(r)
+		if subject == "" {
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxSubjectKey{}, subject)))
 	})
 }
 

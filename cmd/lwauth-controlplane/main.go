@@ -85,6 +85,7 @@ func main() {
 
 	// Streaming hub.
 	streamHub := streaming.NewHub(registry, aggregator)
+	streamHub.AllowedOrigin = cfg.ConsoleOrigin
 
 	// Alerting engine (Phase 2). Pulls rule evaluations from
 	// Prometheus and Loki when configured; degrades to a readonly
@@ -116,6 +117,7 @@ func main() {
 	// methods nil-check the engine).
 	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore, aggregator, streamHub, kubeClient, cfg.DefaultImage)
 	apiServer = apiServer.WithAlerting(alertEngine, rulesLoader)
+	apiServer.AllowedOrigin = cfg.ConsoleOrigin
 
 	// Wire the HTTP mux: API + embedded UI.
 	mux := http.NewServeMux()
@@ -243,6 +245,10 @@ type config struct {
 	LokiURL           string
 	AlertWebhookURL   string
 	AlertRulesNamespace string
+
+	// ConsoleOrigin is the trusted origin for WebSocket upgrades
+	// (e.g. "https://lwauth.example.com"). Empty = dev mode (any origin).
+	ConsoleOrigin string
 }
 
 func loadConfig() config {
@@ -279,6 +285,7 @@ func loadConfig() config {
 		// In-cluster the CP pod runs in the project's lwauth-system
 		// namespace; default to that. Local-dev falls back to "default".
 		AlertRulesNamespace: envOrDefault("ALERT_RULES_NAMESPACE", "default"),
+		ConsoleOrigin:       envOrDefault("CP_CONSOLE_ORIGIN", ""),
 	}
 }
 

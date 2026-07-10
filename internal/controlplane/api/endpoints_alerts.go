@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/alerting"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/auth"
 )
 
 // handleListAlerts returns the open + acked alerts and (optionally)
@@ -191,9 +192,13 @@ func (s *Server) handleAlertStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "alerting engine not configured")
 		return
 	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	var acceptOpts *websocket.AcceptOptions
+	if s.AllowedOrigin != "" {
+		acceptOpts = &websocket.AcceptOptions{OriginPatterns: []string{s.AllowedOrigin}}
+	} else {
+		acceptOpts = &websocket.AcceptOptions{InsecureSkipVerify: true}
+	}
+	conn, err := websocket.Accept(w, r, acceptOpts)
 	if err != nil {
 		return
 	}
@@ -237,14 +242,13 @@ func (s *Server) handleAlertStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// operatorFromContext reads the operator username from the request
-// context (auth session middleware adds it under a private key). When
-// CP_AUTH_ENABLED=false the middleware doesn't populate the value, so
-// fallback to "anonymous" so the ack_audit trail still attributes the
-// action to a (defensible) actor.
+// operatorFromContext reads the authenticated operator name from the
+// request context (injected by auth.Manager.Middleware). Falls back to
+// "anonymous" when CP_AUTH_ENABLED=false or the request arrives on an
+// unauthenticated path, so the ack audit trail is always populated.
 func operatorFromContext(r *http.Request) string {
-	if v := r.Header.Get("X-Lwauth-Operator"); v != "" {
-		return v
+	if sub := auth.ContextSubject(r); sub != "" {
+		return sub
 	}
 	return "anonymous"
 }

@@ -1,9 +1,12 @@
 // Test-time WebSocket shim for SolidJS pages that subscribe via
-// `new WebSocket(url)`. The shim captures the latest opened instance
-// into a singleton so individual test files can push events through
-// `__deliverWS(JSON.stringify(event))` without spinning up a real
-// server. Tests clear the singleton in afterEach to keep order
-// deterministic.
+// `new WebSocket(url)`. The shim tracks every open socket in a
+// URL-keyed map so tests that open multiple connections (e.g.
+// Dashboard opens a metrics stream AND an alert stream) can target
+// each socket independently via `wsForURL(url)`.
+//
+// `deliverWS` delivers to the most-recently-created socket for
+// backward compatibility with single-socket tests. Multi-socket
+// tests should use `deliverToURL(url, payload)` to be explicit.
 
 export interface WSShim {
   url: string;
@@ -13,7 +16,11 @@ export interface WSShim {
   close: () => void;
 }
 
-let current: WSShim | null = null;
+// all tracks every open shim keyed by URL. When a URL is reused
+// (e.g. a filter change triggers a new WS on the same path), the
+// map entry is replaced with the newer socket.
+const all = new Map<string, WSShim>();
+let lastCreated: WSShim | null = null;
 
 class WebSocketShim {
   public url: string;
@@ -23,45 +30,64 @@ class WebSocketShim {
 
   constructor(url: string) {
     this.url = url;
-    current = this;
+    all.set(url, this);
+    lastCreated = this;
     // Defer the open so callers that synchronously attach handlers
     // after construction still receive the event.
     queueMicrotask(() => {
-      if (current === this && this.onopen) {
+      if (all.get(url) === this && this.onopen) {
         this.onopen(new Event("open"));
       }
     });
   }
 
   close() {
-    if (current === this) current = null;
+    if (all.get(this.url) === this) all.delete(this.url);
+    if (lastCreated === this) lastCreated = null;
     if (this.onclose) this.onclose(new CloseEvent("close"));
   }
 }
 
-// Install the shim globally once per test process. We use a getter so
-// users can reassign if they need to (rare) but the default is
-// transparent to the api/client caller that just constructs WebSocket.
+// Install the shim globally once per test process.
 (globalThis as any).WebSocket = WebSocketShim;
 
-// currentWS returns the most recently constructed shim so tests can
-// push events or assert that subscription happened. Returns null
-// when no WS has been created yet.
+// currentWS returns the most recently constructed shim. Backward-
+// compatible with single-socket tests.
 export function currentWS(): WSShim | null {
-  return current;
+  return lastCreated;
 }
 
-// deliver synthesises a WS message on the current shim — the form
-// matches what api/client expects: a JSON-stringified payload
-// (AlertEvent for alerts, MetricsSnapshot for metrics).
+// wsForURL returns the open shim for a given URL (or URL prefix), or
+// null when no socket for that URL is currently open. Use this in
+// multi-socket tests to target a specific stream.
+export function wsForURL(urlOrPrefix: string): WSShim | null {
+  for (const [key, shim] of all) {
+    if (key === urlOrPrefix || key.startsWith(urlOrPrefix)) return shim;
+  }
+  return null;
+}
+
+// deliver synthesises a WS message on the most recently created shim.
 export function deliverWS(payload: unknown): void {
-  if (!current || !current.onmessage) return;
-  current.onmessage({ data: JSON.stringify(payload) } as MessageEvent);
+  if (!lastCreated || !lastCreated.onmessage) return;
+  lastCreated.onmessage({ data: JSON.stringify(payload) } as MessageEvent);
 }
 
-// resetWSShim clears the singleton so the next test starts clean.
-// Call this in afterEach to keep test isolation tight.
+// deliverToURL synthesises a WS message on the shim matching the
+// given URL prefix. Use in multi-socket tests where `deliverWS`
+// would target the wrong socket.
+export function deliverToURL(urlOrPrefix: string, payload: unknown): void {
+  const shim = wsForURL(urlOrPrefix);
+  if (!shim || !shim.onmessage) return;
+  shim.onmessage({ data: JSON.stringify(payload) } as MessageEvent);
+}
+
+// resetWSShim closes and removes all tracked sockets. Call in
+// afterEach to keep test isolation tight.
 export function resetWSShim(): void {
-  if (current && current.onclose) current.onclose(new CloseEvent("close"));
-  current = null;
+  for (const shim of all.values()) {
+    if (shim.onclose) shim.onclose(new CloseEvent("close"));
+  }
+  all.clear();
+  lastCreated = null;
 }

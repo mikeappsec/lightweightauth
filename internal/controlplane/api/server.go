@@ -48,6 +48,10 @@ type Server struct {
 	// crashing.
 	AlertEngine  *alerting.Engine
 	RulesLoader  *alerting.ConfigMapLoader
+
+	// AllowedOrigin restricts WebSocket upgrades to a single trusted
+	// origin. Empty means any origin is accepted (dev mode).
+	AllowedOrigin string
 }
 
 // NewServer creates a new API server wired to the instance registry.
