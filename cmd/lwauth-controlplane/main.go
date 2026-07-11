@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -48,6 +49,7 @@ import (
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/multicluster"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/routes"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/streaming"
+	"github.com/mikeappsec/lightweightauth/pkg/buildinfo"
 	"github.com/mikeappsec/lightweightauth/ui"
 )
 
@@ -149,6 +151,20 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Deploy-identity endpoint: distinguishes "process is up" (/healthz)
+	// from "expected commit is running". Unauthenticated by design, same
+	// tier as /healthz — the deployed image is public on GHCR so this
+	// discloses nothing beyond what's already visible there.
+	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"version": buildinfo.Version,
+			"commit":  buildinfo.Commit,
+			"date":    buildinfo.Date,
+			"go":      buildinfo.GoVersion(),
+		})
 	})
 	mux.Handle("/", ui.Handler())
 
