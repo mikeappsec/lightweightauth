@@ -104,9 +104,13 @@ func BuiltInPresets() []Preset {
 					Type: "apikey",
 					Config: map[string]any{
 						"header": "X-API-Key",
-						"entries": map[string]any{
-							"replace-me": map[string]any{"subject": "tool-user"},
-						},
+						// No default entries: the map key itself is the literal
+						// API key value clients present, so shipping a concrete
+						// one here (e.g. "replace-me") would be a hard-coded,
+						// guessable credential an operator could deploy
+						// unmodified. Fails closed instead — no key registered,
+						// so nothing authenticates until one is added.
+						"entries": map[string]any{},
 					},
 				},
 			},
