@@ -1,46 +1,175 @@
-import { type ParentProps } from "solid-js";
-import { A } from "@solidjs/router";
-import { lazy } from "solid-js";
-
-// Lazy-loaded route components.
-const Dashboard = lazy(() => import("./pages/Dashboard"));
-const Instances = lazy(() => import("./pages/Instances"));
-const InstanceDetail = lazy(() => import("./pages/InstanceDetail"));
+import { type ParentProps, type JSX, Show } from "solid-js";
+import { A, useLocation } from "@solidjs/router";
+import {
+  LayoutDashboard,
+  Server,
+  Globe,
+  Route,
+  Network,
+  ShieldCheck,
+  AlertTriangle,
+  Activity,
+  Settings,
+  LogOut,
+  Sun,
+  Moon,
+} from "lucide-solid";
+import { logout } from "./api/client";
+import { session, setSession } from "./auth/store";
+import { theme, toggleTheme } from "./theme/store";
 
 export default function App(props: ParentProps) {
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      /* ignore — clear local state regardless */
+    }
+    setSession({ authenticated: false, user: "", authEnabled: true });
+  };
+
   return (
-    <div class="min-h-screen flex">
-      {/* Sidebar */}
-      <nav class="w-56 bg-gray-900 text-gray-100 flex flex-col p-4 gap-1">
-        <h1 class="text-lg font-bold mb-6 px-2">lwauth</h1>
-        <NavLink href="/" label="Dashboard" />
-        <NavLink href="/instances" label="Instances" />
-        <NavLink href="/health" label="Health" />
-      </nav>
+    <div class="min-h-screen flex bg-gray-50 dark:bg-gray-950">
+      {/* Sidebar — deliberately stays a constant dark navy in both
+          themes (a common enterprise-console pattern, e.g. Vercel/Linear):
+          it's the brand anchor, while the content pane is what switches. */}
+      <aside class="w-64 bg-gray-950 text-gray-300 flex flex-col border-r border-gray-800 shrink-0">
+        {/* Brand */}
+        <div class="h-16 flex items-center gap-3 px-5 border-b border-gray-800">
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+            <ShieldCheck size={18} class="text-white" />
+          </div>
+          <div>
+            <span class="text-white font-semibold text-sm tracking-tight">LightweightAuth</span>
+            <span class="block text-[10px] text-gray-500 -mt-0.5">Control Plane</span>
+          </div>
+        </div>
+
+        {/* Navigation */}
+        <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+          <NavSection label="Overview">
+            <NavLink href="/" icon={LayoutDashboard} label="Dashboard" />
+          </NavSection>
+
+          <NavSection label="Infrastructure">
+            <NavLink href="/instances" icon={Server} label="Instances" />
+            <NavLink href="/clusters" icon={Globe} label="Clusters" />
+            <NavLink href="/routes" icon={Route} label="Routes" />
+            <NavLink href="/mesh" icon={Network} label="Service Mesh" />
+          </NavSection>
+
+          <NavSection label="Observability">
+            <NavLink href="/decisions" icon={ShieldCheck} label="Decisions" />
+            <NavLink href="/alerts" icon={AlertTriangle} label="Alerts" />
+            <NavLink href="/health" icon={Activity} label="Health" />
+          </NavSection>
+        </nav>
+
+        {/* Footer */}
+        <div class="border-t border-gray-800 px-4 py-3 space-y-2">
+          <Show when={session()?.authEnabled}>
+            <div class="flex items-center gap-2 text-xs">
+              <div class="w-6 h-6 rounded-full bg-blue-600/20 text-blue-300 flex items-center justify-center text-[10px] font-semibold uppercase">
+                {(session()?.user ?? "?").slice(0, 1)}
+              </div>
+              <span class="text-gray-300 truncate">{session()?.user}</span>
+              <button
+                onClick={handleLogout}
+                title="Sign out"
+                class="ml-auto flex items-center gap-1 text-gray-500 hover:text-red-400 transition-colors"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          </Show>
+          <div class="flex items-center gap-2 text-xs text-gray-500">
+            <Settings size={14} />
+            <span>v1.2.0</span>
+            <button
+              onClick={toggleTheme}
+              title={theme() === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              class="ml-auto flex items-center gap-1 text-gray-500 hover:text-gray-200 transition-colors"
+            >
+              {theme() === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <span class="px-1.5 py-0.5 bg-green-500/10 text-green-400 rounded text-[10px] font-medium">
+              Connected
+            </span>
+          </div>
+        </div>
+      </aside>
 
       {/* Main content */}
-      <main class="flex-1 p-6 overflow-auto">
-        {props.children}
-      </main>
+      <div class="flex-1 flex flex-col min-w-0">
+        {/* Top bar */}
+        <header class="h-16 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center px-6 shrink-0">
+          <Breadcrumb />
+        </header>
+
+        {/* Page content */}
+        <main class="flex-1 p-6 overflow-auto">
+          {props.children}
+        </main>
+      </div>
     </div>
   );
 }
 
-function NavLink(props: { href: string; label: string }) {
+function NavSection(props: { label: string; children: JSX.Element }) {
+  return (
+    <div class="mb-4">
+      <p class="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+        {props.label}
+      </p>
+      {props.children}
+    </div>
+  );
+}
+
+function NavLink(props: { href: string; icon: (p: any) => JSX.Element; label: string }) {
+  const location = useLocation();
+  const isActive = () => {
+    if (props.href === "/") return location.pathname === "/";
+    return location.pathname.startsWith(props.href);
+  };
+
   return (
     <A
       href={props.href}
-      class="px-3 py-2 rounded text-sm hover:bg-gray-800 transition-colors"
-      activeClass="bg-gray-800 font-medium"
+      class={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150 ${
+        isActive()
+          ? "bg-blue-600/10 text-blue-400 font-medium"
+          : "hover:bg-gray-800/60 hover:text-gray-100"
+      }`}
     >
+      <props.icon size={18} class={isActive() ? "text-blue-400" : "text-gray-500"} />
       {props.label}
     </A>
   );
 }
 
-// Export routes for the router.
-export const routes = [
-  { path: "/", component: Dashboard },
-  { path: "/instances", component: Instances },
-  { path: "/instances/:cluster/:name", component: InstanceDetail },
-];
+function Breadcrumb() {
+  const location = useLocation();
+  const parts = () => location.pathname.split("/").filter(Boolean);
+
+  return (
+    <div class="flex items-center gap-1.5 text-sm">
+      <A href="/" class="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">Home</A>
+      {parts().map((part, i) => (
+        <>
+          <span class="text-gray-300 dark:text-gray-700">/</span>
+          <span
+            class={
+              i === parts().length - 1
+                ? "text-gray-900 dark:text-gray-100 font-medium capitalize"
+                : "text-gray-500 dark:text-gray-400 capitalize"
+            }
+          >
+            {decodeURIComponent(part)}
+          </span>
+        </>
+      ))}
+    </div>
+  );
+}
+

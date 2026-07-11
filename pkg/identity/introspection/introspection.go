@@ -55,7 +55,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mikeappsec/lightweightauth/internal/cache"
+	pkgcache "github.com/mikeappsec/lightweightauth/pkg/cache"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
@@ -72,13 +72,16 @@ type Config struct {
 }
 
 type identifier struct {
-	name     string
-	cfg      Config
-	http     *http.Client
-	posCache *cache.LRU
-	negCache *cache.LRU
-	errCache *cache.LRU
-	errStats *cache.Stats // exposed for tests; the LRU writes hits/misses/evictions here.
+	name string
+	cfg  Config
+	http *http.Client
+	// posCache/negCache/errCache are injected, namespaced handles drawn from
+	// the module's cache pool (default: the implicit in-memory pool). They
+	// replace the previously private per-identifier LRUs; the three logical
+	// caches share one pool backend but keep disjoint keyspaces.
+	posCache pkgcache.Cache
+	negCache pkgcache.Cache
+	errCache pkgcache.Cache
 	sf       singleflight
 	guard    *upstream.Guard
 }
@@ -295,7 +298,7 @@ var knownKeys = map[string]struct{}{
 	"resilience":   {},
 }
 
-func factory(name string, raw map[string]any) (module.Identifier, error) {
+func factory(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
 	if err := module.CheckUnknownKeys("oauth2-introspection", name, raw, knownKeys); err != nil {
 		return nil, err
 	}
@@ -333,31 +336,23 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		cfg.ErrorTTL = d
 	}
 
-	pos, err := cache.NewLRU(cfg.CacheSize, 0, nil)
-	if err != nil {
-		return nil, fmt.Errorf("%w: introspection %q cache: %v", module.ErrConfig, name, err)
-	}
-	neg, err := cache.NewLRU(cfg.CacheSize, 0, nil)
-	if err != nil {
-		return nil, fmt.Errorf("%w: introspection %q neg-cache: %v", module.ErrConfig, name, err)
-	}
-	errStats := &cache.Stats{}
-	errC, err := cache.NewLRU(cfg.CacheSize, 0, errStats)
-	if err != nil {
-		return nil, fmt.Errorf("%w: introspection %q err-cache: %v", module.ErrConfig, name, err)
-	}
 	guardCfg, err := upstream.FromMap(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%w: introspection %q: %v", module.ErrConfig, name, err)
 	}
+	// Caches are injected from the module's pool. The three logical lines
+	// (positive/negative/error) share the pool backend but get disjoint,
+	// auto-namespaced keyspaces from the provider. When no pool is configured
+	// the host injects the implicit in-memory default. TTLs remain a module
+	// concern (set per-Set call below in Identify).
+	prov := deps.CacheProvider()
 	return &identifier{
 		name:     name,
 		cfg:      cfg,
 		http:     &http.Client{Timeout: 5 * time.Second},
-		posCache: pos,
-		negCache: neg,
-		errCache: errC,
-		errStats: errStats,
+		posCache: prov.Cache("introspection.positive"),
+		negCache: prov.Cache("introspection.negative"),
+		errCache: prov.Cache("introspection.error"),
 		guard:    upstream.NewGuard(guardCfg),
 	}, nil
 }
@@ -401,4 +396,4 @@ func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []stri
 	return keys
 }
 
-func init() { module.RegisterIdentifier("oauth2-introspection", factory) }
+func init() { module.RegisterIdentifierWithDeps("oauth2-introspection", factory) }

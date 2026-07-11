@@ -26,32 +26,49 @@ spec:
             - name: metrics
               containerPort: 9090
               protocol: TCP
-            - name: health
-              containerPort: 8082
-              protocol: TCP
           env:
             - name: CP_API_ADDR
               value: ":8443"
             - name: CP_METRICS_ADDR
               value: ":9090"
-            - name: CP_HEALTH_ADDR
-              value: ":8082"
             - name: CP_CLUSTER_NAME
               value: {{ .Values.clusterName | quote }}
             - name: CP_DEFAULT_IMAGE
               value: {{ .Values.defaultImage | quote }}
             - name: CP_LEADER_ELECT
               value: {{ .Values.leaderElection.enabled | quote }}
+            {{- if .Values.alerting.enabled }}
+            - name: PROMETHEUS_URL
+              value: {{ .Values.alerting.prometheusURL | quote }}
+            - name: LOKI_URL
+              value: {{ .Values.alerting.lokiURL | quote }}
+            - name: ALERT_WEBHOOK_URL
+              value: {{ .Values.alerting.webhookURL | quote }}
+            - name: ALERT_RULES_NAMESPACE
+              value: {{ .Values.alerting.rulesNamespace | default .Release.Namespace | quote }}
+            {{- end }}
+            {{- if .Values.consoleOrigin }}
+            - name: CP_CONSOLE_ORIGIN
+              value: {{ .Values.consoleOrigin | quote }}
+            {{- end }}
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- with .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
-              port: health
+              port: api
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /healthz
-              port: health
+              port: api
             initialDelaySeconds: 3
             periodSeconds: 5
           resources:
@@ -66,5 +83,9 @@ spec:
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.extraVolumes }}
+      volumes:
         {{- toYaml . | nindent 8 }}
       {{- end }}

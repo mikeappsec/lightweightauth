@@ -1,0 +1,23 @@
+# .dockerignore for Dockerfile.controlplane.local
+# Only exclude what's not needed — allow bin/ for pre-compiled binary.
+.git/
+.github/
+docs/
+ui/console/node_modules/
+ui/console/src/
+ui/console/public/
+ui/console/index.html
+ui/console/package.json
+ui/console/package-lock.json
+ui/console/vite.config.ts
+ui/console/tailwind.config.ts
+ui/console/tsconfig*.json
+ui/console/postcss.config.js
+*.md
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+tests/
+site/
+**/*_test.go

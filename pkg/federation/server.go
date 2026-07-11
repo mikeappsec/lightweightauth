@@ -46,6 +46,10 @@ type Server struct {
 	subscribersMu sync.Mutex
 
 	revocationHandler RevocationHandler
+
+	// PeerVerifier performs identity + revocation checks on connecting peers.
+	// If nil, only config-based allowlist checking is performed.
+	PeerVerifier *PeerVerifier
 }
 
 // NewServer creates a federation server.
@@ -106,6 +110,7 @@ func (s *Server) Publish(ctx context.Context, specJSON []byte) error {
 // Subscribe registers a peer cluster for config streaming.
 // Returns a channel that receives snapshots. Call Unsubscribe to clean up.
 // Only known peers (listed in the federation config) are allowed to subscribe.
+// If a PeerVerifier is configured, full identity + revocation checks are performed.
 func (s *Server) Subscribe(clusterID ClusterID) (<-chan *Snapshot, error) {
 	if err := clusterID.Validate(); err != nil {
 		return nil, err
@@ -114,6 +119,21 @@ func (s *Server) Subscribe(clusterID ClusterID) (<-chan *Snapshot, error) {
 	// FD2/FD3: Only allow known peers to subscribe.
 	if !s.isKnownPeer(clusterID) {
 		return nil, fmt.Errorf("federation: unknown peer %q — not in configured peers list", clusterID)
+	}
+
+	// If PeerVerifier is set, perform revocation check before allowing subscription.
+	if s.PeerVerifier != nil && s.PeerVerifier.RevocationChecker != nil {
+		ctx := context.Background()
+		revoked, err := s.PeerVerifier.RevocationChecker.IsRevoked(ctx, "cluster:"+string(clusterID))
+		if err != nil {
+			slog.Warn("federation: revocation check failed during subscribe",
+				"peer", clusterID, "error", err)
+			return nil, fmt.Errorf("federation: revocation check failed for peer %q: %w", clusterID, err)
+		}
+		if revoked {
+			slog.Warn("federation: rejected revoked peer subscription", "peer", clusterID)
+			return nil, fmt.Errorf("federation: peer %q is revoked", clusterID)
+		}
 	}
 
 	// Snapshot latest before subscriber registration so we avoid taking

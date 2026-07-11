@@ -24,6 +24,15 @@ import (
 // hmacKeySize is the size of the per-instance HMAC signing key.
 const hmacKeySize = 32
 
+// backendTagInvalidator is the subset of a cache backend that owns tag
+// membership natively. It is structurally satisfied by pkg/cache's
+// TagInvalidator (memory and valkey pool backends, including their namespaced
+// handles), so a pool-supplied backend lights this up without an import.
+type backendTagInvalidator interface {
+	Tag(ctx context.Context, key string, tags ...string) error
+	InvalidateTag(ctx context.Context, tag string) (int, error)
+}
+
 // Decision is the opt-in cache that wraps the authorize step. It coalesces
 // concurrent misses with singleflight, applies a positive TTL on allow and
 // a negative TTL on deny, and is keyed by the (tenant, subject, request
@@ -63,6 +72,14 @@ type Decision struct {
 
 	// tagIndex tracks key→tags associations for tag-based invalidation (E3).
 	tagIndex *TagIndex
+
+	// backendTags is set when the backend natively supports tag membership
+	// (the pkg/cache memory/valkey pool backends implement it). When non-nil,
+	// tag association and invalidation are delegated to the backend so its own
+	// eviction/expiry reclaims membership sets — closing the in-process
+	// tagIndex leak that affected pool-routed backends. nil for the in-process
+	// LRU/Tiered path, which keeps using tagIndex + the eviction callback.
+	backendTags backendTagInvalidator
 
 	// serveStaleOnError enables stale-while-revalidate (E3). When the
 	// authorizer returns an upstream error and a stale cache entry exists,
@@ -134,19 +151,16 @@ type DecisionOptions struct {
 // serveStaleOnError is enabled.
 const defaultMaxStaleness = 5 * time.Minute
 
-// NewDecision returns a Decision cache or nil if disabled.
+// NewDecision returns a Decision cache or nil if disabled. It builds its own
+// backend from o.Backend (defaulting to the in-process LRU). Callers that
+// already hold a backend — e.g. one drawn from a pkg/cache pool Provider —
+// should use [NewDecisionWithBackend] instead.
 func NewDecision(o DecisionOptions) (*Decision, error) {
 	if o.PositiveTTL <= 0 {
 		return nil, nil
 	}
 	if o.Size <= 0 {
 		o.Size = 10_000
-	}
-	if o.NegativeTTL <= 0 {
-		o.NegativeTTL = 5 * time.Second
-	}
-	if o.ServeStaleOnError && o.MaxStaleness <= 0 {
-		o.MaxStaleness = defaultMaxStaleness
 	}
 	stats := &Stats{}
 	spec := o.Backend
@@ -156,6 +170,38 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 	backend, err := BuildBackend(spec, stats)
 	if err != nil {
 		return nil, fmt.Errorf("decision cache: %w", err)
+	}
+	return NewDecisionWithBackend(o, backend, stats)
+}
+
+// NewDecisionWithBackend constructs a Decision cache over a caller-supplied
+// backend instead of building one from o.Backend. This is how the config layer
+// routes the decision cache through a pkg/cache pool: the pool's Provider
+// yields a namespaced Cache whose method set already satisfies Backend.
+//
+// stats is the counter struct the backend updates; a nil stats is tolerated
+// and replaced with an internal one. Returns nil when disabled
+// (PositiveTTL <= 0).
+//
+// Tag-based invalidation still uses the in-process TagIndex. The eviction→tag
+// cleanup hook only fires for the in-process LRU; a pool-supplied backend owns
+// its own capacity, so passive tag cleanup relies on explicit InvalidateByTags
+// or TTL expiry rather than eviction callbacks.
+func NewDecisionWithBackend(o DecisionOptions, backend Backend, stats *Stats) (*Decision, error) {
+	if o.PositiveTTL <= 0 {
+		return nil, nil
+	}
+	if backend == nil {
+		return nil, errors.New("decision cache: nil backend")
+	}
+	if stats == nil {
+		stats = &Stats{}
+	}
+	if o.NegativeTTL <= 0 {
+		o.NegativeTTL = 5 * time.Second
+	}
+	if o.ServeStaleOnError && o.MaxStaleness <= 0 {
+		o.MaxStaleness = defaultMaxStaleness
 	}
 	keys := append([]string(nil), o.KeyFields...)
 	for _, k := range keys {
@@ -180,6 +226,13 @@ func NewDecision(o DecisionOptions) (*Decision, error) {
 		serveStaleOnError: o.ServeStaleOnError,
 		maxStaleness:      o.MaxStaleness,
 		distSF:            o.DistSF,
+	}
+	// When the backend owns tag membership natively (pool-routed memory/valkey),
+	// delegate to it so its own eviction/expiry reclaims membership sets. The
+	// in-process LRU/Tiered backends do not implement this, so they keep using
+	// tagIndex below.
+	if bt, ok := backend.(backendTagInvalidator); ok {
+		d.backendTags = bt
 	}
 	// Hook LRU eviction to clean tag mappings (TC2: prevent memory leak).
 	if lruBackend, ok := backend.(*LRU); ok {
@@ -409,9 +462,16 @@ func (d *Decision) storeEntry(ctx context.Context, key string, dec *module.Decis
 	}
 	_ = d.backend.Set(ctx, key, signed, storeTTL)
 
-	// Associate tags for tag-based invalidation.
-	if len(tags) > 0 && d.tagIndex != nil {
-		d.tagIndex.Associate(key, tags)
+	// Associate tags for tag-based invalidation. Prefer the backend's native
+	// tag membership when available (pool-routed memory/valkey) so its own
+	// eviction/expiry reclaims the membership set; otherwise fall back to the
+	// in-process tagIndex.
+	if len(tags) > 0 {
+		if d.backendTags != nil {
+			_ = d.backendTags.Tag(ctx, key, tags...)
+		} else if d.tagIndex != nil {
+			d.tagIndex.Associate(key, tags)
+		}
 	}
 }
 
@@ -441,10 +501,28 @@ func (d *Decision) getStaleEntry(ctx context.Context, key string) *module.Decisi
 	return &entry.Decision
 }
 
-// InvalidateByTags evicts all L1 cache entries matching any of the given
-// tags. Called by the event bus handler when an EventInvalidate arrives.
+// InvalidateByTags evicts all cache entries matching any of the given tags.
+// Called by the event bus handler when an EventInvalidate arrives.
+//
+// When the backend owns tag membership (pool-routed memory/valkey), invalidation
+// is delegated to it — which, for a shared backend, takes effect across every
+// replica using that pool. Otherwise it clears the in-process L1 entries tracked
+// by the tagIndex.
 func (d *Decision) InvalidateByTags(ctx context.Context, tags []string) int {
-	if d == nil || d.tagIndex == nil {
+	if d == nil {
+		return 0
+	}
+	if d.backendTags != nil {
+		removed := 0
+		for _, t := range tags {
+			n, err := d.backendTags.InvalidateTag(ctx, t)
+			if err == nil {
+				removed += n
+			}
+		}
+		return removed
+	}
+	if d.tagIndex == nil {
 		return 0
 	}
 	keys := d.tagIndex.KeysForTags(tags)
@@ -457,6 +535,11 @@ func (d *Decision) InvalidateByTags(ctx context.Context, tags []string) int {
 
 // InvalidateAll evicts all entries by clearing the backend (if supported)
 // and the tag index.
+//
+// In backend-tag mode (pool-routed memory/valkey) the in-process tagIndex is
+// empty, so there are no locally tracked keys to delete here; those entries
+// expire via their TTL. There is no FLUSH on the Backend interface by design,
+// so InvalidateAll is best-effort for shared backends.
 func (d *Decision) InvalidateAll(ctx context.Context) {
 	if d == nil {
 		return

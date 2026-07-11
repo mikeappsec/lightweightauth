@@ -1,0 +1,61 @@
+---
+# Allow the control-plane to egress to:
+# - kube-dns (DNS resolution for svc.cluster.local)
+# - all pods in any namespace (for instance health checks + admin API calls)
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: lwauth-cp-allow-egress
+  namespace: lwauth-system
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: lwauth-controlplane
+  egress:
+    # Allow DNS
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Allow reaching any in-cluster endpoint (admin URLs, instance health checks)
+    - toEntities:
+        - cluster
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+            - port: "9001"
+              protocol: TCP
+            - port: "8443"
+              protocol: TCP
+---
+# Allow the data-plane pod to accept ingress from the control plane namespace
+# (health checks, config pushes, explain calls).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: lwauth-allow-cp-ingress
+  namespace: demo
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: lightweightauth
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: lwauth-system
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+            - port: "9001"
+              protocol: TCP

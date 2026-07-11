@@ -54,10 +54,11 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/mikeappsec/lightweightauth/internal/replay"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-func init() { module.RegisterIdentifier("saml", factory) }
+func init() { module.RegisterIdentifierWithDeps("saml", factoryWithDeps) }
 
 // maxAllowedClockSkew is the upper bound for the configurable clock skew.
 // SAML-VULN-03: Without a cap, operators could misconfigure a skew that
@@ -90,6 +91,7 @@ type identifier struct {
 	header              string            // header containing the SAMLResponse (Base64)
 	formField           string            // form field name for POST binding
 	replayCache         *assertionReplayCache
+	replay              *replay.Guard
 }
 
 // Name returns the configured identifier name. Safe for concurrent use.
@@ -100,7 +102,7 @@ func (i *identifier) Name() string { return i.name }
 // constraints, and returns the extracted Identity.
 //
 // Safe for concurrent use.
-func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Identity, error) {
+func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.Identity, error) {
 	// Try header first, then check for encoded response in a well-known header.
 	raw := r.Header(i.header)
 	if raw == "" {
@@ -295,7 +297,11 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	if replayTTL < time.Minute {
 		replayTTL = time.Minute
 	}
-	if !i.replayCache.Add(assertionID, replayTTL) {
+	firstUse, rerr := i.replay.Consume(ctx, assertionID, replayTTL)
+	if rerr != nil {
+		return nil, fmt.Errorf("%w: saml: replay check: %v", module.ErrUpstream, rerr)
+	}
+	if !firstUse {
 		return nil, fmt.Errorf("%w: saml: assertion ID %q already consumed (replay detected)",
 			module.ErrInvalidCredential, assertionID)
 	}
@@ -863,6 +869,12 @@ func (c *assertionReplayCache) Add(id string, ttl time.Duration) bool {
 	return true
 }
 
+// Consume implements replay.LocalStore so this bounded, fail-closed-at-capacity
+// assertion cache can serve as the in-process fallback for replay.Guard. It
+// preserves G9-VULN-07: a flood of distinct IDs is rejected at capacity rather
+// than evicting live entries.
+func (c *assertionReplayCache) Consume(id string, ttl time.Duration) bool { return c.Add(id, ttl) }
+
 // evictExpired removes all entries whose expiry has passed.
 // NOT safe for concurrent use; must be called while holding c.mu.
 func (c *assertionReplayCache) evictExpired(now time.Time) {
@@ -1085,7 +1097,27 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		}
 	}
 
+	// Default to the in-process bounded, fail-closed-at-capacity assertion
+	// cache (G9-VULN-07). factoryWithDeps re-wires this to also use a remote
+	// cross-replica backend when one is configured.
+	id.replay = replay.NewWithLocal(nil, id.replayCache)
+
 	return id, nil
+}
+
+// factoryWithDeps is the deps-aware registration entrypoint. It builds the
+// identifier via factory, then routes assertion-ID replay through the
+// injected cache layer: the bounded assertion cache remains the in-process
+// fallback while the Atomic/SetNX path engages only for a genuinely remote,
+// cross-replica backend (e.g. Valkey).
+func factoryWithDeps(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
+	id, err := factory(name, raw)
+	if err != nil {
+		return nil, err
+	}
+	samlID := id.(*identifier)
+	samlID.replay = replay.NewWithLocal(deps.CacheProvider().Cache("replay"), samlID.replayCache)
+	return samlID, nil
 }
 
 // containsControlChar reports whether s contains any ASCII control character

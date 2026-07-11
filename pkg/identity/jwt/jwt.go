@@ -12,13 +12,15 @@
 //
 // The JWKS is fetched once at startup and refreshed in the background by
 // jwx's own jwk.Cache (default: every 15 minutes, or sooner on a kid miss).
-// DESIGN.md §4 calls for plugging this into the project-wide cache.Layer;
-// that migration is tracked for M2 so jwx's cache stays the authoritative
-// JWKS store for now.
+// The poller is deduplicated per JWKS URL across identifiers and engines and
+// bound to the engine-lifecycle context (module.Deps.Ctx), so it is torn down
+// on hot-reload rather than leaking. See the shared internal/jwks package and
+// the cache layer redesign (§12 Option A).
 package jwt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
+	"github.com/mikeappsec/lightweightauth/internal/jwks"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
@@ -145,9 +148,11 @@ func extractAMR(claims map[string]any) []string {
 	return nil
 }
 
-func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, error) {
+// defaultsAndValidate fills in defaults and validates the required fields,
+// returning a normalized copy of cfg.
+func defaultsAndValidate(cfg Config) (Config, error) {
 	if cfg.JWKSURL == "" {
-		return nil, fmt.Errorf("%w: jwt: jwksUrl is required", module.ErrConfig)
+		return cfg, fmt.Errorf("%w: jwt: jwksUrl is required", module.ErrConfig)
 	}
 	if cfg.Header == "" {
 		cfg.Header = "Authorization"
@@ -158,25 +163,31 @@ func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, e
 	if cfg.MinRefreshInterval <= 0 {
 		cfg.MinRefreshInterval = 15 * time.Minute
 	}
+	return cfg, nil
+}
 
-	cache := jwk.NewCache(ctx)
-	if err := cache.Register(cfg.JWKSURL, jwk.WithMinRefreshInterval(cfg.MinRefreshInterval)); err != nil {
-		return nil, fmt.Errorf("%w: jwt: register jwks: %v", module.ErrConfig, err)
+// buildStandaloneKeyset constructs a dedicated jwx cache + keyset bound to
+// ctx. It is the legacy, non-deduplicated path used by direct callers
+// (tests, no-deps Build) — production builds go through jwks.AcquireShared.
+func buildStandaloneKeyset(ctx context.Context, cfg Config) (jwk.Set, error) {
+	keyset, err := jwks.Standalone(ctx, cfg.JWKSURL, cfg.MinRefreshInterval)
+	if err != nil {
+		return nil, mapJWKSError(err)
 	}
-	// Bound the initial JWKS fetch so a blackholed or very slow IdP
-	// cannot stall lwauthd startup indefinitely. The factory's
-	// caller may pass a context.Background() (via Main / Run
-	// construction), which would never time out on its own. 30s is
-	// generous for a JWKS GET against a healthy IdP and short enough
-	// that the supervisor's startTimeout (M10) can still surface the
-	// failure as a config error.
-	refreshCtx, refreshCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer refreshCancel()
-	if _, err := cache.Refresh(refreshCtx, cfg.JWKSURL); err != nil {
-		return nil, fmt.Errorf("%w: jwt: fetch jwks %s: %v", module.ErrUpstream, cfg.JWKSURL, err)
-	}
-	keyset := jwk.NewCachedSet(cache, cfg.JWKSURL)
+	return keyset, nil
+}
 
+// mapJWKSError maps the shared jwks package's error classes onto the jwt
+// module's ErrConfig / ErrUpstream sentinels.
+func mapJWKSError(err error) error {
+	if errors.Is(err, jwks.ErrFetch) {
+		return fmt.Errorf("%w: jwt: %v", module.ErrUpstream, err)
+	}
+	return fmt.Errorf("%w: jwt: %v", module.ErrConfig, err)
+}
+
+// assembleIdentifier wires the parse options around a fetched keyset.
+func assembleIdentifier(name string, cfg Config, keyset jwk.Set) *identifier {
 	opts := []jwtlib.ParseOption{
 		jwtlib.WithKeySet(keyset),
 		jwtlib.WithValidate(true),
@@ -194,13 +205,50 @@ func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, e
 	for _, a := range cfg.Audiences {
 		opts = append(opts, jwtlib.WithAudience(a))
 	}
-
 	return &identifier{
 		name:      name,
 		header:    cfg.Header,
 		scheme:    cfg.Scheme,
 		parseOpts: opts,
-	}, nil
+	}
+}
+
+// newIdentifier builds a jwt identifier with a standalone keyset bound to
+// ctx. Retained for direct callers and tests; production goes through
+// newIdentifierWithDeps for poller dedup and lifecycle binding.
+func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, error) {
+	cfg, err := defaultsAndValidate(cfg)
+	if err != nil {
+		return nil, err
+	}
+	keyset, err := buildStandaloneKeyset(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return assembleIdentifier(name, cfg, keyset), nil
+}
+
+// newIdentifierWithDeps builds a jwt identifier using the injected engine
+// dependencies. When a lifecycle context is present it shares a deduplicated,
+// lifecycle-bound JWKS poller per URL (§12 Option A); otherwise it falls back
+// to a standalone keyset on context.Background() to preserve legacy behavior.
+func newIdentifierWithDeps(name string, cfg Config, deps module.Deps) (*identifier, error) {
+	cfg, err := defaultsAndValidate(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if deps.Ctx == nil {
+		keyset, err := buildStandaloneKeyset(context.Background(), cfg)
+		if err != nil {
+			return nil, err
+		}
+		return assembleIdentifier(name, cfg, keyset), nil
+	}
+	keyset, err := jwks.AcquireShared(deps.Ctx, cfg.JWKSURL, cfg.MinRefreshInterval)
+	if err != nil {
+		return nil, mapJWKSError(err)
+	}
+	return assembleIdentifier(name, cfg, keyset), nil
 }
 
 func parseConfig(raw map[string]any) (Config, error) {
@@ -243,7 +291,7 @@ var knownKeys = map[string]struct{}{
 	"minRefreshInterval": {},
 }
 
-func factory(name string, raw map[string]any) (module.Identifier, error) {
+func factory(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
 	if err := module.CheckUnknownKeys("jwt", name, raw, knownKeys); err != nil {
 		return nil, err
 	}
@@ -251,10 +299,10 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The jwk.Cache spawns a background refresher tied to this context.
-	// On config reload we throw away the whole engine, so its goroutine
-	// is naturally GC'd; using context.Background() here is intentional.
-	return newIdentifier(context.Background(), name, cfg)
+	// The JWKS poller is bound to deps.Ctx (the engine-lifecycle context) and
+	// deduplicated per URL, so it is torn down when the engine is swapped on
+	// hot-reload instead of leaking on context.Background().
+	return newIdentifierWithDeps(name, cfg, deps)
 }
 
 // Compile-time guard.
@@ -285,4 +333,4 @@ func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []stri
 	return keys
 }
 
-func init() { module.RegisterIdentifier("jwt", factory) }
+func init() { module.RegisterIdentifierWithDeps("jwt", factory) }

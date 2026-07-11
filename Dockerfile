@@ -26,14 +26,13 @@ RUN go build -trimpath \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        -o /out/lwauth     ./cmd/lwauth & \
+        -o /out/lwauth     ./cmd/lwauth && \
     go build -trimpath \
         -ldflags "-s -w \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        -o /out/lwauthctl  ./cmd/lwauthctl & \
-    wait
+        -o /out/lwauthctl  ./cmd/lwauthctl
 
 # ---- runtime stage -----------------------------------------------------------
 FROM alpine:3.22.4

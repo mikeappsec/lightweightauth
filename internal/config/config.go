@@ -46,16 +46,23 @@ type AuthConfig struct {
 	WithBody     bool `json:"withBody,omitempty" yaml:"withBody,omitempty"`
 	MaxBodyBytes int  `json:"maxBodyBytes,omitempty" yaml:"maxBodyBytes,omitempty"`
 
-	Identifiers []ModuleSpec    `json:"identifiers" yaml:"identifiers"`
-	Authorizers []ModuleSpec    `json:"authorizers" yaml:"authorizers"`
-	Response    []ModuleSpec    `json:"response,omitempty" yaml:"response,omitempty"`
-	Cache       *CacheSpec      `json:"cache,omitempty" yaml:"cache,omitempty"`
-	RateLimit   *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
-	Identifier  IdentifierMode  `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
-	Canary      *CanarySpec     `json:"canary,omitempty" yaml:"canary,omitempty"`
-	Revocation  *RevocationSpec `json:"revocation,omitempty" yaml:"revocation,omitempty"`
-	Secrets     *SecretsSpec    `json:"secrets,omitempty" yaml:"secrets,omitempty"`
-	Audit       *AuditSpec      `json:"audit,omitempty" yaml:"audit,omitempty"`
+	Identifiers []ModuleSpec `json:"identifiers" yaml:"identifiers"`
+	Authorizers []ModuleSpec `json:"authorizers" yaml:"authorizers"`
+	Response    []ModuleSpec `json:"response,omitempty" yaml:"response,omitempty"`
+	Cache       *CacheSpec   `json:"cache,omitempty" yaml:"cache,omitempty"`
+	// Caches declares the named cache pools modules draw handles from
+	// (the module-native cache layer, see docs/design/cache-layer-redesign.md).
+	// Each pool is infrastructure only (backend + connection); per-module
+	// behavior such as TTLs lives on the module. When empty, an implicit
+	// in-memory "default" pool is synthesized so existing configs are
+	// unaffected.
+	Caches     []CachePoolSpec `json:"caches,omitempty" yaml:"caches,omitempty"`
+	RateLimit  *ratelimit.Spec `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
+	Identifier IdentifierMode  `json:"identifierMode,omitempty" yaml:"identifierMode,omitempty"`
+	Canary     *CanarySpec     `json:"canary,omitempty" yaml:"canary,omitempty"`
+	Revocation *RevocationSpec `json:"revocation,omitempty" yaml:"revocation,omitempty"`
+	Secrets    *SecretsSpec    `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	Audit      *AuditSpec      `json:"audit,omitempty" yaml:"audit,omitempty"`
 }
 
 // SecretsSpec configures the external secret-backend resolver (G1).
@@ -137,6 +144,14 @@ type CacheSpec struct {
 	// NegativeTTL is how long deny decisions are cached (default 5s).
 	NegativeTTL string `json:"negativeTtl,omitempty" yaml:"negativeTtl,omitempty"`
 
+	// Pool draws the decision cache's backend from a named pool declared in
+	// the top-level caches: block instead of building a standalone backend
+	// from the backend/addr/... fields below. When set, those inline backend
+	// fields (including "tiered" and distributedSingleflight) must be empty —
+	// the pool owns backend infrastructure. The referenced pool must exist in
+	// caches: (validated fail-fast at load).
+	Pool string `json:"pool,omitempty" yaml:"pool,omitempty"`
+
 	// Backend selects the storage layer. Empty / "memory" uses the
 	// in-process LRU (default). "valkey" turns on the shared backend
 	// described in DESIGN.md §5. "tiered" enables the two-tier
@@ -180,6 +195,43 @@ type CacheSpec struct {
 	SharedHMACKey string `json:"-" yaml:"sharedHmacKey,omitempty"`
 }
 
+// CachePoolSpec is one entry in the top-level caches: list. It declares a
+// named cache pool's backend infrastructure (the module-native cache layer).
+// Per the redesign, a pool carries infrastructure only — per-module behavior
+// such as TTLs lives on the module's own config. The optional MaxTTL is a
+// governance ceiling: a module's effective TTL is min(module.ttl, MaxTTL).
+type CachePoolSpec struct {
+	// Name is the pool identifier modules reference (e.g. "tokens"). Required.
+	Name string `json:"name" yaml:"name"`
+
+	// Backend selects the registered backend implementation. Empty or
+	// "memory" uses the in-process LRU (default). Remote/tiered backends
+	// are wired alongside the module migration phases.
+	Backend string `json:"backend,omitempty" yaml:"backend,omitempty"`
+
+	// Size bounds an in-process backend's entry count.
+	Size int `json:"size,omitempty" yaml:"size,omitempty"`
+
+	// Remote connection settings (used by remote backends).
+	Addr      string `json:"addr,omitempty" yaml:"addr,omitempty"`
+	Username  string `json:"username,omitempty" yaml:"username,omitempty"`
+	Password  string `json:"-" yaml:"password,omitempty"`
+	KeyPrefix string `json:"keyPrefix,omitempty" yaml:"keyPrefix,omitempty"`
+	TLS       bool   `json:"tls,omitempty" yaml:"tls,omitempty"`
+
+	// MaxTTL is the pool-level ceiling on entry lifetime. Zero = no ceiling.
+	MaxTTL string `json:"maxTtl,omitempty" yaml:"maxTtl,omitempty"`
+
+	// AllowPII permits caching values flagged as PII to this pool
+	// (deny-by-default). Encrypt enables at-rest value encryption.
+	AllowPII bool `json:"allowPII,omitempty" yaml:"allowPII,omitempty"`
+	Encrypt  bool `json:"encrypt,omitempty" yaml:"encrypt,omitempty"`
+
+	// Codec selects the value codec for typed handles ("gob" default,
+	// "json" opt-in). Pool-scoped to prevent mismatched encodings.
+	Codec string `json:"codec,omitempty" yaml:"codec,omitempty"`
+}
+
 // RevocationSpec configures the opt-in credential revocation store (E2).
 // When absent or Enabled is false, no revocation checking is performed
 // and the pipeline incurs zero overhead.
@@ -191,6 +243,12 @@ type RevocationSpec struct {
 	// in-process map with TTL (single-replica / dev). "valkey" uses a
 	// shared Valkey instance for multi-replica deployments.
 	Backend string `json:"backend,omitempty" yaml:"backend,omitempty"`
+
+	// Pool draws the revocation store's backend from a named pool in the
+	// caches: block instead of the inline backend/addr fields. Mutually
+	// exclusive with backend/addr; the pool owns backend infrastructure.
+	// Enumeration (List) is unsupported on a pool-backed store.
+	Pool string `json:"pool,omitempty" yaml:"pool,omitempty"`
 
 	// Addr is the Valkey server address (required when backend=valkey).
 	Addr string `json:"addr,omitempty" yaml:"addr,omitempty"`

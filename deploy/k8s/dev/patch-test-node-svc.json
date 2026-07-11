@@ -1,0 +1,1 @@
+[{"op":"replace","path":"/spec/ports","value":[{"name":"http","port":8080,"protocol":"TCP","targetPort":"http"},{"name":"grpc","port":9001,"protocol":"TCP","targetPort":"grpc"}]}]

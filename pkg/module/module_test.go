@@ -22,11 +22,11 @@ func (f *fakeIdentifier) Identify(context.Context, *module.Request) (*module.Ide
 
 func TestRegistry_RegisterAndBuild(t *testing.T) {
 	r := module.NewRegistry[module.Identifier]("test-ident")
-	r.Register("fake", func(name string, cfg map[string]any) (module.Identifier, error) {
+	r.RegisterSimple("fake", func(name string, cfg map[string]any) (module.Identifier, error) {
 		return &fakeIdentifier{n: name}, nil
 	})
 
-	id, err := r.Build("fake", "my-fake", nil)
+	id, err := r.Build("fake", "my-fake", nil, module.Deps{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestRegistry_RegisterAndBuild(t *testing.T) {
 
 func TestRegistry_Build_UnknownType(t *testing.T) {
 	r := module.NewRegistry[module.Identifier]("test-ident")
-	_, err := r.Build("nonexistent", "x", nil)
+	_, err := r.Build("nonexistent", "x", nil, module.Deps{})
 	if err == nil {
 		t.Fatal("expected error for unknown type")
 	}
@@ -51,22 +51,22 @@ func TestRegistry_Register_PanicOnDuplicate(t *testing.T) {
 	factory := func(name string, cfg map[string]any) (module.Identifier, error) {
 		return &fakeIdentifier{n: name}, nil
 	}
-	r.Register("dup", factory)
+	r.RegisterSimple("dup", factory)
 
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic on duplicate registration")
 		}
 	}()
-	r.Register("dup", factory) // should panic
+	r.RegisterSimple("dup", factory) // should panic
 }
 
 func TestRegistry_Types(t *testing.T) {
 	r := module.NewRegistry[module.Identifier]("test-ident")
-	r.Register("beta", func(string, map[string]any) (module.Identifier, error) {
+	r.RegisterSimple("beta", func(string, map[string]any) (module.Identifier, error) {
 		return &fakeIdentifier{}, nil
 	})
-	r.Register("alpha", func(string, map[string]any) (module.Identifier, error) {
+	r.RegisterSimple("alpha", func(string, map[string]any) (module.Identifier, error) {
 		return &fakeIdentifier{}, nil
 	})
 
@@ -81,7 +81,7 @@ func TestRegistry_Types(t *testing.T) {
 
 func TestRegistry_Has(t *testing.T) {
 	r := module.NewRegistry[module.Identifier]("test-ident")
-	r.Register("exists", func(string, map[string]any) (module.Identifier, error) {
+	r.RegisterSimple("exists", func(string, map[string]any) (module.Identifier, error) {
 		return &fakeIdentifier{}, nil
 	})
 	if !r.Has("exists") {
@@ -128,8 +128,8 @@ func TestDecodeConfig_Success(t *testing.T) {
 
 func TestDecodeConfig_UnknownKeys(t *testing.T) {
 	raw := map[string]any{
-		"name":    "test",
-		"typo":   "oops",
+		"name": "test",
+		"typo": "oops",
 	}
 	var cfg sampleConfig
 	err := module.DecodeConfig(raw, &cfg)
@@ -172,7 +172,7 @@ func TestDecodeConfig_EmptyMap(t *testing.T) {
 
 func TestDecoratedRegistry_AppliesDecorators(t *testing.T) {
 	r := module.NewDecoratedRegistry[module.Identifier]("test-ident")
-	r.Register("base", func(name string, cfg map[string]any) (module.Identifier, error) {
+	r.RegisterSimple("base", func(name string, cfg map[string]any) (module.Identifier, error) {
 		return &fakeIdentifier{n: name}, nil
 	})
 
@@ -181,7 +181,7 @@ func TestDecoratedRegistry_AppliesDecorators(t *testing.T) {
 		return &fakeIdentifier{n: "decorated-" + id.Name()}
 	})
 
-	id, err := r.Build("base", "original", nil)
+	id, err := r.Build("base", "original", nil, module.Deps{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
