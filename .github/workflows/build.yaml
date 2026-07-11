@@ -306,6 +306,31 @@ jobs:
         if: github.event_name != 'pull_request'
         run: cosign sign --yes ${{ env.REGISTRY }}/mikeappsec/lwauth-controlplane@${{ steps.push.outputs.digest }}
 
+  # Notifies lightweightauth-infra-oci that a new, signed control-plane
+  # image is ready to promote. That repo's promote-controlplane.yml
+  # independently re-verifies the cosign signature before trusting this —
+  # this job only sends the pointer, it does not push anything to
+  # production itself. Only runs on a real push to main (never on PRs, so
+  # a fork PR can never reach INFRA_PROMOTE_PAT).
+  promote-controlplane:
+    runs-on: ubuntu-24.04
+    needs: build-controlplane
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch promotion to lightweightauth-infra-oci
+        run: |
+          # Matches docker/metadata-action's type=sha default format
+          # (sha-<7charshortsha>), the same tag build-controlplane just
+          # pushed and signed above.
+          SHORT_TAG="sha-$(echo "${{ github.sha }}" | cut -c1-7)"
+          curl -fsS -X POST \
+            -H "Authorization: token ${{ secrets.INFRA_PROMOTE_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/mikeappsec/lightweightauth-infra-oci/dispatches \
+            -d "{\"event_type\":\"controlplane-image-published\",\"client_payload\":{\"tag\":\"${SHORT_TAG}\",\"commit\":\"${{ github.sha }}\"}}"
+
   e2e:
     runs-on: ubuntu-24.04
     needs: build
