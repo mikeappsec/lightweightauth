@@ -11,9 +11,12 @@ import {
   Activity,
   Settings,
   LogOut,
+  Sun,
+  Moon,
 } from "lucide-solid";
 import { logout } from "./api/client";
 import { session, setSession } from "./auth/store";
+import { theme, toggleTheme } from "./theme/store";
 
 export default function App(props: ParentProps) {
   const handleLogout = async () => {
@@ -26,8 +29,10 @@ export default function App(props: ParentProps) {
   };
 
   return (
-    <div class="min-h-screen flex bg-gray-50">
-      {/* Sidebar */}
+    <div class="min-h-screen flex bg-gray-50 dark:bg-gray-950">
+      {/* Sidebar — deliberately stays a constant dark navy in both
+          themes (a common enterprise-console pattern, e.g. Vercel/Linear):
+          it's the brand anchor, while the content pane is what switches. */}
       <aside class="w-64 bg-gray-950 text-gray-300 flex flex-col border-r border-gray-800 shrink-0">
         {/* Brand */}
         <div class="h-16 flex items-center gap-3 px-5 border-b border-gray-800">
@@ -80,7 +85,14 @@ export default function App(props: ParentProps) {
           <div class="flex items-center gap-2 text-xs text-gray-500">
             <Settings size={14} />
             <span>v1.2.0</span>
-            <span class="ml-auto px-1.5 py-0.5 bg-green-500/10 text-green-400 rounded text-[10px] font-medium">
+            <button
+              onClick={toggleTheme}
+              title={theme() === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              class="ml-auto flex items-center gap-1 text-gray-500 hover:text-gray-200 transition-colors"
+            >
+              {theme() === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <span class="px-1.5 py-0.5 bg-green-500/10 text-green-400 rounded text-[10px] font-medium">
               Connected
             </span>
           </div>
@@ -90,7 +102,7 @@ export default function App(props: ParentProps) {
       {/* Main content */}
       <div class="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <header class="h-16 bg-white border-b border-gray-200 flex items-center px-6 shrink-0">
+        <header class="h-16 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center px-6 shrink-0">
           <Breadcrumb />
         </header>
 
@@ -142,11 +154,17 @@ function Breadcrumb() {
 
   return (
     <div class="flex items-center gap-1.5 text-sm">
-      <A href="/" class="text-gray-500 hover:text-gray-900">Home</A>
+      <A href="/" class="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">Home</A>
       {parts().map((part, i) => (
         <>
-          <span class="text-gray-300">/</span>
-          <span class={i === parts().length - 1 ? "text-gray-900 font-medium capitalize" : "text-gray-500 capitalize"}>
+          <span class="text-gray-300 dark:text-gray-700">/</span>
+          <span
+            class={
+              i === parts().length - 1
+                ? "text-gray-900 dark:text-gray-100 font-medium capitalize"
+                : "text-gray-500 dark:text-gray-400 capitalize"
+            }
+          >
             {decodeURIComponent(part)}
           </span>
         </>

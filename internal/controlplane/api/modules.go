@@ -106,11 +106,9 @@ var identifierMeta = map[string]moduleMetadata{
 		displayName: "API Key",
 		description: "Authenticate requests using API keys from headers or query parameters",
 		fields: []ModuleField{
-			{Name: "backend", Type: "select", Required: true, Default: "entries", Options: []string{"entries", "file", "kubernetes-secret"}, Description: "Key storage backend"},
 			{Name: "header", Type: "string", Required: false, Default: "X-API-Key", Description: "Header name containing the API key"},
-			{Name: "query", Type: "string", Required: false, Description: "Query parameter name (alternative to header)"},
-			{Name: "secret", Type: "string", Required: false, Placeholder: "lwauth-api-keys", Description: "Kubernetes Secret name (for kubernetes-secret backend)"},
-			{Name: "entries", Type: "object", Required: false, Description: "Inline key entries (for entries backend)"},
+			{Name: "entries", Type: "object", Required: false, Description: "Inline key map: key → {subject, keyId}. Renamed to 'static' by the provisioner. Suitable for dev/test only."},
+			{Name: "hashed", Type: "object", Required: false, Description: "Hashed key map: key → {subject}. Use argon2id digests for production."},
 		},
 	},
 	"mtls": {
@@ -168,8 +166,8 @@ var authorizerMeta = map[string]moduleMetadata{
 		displayName: "RBAC (Role-Based)",
 		description: "Built-in role-based access control with subject-to-role-to-permission mapping",
 		fields: []ModuleField{
-			{Name: "roles", Type: "object", Required: true, Description: "Role definitions with permissions"},
-			{Name: "rolesClaim", Type: "string", Required: false, Default: "roles", Description: "JWT claim containing user roles"},
+			{Name: "allow", Type: "stringArray", Required: true, Placeholder: "admin, editor", Description: "Roles permitted to access this node (comma-separated)"},
+			{Name: "rolesFrom", Type: "string", Required: false, Default: "claim:roles", Description: "Where to read roles from. Format: claim:<name> (e.g. claim:roles)"},
 		},
 	},
 	"opa": {

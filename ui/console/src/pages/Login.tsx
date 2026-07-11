@@ -24,6 +24,12 @@ export default function Login(props: { onSuccess: (s: SessionInfo) => void }) {
 
   return (
     <div class="min-h-screen flex items-center justify-center bg-gray-950 px-4">
+      {/* The login screen deliberately always renders in the dark
+          "brand" palette (matching the sidebar) regardless of the
+          console's light/dark preference — it's shown before the
+          operator has a session, so there's no saved preference to
+          honor yet, and a consistent unauthenticated screen avoids a
+          jarring theme flash right before the themed console mounts. */}
       <div class="w-full max-w-sm">
         <div class="flex flex-col items-center mb-8">
           <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mb-3">

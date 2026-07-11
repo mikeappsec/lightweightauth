@@ -2,6 +2,7 @@ import { createEffect, onCleanup } from "solid-js";
 import { createQuery } from "@tanstack/solid-query";
 import { forceSimulation, forceLink, forceManyBody, forceCenter, type SimulationNodeDatum, type SimulationLinkDatum } from "d3-force";
 import { listRoutes, type Route } from "../api/client";
+import { theme } from "../theme/store";
 
 interface Node extends SimulationNodeDatum {
   id: string;
@@ -49,18 +50,19 @@ export default function MeshGraph() {
       .force("charge", forceManyBody().strength(-300))
       .force("center", forceCenter(width / 2, height / 2));
 
-    sim.on("tick", () => render(svgRef, nodes, links, width, height));
+    const dark = theme() === "dark";
+    sim.on("tick", () => render(svgRef, nodes, links, dark));
 
     onCleanup(() => sim.stop());
   });
 
   return (
     <div>
-      <h2 class="text-2xl font-bold mb-4">Service Mesh</h2>
-      <div class="border rounded bg-white" style={{ height: "500px" }}>
+      <h2 class="text-2xl font-bold mb-4 text-gray-900 dark:text-gray-100">Service Mesh</h2>
+      <div class="border border-gray-200 dark:border-gray-800 rounded bg-white dark:bg-gray-900" style={{ height: "500px" }}>
         <svg ref={svgRef!} width="100%" height="100%" />
       </div>
-      <div class="mt-3 flex gap-4 text-sm text-gray-600">
+      <div class="mt-3 flex gap-4 text-sm text-gray-600 dark:text-gray-400">
         <span class="flex items-center gap-1">
           <span class="inline-block w-3 h-3 rounded-full bg-green-500" /> Healthy
         </span>
@@ -72,11 +74,13 @@ export default function MeshGraph() {
   );
 }
 
-function render(svg: SVGSVGElement, nodes: Node[], links: Link[], _w: number, _h: number) {
+function render(svg: SVGSVGElement, nodes: Node[], links: Link[], dark: boolean) {
   // Clear previous content.
   svg.innerHTML = "";
 
   const ns = "http://www.w3.org/2000/svg";
+  const arrowColor = dark ? "#9ca3af" : "#666";
+  const nodeLabelColor = dark ? "#e5e7eb" : "#374151";
 
   // Draw marker for arrows.
   const defs = document.createElementNS(ns, "defs");
@@ -90,7 +94,7 @@ function render(svg: SVGSVGElement, nodes: Node[], links: Link[], _w: number, _h
   marker.setAttribute("orient", "auto-start-reverse");
   const path = document.createElementNS(ns, "path");
   path.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-  path.setAttribute("fill", "#666");
+  path.setAttribute("fill", arrowColor);
   marker.appendChild(path);
   defs.appendChild(marker);
   svg.appendChild(defs);
@@ -117,7 +121,7 @@ function render(svg: SVGSVGElement, nodes: Node[], links: Link[], _w: number, _h
     circle.setAttribute("cx", String(node.x ?? 0));
     circle.setAttribute("cy", String(node.y ?? 0));
     circle.setAttribute("r", "12");
-    circle.setAttribute("fill", "#3b82f6");
+    circle.setAttribute("fill", dark ? "#60a5fa" : "#3b82f6");
     circle.setAttribute("stroke", "#1e40af");
     circle.setAttribute("stroke-width", "2");
     g.appendChild(circle);
@@ -127,7 +131,7 @@ function render(svg: SVGSVGElement, nodes: Node[], links: Link[], _w: number, _h
     text.setAttribute("y", String((node.y ?? 0) + 26));
     text.setAttribute("text-anchor", "middle");
     text.setAttribute("font-size", "11");
-    text.setAttribute("fill", "#374151");
+    text.setAttribute("fill", nodeLabelColor);
     text.textContent = node.label;
     g.appendChild(text);
     svg.appendChild(g);

@@ -93,6 +93,10 @@ export interface InfrastructureReq {
   rateLimiting?: { enabled: boolean; rps?: number; burst?: number };
   revocation?: { enabled: boolean; backend?: string };
   gateway?: { enabled: boolean; upstreamHost?: string; upstreamPort?: number };
+  // Mirrors Go provisioner.TLSReq — enabling switches the node's HTTP
+  // listener (and kubelet probes) to HTTPS using a cert/key pair from
+  // an existing Kubernetes TLS Secret in the node's namespace.
+  tls?: { enabled: boolean; secretName?: string };
   networkPolicy: boolean;
 }
 
@@ -119,6 +123,15 @@ export interface ValidationError {
 export interface ValidationResult {
   valid: boolean;
   errors?: ValidationError[];
+}
+
+// Thrown by fetchJSON on non-2xx responses. Carries the backend's
+// field-level validation errors (POST /instances/create returns
+// {"error": "...", "validationErrors": [...]} on 422) so callers like
+// the create-instance wizard can route them back onto the offending
+// form fields instead of only showing the generic message.
+export class ApiError extends Error {
+  validationErrors?: ValidationError[];
 }
 
 export interface ClusterInfo {
@@ -165,7 +178,17 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).error || `HTTP ${res.status}`);
+    const err = new ApiError((body as any).error || `HTTP ${res.status}`);
+    if (Array.isArray((body as any).validationErrors)) {
+      err.validationErrors = (body as any).validationErrors;
+    }
+    throw err;
+  }
+  // DELETE endpoints (and any other 204) respond with no body — res.json()
+  // throws a SyntaxError on empty input, which would otherwise turn every
+  // successful delete into a rejected promise.
+  if (res.status === 204) {
+    return undefined as T;
   }
   return res.json();
 }
@@ -382,19 +405,22 @@ export function rollbackConfig(
 export interface RouteEnd {
   instance: string;
   cluster: string;
-  pathPrefix?: string;
 }
 
 export interface RouteStatus {
   healthy: boolean;
   lastProbe?: string;
-  latencyMs?: number;
+  latencyP99?: string;
+  error?: string;
 }
 
 export interface Route {
   name: string;
   source: RouteEnd;
   target: RouteEnd;
+  pathPrefix: string;
+  timeout?: string;
+  failureMode?: string;
   status: RouteStatus;
   createdAt: string;
 }
@@ -403,6 +429,9 @@ export interface CreateRouteRequest {
   name: string;
   source: RouteEnd;
   target: RouteEnd;
+  pathPrefix: string;
+  timeout?: string;
+  failureMode?: string;
 }
 
 export function listRoutes(): Promise<Route[]> {
@@ -418,9 +447,7 @@ export function createRoute(req: CreateRouteRequest): Promise<Route> {
 }
 
 export function deleteRoute(name: string): Promise<void> {
-  return fetch(`${BASE}/routes/${encodeURIComponent(name)}`, { method: "DELETE" }).then((r) => {
-    if (!r.ok) throw new Error(`DELETE /routes/${name}: ${r.status}`);
-  });
+  return fetchJSON<void>(`/routes/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 // --- Metrics (Phase 4) ---
@@ -510,7 +537,9 @@ export type AlertEventType = "open" | "acked" | "resolved";
 export interface MetricValue {
   value: number;
   threshold: number;
-  window: number; // seconds (Go time.Duration.ns / 1e9)
+  // Raw Go time.Duration, marshaled as nanoseconds (no custom JSON
+  // codec on the Go side) — divide by 1e9 for seconds. NOT seconds.
+  window: number;
   comparator: ">" | "<" | ">=" | "<=";
 }
 
@@ -574,8 +603,10 @@ export interface Rule {
   query: string;
   comparator: ">" | "<" | ">=" | "<=";
   threshold: number;
-  for: number;      // seconds
-  window: number;   // seconds
+  // Raw Go time.Duration values, marshaled as nanoseconds (no custom
+  // JSON codec on the Go side) — divide by 1e9 for seconds. NOT seconds.
+  for: number;
+  window: number;
   scope_labels?: string[];
   enabled: boolean;
   is_default?: boolean;

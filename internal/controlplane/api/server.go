@@ -244,6 +244,25 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	if req.Cluster == "" {
 		req.Cluster = "local"
 	}
+	// TLS.Enabled without a SecretName would otherwise slip through both
+	// the structured (nodeReq.Validate) and legacy request paths below and
+	// only surface as a CrashLoopBackOff: further down, enabling TLS always
+	// switches the kubelet probes to HTTPS, but the --tls-cert/--tls-key
+	// args (and the secret volume mount) are only added when SecretName is
+	// set, so the binary would keep serving plain HTTP while the probes
+	// expect HTTPS. Reject it upfront, before any cluster resource exists.
+	if req.Infrastructure != nil && req.Infrastructure.TLS != nil &&
+		req.Infrastructure.TLS.Enabled && req.Infrastructure.TLS.SecretName == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": "validation failed",
+			"validationErrors": []provisioner.ValidationError{
+				{Field: "infrastructure.tls.secretName", Message: "secretName is required when TLS is enabled"},
+			},
+		})
+		return
+	}
 
 	// If structured fields are present, use the provisioner to generate config.
 	if len(req.Identifiers) > 0 || req.Preset != "" {
