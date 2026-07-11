@@ -39,10 +39,7 @@ func BuiltInPresets() []Preset {
 					Name: "rbac-main",
 					Type: "rbac",
 					Config: map[string]any{
-						"roles": map[string]any{
-							"admin":  map[string]any{"permissions": []any{"read", "write", "delete"}},
-							"viewer": map[string]any{"permissions": []any{"read"}},
-						},
+						"allow": []any{"admin", "viewer"},
 					},
 				},
 			},
@@ -106,9 +103,14 @@ func BuiltInPresets() []Preset {
 					Name: "apikey-auth",
 					Type: "apikey",
 					Config: map[string]any{
-						"backend": "kubernetes-secret",
-						"header":  "X-API-Key",
-						"secret":  "lwauth-api-keys",
+						"header": "X-API-Key",
+						// No default entries: the map key itself is the literal
+						// API key value clients present, so shipping a concrete
+						// one here (e.g. "replace-me") would be a hard-coded,
+						// guessable credential an operator could deploy
+						// unmodified. Fails closed instead — no key registered,
+						// so nothing authenticates until one is added.
+						"entries": map[string]any{},
 					},
 				},
 			},
@@ -117,10 +119,7 @@ func BuiltInPresets() []Preset {
 					Name: "rbac-internal",
 					Type: "rbac",
 					Config: map[string]any{
-						"roles": map[string]any{
-							"admin": map[string]any{"permissions": []any{"read", "write"}},
-							"user":  map[string]any{"permissions": []any{"read"}},
-						},
+						"allow": []any{"admin", "user"},
 					},
 				},
 			},

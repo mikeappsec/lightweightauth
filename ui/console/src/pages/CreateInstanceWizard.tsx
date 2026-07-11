@@ -1,11 +1,14 @@
 import { createSignal, createResource, For, Show, Switch, Match, createEffect } from "solid-js";
+import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
+import { CodeBlock } from "../components/CodeBlock";
 import {
   listModules,
   listPresets,
   createInstance,
   previewCreate,
   probeURL,
+  ApiError,
   type ModuleCatalogue,
   type ModuleInfo,
   type ModuleEntry,
@@ -25,7 +28,6 @@ import {
   AlertCircle,
   Plus,
   Trash2,
-  Copy,
   Loader,
   CheckCircle,
   XCircle,
@@ -38,6 +40,18 @@ interface Props {
 
 const STEPS = ["Basics", "Identity", "Authorization", "Response", "Infrastructure"] as const;
 type Step = (typeof STEPS)[number];
+
+// Maps a backend ValidationError.field (e.g. "name", "identifiers[0].name",
+// "authorizers") to the wizard step that owns it, so a failed submit can
+// jump the operator back to the right place instead of leaving them on
+// the last step with no visible error.
+function stepForField(field: string): number {
+  if (field.startsWith("identifiers")) return 1;
+  if (field.startsWith("authorizers")) return 2;
+  if (field.startsWith("mutators")) return 3;
+  if (field.startsWith("infrastructure")) return 4;
+  return 0; // name, replicas, namespace, cluster, ...
+}
 
 export default function CreateInstanceWizard(props: Props) {
   const [step, setStep] = createSignal(0);
@@ -55,9 +69,9 @@ export default function CreateInstanceWizard(props: Props) {
   const [replicas, setReplicas] = createSignal(1);
   const [imageTag, setImageTag] = createSignal("");
   const [selectedPreset, setSelectedPreset] = createSignal("");
-  const [identifiers, setIdentifiers] = createSignal<ModuleEntry[]>([]);
-  const [authorizers, setAuthorizers] = createSignal<ModuleEntry[]>([]);
-  const [mutators, setMutators] = createSignal<ModuleEntry[]>([]);
+  const [identifiers, setIdentifiers] = createStore<ModuleEntry[]>([]);
+  const [authorizers, setAuthorizers] = createStore<ModuleEntry[]>([]);
+  const [mutators, setMutators] = createStore<ModuleEntry[]>([]);
   const [infra, setInfra] = createSignal<InfrastructureReq>({
     cacheBackend: "memory",
     networkPolicy: true,
@@ -70,7 +84,19 @@ export default function CreateInstanceWizard(props: Props) {
   const createMut = createMutation(() => ({
     mutationFn: (req: CreateInstanceRequest) => createInstance(req),
     onSuccess: () => props.onCreated(),
-    onError: (err: Error) => setError(err.message),
+    onError: (err: Error) => {
+      setError(err.message);
+      // A 422 from POST /instances/create carries field-level errors
+      // (validationErrors) alongside the generic message — surface them
+      // on the actual form fields via fieldError(), and jump back to
+      // the earliest step that has one so the operator isn't left
+      // staring at the last step with no clue what to fix.
+      if (err instanceof ApiError && err.validationErrors?.length) {
+        setValidationErrors(err.validationErrors);
+        const earliest = Math.min(...err.validationErrors.map((e) => stepForField(e.field)));
+        if (earliest < step()) setStep(earliest);
+      }
+    },
   }));
 
   const handlePresetSelect = (preset: Preset) => {
@@ -103,7 +129,7 @@ export default function CreateInstanceWizard(props: Props) {
   // Returns true if all are reachable (or if there are none), false + sets
   // error if any are unreachable.
   const validateJwksUrls = async (): Promise<boolean> => {
-    const jwtEntries = identifiers().filter((e) => e.type === "jwt");
+    const jwtEntries = identifiers.filter((e) => e.type === "jwt");
     const urlsToCheck = jwtEntries
       .map((e) => e.config?.jwksUrl as string | undefined)
       .filter((u): u is string => typeof u === "string" && u.startsWith("https://"));
@@ -144,9 +170,9 @@ export default function CreateInstanceWizard(props: Props) {
     replicas: replicas(),
     imageTag: imageTag() || undefined,
     preset: selectedPreset() || undefined,
-    identifiers: identifiers(),
-    authorizers: authorizers(),
-    mutators: mutators(),
+    identifiers: [...identifiers],
+    authorizers: [...authorizers],
+    mutators: [...mutators],
     infrastructure: infra(),
   });
 
@@ -155,9 +181,9 @@ export default function CreateInstanceWizard(props: Props) {
       case 0:
         return name().length > 0;
       case 1:
-        return identifiers().length > 0;
+        return identifiers.length > 0;
       case 2:
-        return authorizers().length > 0;
+        return authorizers.length > 0;
       default:
         return true;
     }
@@ -168,16 +194,16 @@ export default function CreateInstanceWizard(props: Props) {
 
   return (
     <div class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-100">
+      <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-100 dark:border-gray-800">
         {/* Header */}
-        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
           <div>
-            <h3 class="text-lg font-bold text-gray-900">Create LwAuth Node</h3>
-            <p class="text-xs text-gray-500 mt-0.5">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Create LwAuth Node</h3>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               Step {step() + 1} of {STEPS.length}: {STEPS[step()]}
             </p>
           </div>
-          <button onClick={props.onClose} class="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+          <button onClick={props.onClose} class="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">
             <X size={18} class="text-gray-400" />
           </button>
         </div>
@@ -191,8 +217,8 @@ export default function CreateInstanceWizard(props: Props) {
                   i() === step()
                     ? "bg-blue-600 text-white"
                     : i() < step()
-                    ? "bg-blue-50 text-blue-600"
-                    : "bg-gray-100 text-gray-400"
+                    ? "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                    : "bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500"
                 }`}
                 onClick={() => i() <= step() && setStep(i())}
               >
@@ -226,7 +252,7 @@ export default function CreateInstanceWizard(props: Props) {
             <Match when={step() === 1}>
               <StepIdentity
                 modules={catalogue()?.identifiers ?? []}
-                entries={identifiers()}
+                entries={identifiers}
                 setEntries={setIdentifiers}
                 fieldError={fieldError}
               />
@@ -234,7 +260,7 @@ export default function CreateInstanceWizard(props: Props) {
             <Match when={step() === 2}>
               <StepAuthorization
                 modules={catalogue()?.authorizers ?? []}
-                entries={authorizers()}
+                entries={authorizers}
                 setEntries={setAuthorizers}
                 fieldError={fieldError}
               />
@@ -242,7 +268,7 @@ export default function CreateInstanceWizard(props: Props) {
             <Match when={step() === 3}>
               <StepResponse
                 modules={catalogue()?.mutators ?? []}
-                entries={mutators()}
+                entries={mutators}
                 setEntries={setMutators}
               />
             </Match>
@@ -252,6 +278,7 @@ export default function CreateInstanceWizard(props: Props) {
                 setInfra={setInfra}
                 cacheBackends={catalogue()?.cacheBackends ?? []}
                 revocationBackends={catalogue()?.revocationBackends ?? []}
+                fieldError={fieldError}
               />
             </Match>
           </Switch>
@@ -259,18 +286,18 @@ export default function CreateInstanceWizard(props: Props) {
 
         {/* Error display */}
         <Show when={error()}>
-          <div class="mx-6 mb-2 p-3 bg-red-50 border border-red-100 rounded-lg flex items-start gap-2">
+          <div class="mx-6 mb-2 p-3 bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 rounded-lg flex items-start gap-2">
             <AlertCircle size={16} class="text-red-500 mt-0.5 shrink-0" />
-            <p class="text-sm text-red-700">{error()}</p>
+            <p class="text-sm text-red-700 dark:text-red-400">{error()}</p>
           </div>
         </Show>
 
         {/* Footer */}
-        <div class="flex items-center justify-between px-6 py-4 border-t border-gray-100">
+        <div class="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-800">
           <button
             onClick={() => setStep(Math.max(0, step() - 1))}
             disabled={step() === 0}
-            class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
             <ChevronLeft size={16} />
             Back
@@ -280,7 +307,7 @@ export default function CreateInstanceWizard(props: Props) {
             <Show when={step() === STEPS.length - 1}>
               <button
                 onClick={handlePreview}
-                class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               >
                 <Eye size={16} />
                 Preview
@@ -346,24 +373,24 @@ function StepBasics(props: {
       {/* Presets */}
       <Show when={props.presets && props.presets.length > 0}>
         <div>
-          <label class="text-xs font-semibold text-gray-700 uppercase tracking-wider">Quick Start Preset</label>
-          <p class="text-xs text-gray-500 mt-0.5 mb-3">Select a preset to pre-fill the form, then customize as needed.</p>
+          <label class="text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Quick Start Preset</label>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">Select a preset to pre-fill the form, then customize as needed.</p>
           <div class="grid grid-cols-2 gap-2">
             <For each={props.presets}>
               {(preset) => (
                 <button
                   class={`text-left p-3 rounded-xl border transition-all ${
                     props.selectedPreset === preset.name
-                      ? "border-blue-500 bg-blue-50/50 ring-1 ring-blue-500/20"
-                      : "border-gray-200 hover:border-gray-300 hover:bg-gray-50/50"
+                      ? "border-blue-500 bg-blue-50/50 dark:bg-blue-500/10 ring-1 ring-blue-500/20"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50/50 dark:hover:bg-gray-800/50"
                   }`}
                   onClick={() => props.onPresetSelect(preset)}
                 >
                   <div class="flex items-center gap-2">
-                    <Zap size={14} class={props.selectedPreset === preset.name ? "text-blue-600" : "text-gray-400"} />
-                    <span class="text-sm font-medium text-gray-900">{preset.displayName}</span>
+                    <Zap size={14} class={props.selectedPreset === preset.name ? "text-blue-600 dark:text-blue-400" : "text-gray-400 dark:text-gray-500"} />
+                    <span class="text-sm font-medium text-gray-900 dark:text-gray-100">{preset.displayName}</span>
                   </div>
-                  <p class="text-xs text-gray-500 mt-1 line-clamp-2">{preset.description}</p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">{preset.description}</p>
                 </button>
               )}
             </For>
@@ -428,7 +455,7 @@ function StepBasics(props: {
 function StepIdentity(props: {
   modules: ModuleInfo[];
   entries: ModuleEntry[];
-  setEntries: (v: ModuleEntry[]) => void;
+  setEntries: SetStoreFunction<ModuleEntry[]>;
   fieldError: (field: string) => string | undefined;
 }) {
   return (
@@ -449,7 +476,7 @@ function StepIdentity(props: {
 function StepAuthorization(props: {
   modules: ModuleInfo[];
   entries: ModuleEntry[];
-  setEntries: (v: ModuleEntry[]) => void;
+  setEntries: SetStoreFunction<ModuleEntry[]>;
   fieldError: (field: string) => string | undefined;
 }) {
   return (
@@ -470,7 +497,7 @@ function StepAuthorization(props: {
 function StepResponse(props: {
   modules: ModuleInfo[];
   entries: ModuleEntry[];
-  setEntries: (v: ModuleEntry[]) => void;
+  setEntries: SetStoreFunction<ModuleEntry[]>;
 }) {
   return (
     <ModuleListEditor
@@ -492,6 +519,7 @@ function StepInfrastructure(props: {
   setInfra: (v: InfrastructureReq) => void;
   cacheBackends: string[];
   revocationBackends: string[];
+  fieldError: (field: string) => string | undefined;
 }) {
   const update = (patch: Partial<InfrastructureReq>) =>
     props.setInfra({ ...props.infra, ...patch });
@@ -499,8 +527,8 @@ function StepInfrastructure(props: {
   return (
     <div class="space-y-5">
       <div>
-        <h4 class="text-sm font-semibold text-gray-900 mb-1">Infrastructure Settings</h4>
-        <p class="text-xs text-gray-500 mb-4">Configure caching, rate limiting, and network settings.</p>
+        <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">Infrastructure Settings</h4>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">Configure caching, rate limiting, and network settings.</p>
       </div>
 
       <div class="grid grid-cols-2 gap-4">
@@ -527,7 +555,7 @@ function StepInfrastructure(props: {
       </div>
 
       {/* Rate Limiting */}
-      <div class="border border-gray-200 rounded-xl p-4">
+      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -541,9 +569,9 @@ function StepInfrastructure(props: {
                 },
               })
             }
-            class="rounded border-gray-300 text-blue-600 focus:ring-blue-500/20"
+            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
           />
-          <span class="text-sm font-medium text-gray-900">Enable Rate Limiting</span>
+          <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Rate Limiting</span>
         </label>
         <Show when={props.infra.rateLimiting?.enabled}>
           <div class="grid grid-cols-2 gap-4 mt-3 pl-6">
@@ -582,7 +610,7 @@ function StepInfrastructure(props: {
       </div>
 
       {/* Revocation */}
-      <div class="border border-gray-200 rounded-xl p-4">
+      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -595,9 +623,9 @@ function StepInfrastructure(props: {
                 },
               })
             }
-            class="rounded border-gray-300 text-blue-600 focus:ring-blue-500/20"
+            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
           />
-          <span class="text-sm font-medium text-gray-900">Enable Revocation</span>
+          <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Revocation</span>
         </label>
         <Show when={props.infra.revocation?.enabled}>
           <div class="mt-3 pl-6">
@@ -621,7 +649,7 @@ function StepInfrastructure(props: {
       </div>
 
       {/* Gateway */}
-      <div class="border border-gray-200 rounded-xl p-4">
+      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -635,9 +663,9 @@ function StepInfrastructure(props: {
                 },
               })
             }
-            class="rounded border-gray-300 text-blue-600 focus:ring-blue-500/20"
+            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
           />
-          <span class="text-sm font-medium text-gray-900">Enable Envoy Gateway Sidecar</span>
+          <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Envoy Gateway Sidecar</span>
         </label>
         <Show when={props.infra.gateway?.enabled}>
           <div class="grid grid-cols-2 gap-4 mt-3 pl-6">
@@ -673,6 +701,48 @@ function StepInfrastructure(props: {
         </Show>
       </div>
 
+      {/* TLS */}
+      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={props.infra.tls?.enabled ?? false}
+            onChange={(e) =>
+              update({
+                tls: {
+                  enabled: e.currentTarget.checked,
+                  secretName: props.infra.tls?.secretName ?? "",
+                },
+              })
+            }
+            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
+          />
+          <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable TLS</span>
+        </label>
+        <Show when={props.infra.tls?.enabled}>
+          <div class="mt-3 pl-6">
+            <FormField
+              label="TLS Secret Name"
+              required
+              description="An existing Kubernetes TLS Secret (tls.crt + tls.key) in this node's namespace. The node switches its HTTP listener — and its liveness/readiness probes — to HTTPS, so the pod will crash-loop if this secret doesn't exist yet."
+              error={props.fieldError("infrastructure.tls.secretName")}
+            >
+              <input
+                type="text"
+                value={props.infra.tls?.secretName ?? ""}
+                onInput={(e) =>
+                  update({
+                    tls: { ...props.infra.tls!, secretName: e.currentTarget.value },
+                  })
+                }
+                placeholder="payments-auth-tls"
+                class="form-input"
+              />
+            </FormField>
+          </div>
+        </Show>
+      </div>
+
       {/* Network Policy */}
       <label class="flex items-center gap-2 cursor-pointer">
         <input
@@ -681,7 +751,7 @@ function StepInfrastructure(props: {
           onChange={(e) => update({ networkPolicy: e.currentTarget.checked })}
           class="rounded border-gray-300 text-blue-600 focus:ring-blue-500/20"
         />
-        <span class="text-sm font-medium text-gray-900">Enable Network Policy</span>
+        <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Network Policy</span>
       </label>
     </div>
   );
@@ -694,12 +764,17 @@ function ModuleListEditor(props: {
   description: string;
   modules: ModuleInfo[];
   entries: ModuleEntry[];
-  setEntries: (v: ModuleEntry[]) => void;
+  setEntries: SetStoreFunction<ModuleEntry[]>;
   fieldPrefix: string;
   fieldError: (field: string) => string | undefined;
 }) {
   const [addingType, setAddingType] = createSignal("");
 
+  // These mutate the store in place at a path (index/key) instead of
+  // replacing the whole array — <For> below keys rows by object
+  // identity, and identity-preserving store updates are what let a
+  // single row re-render in place instead of the whole row (and its
+  // focused <input>) being torn down and recreated on every keystroke.
   const addModule = () => {
     const mod = props.modules.find((m) => m.type === addingType());
     if (!mod) return;
@@ -709,38 +784,38 @@ function ModuleListEditor(props: {
         defaultConfig[f.name] = f.default;
       }
     }
-    props.setEntries([
-      ...props.entries,
-      { name: `${mod.type}-${props.entries.length + 1}`, type: mod.type, config: defaultConfig },
-    ]);
+    props.setEntries(
+      produce((entries) => {
+        entries.push({ name: `${mod.type}-${entries.length + 1}`, type: mod.type, config: defaultConfig });
+      }),
+    );
     setAddingType("");
   };
 
   const removeModule = (idx: number) => {
-    props.setEntries(props.entries.filter((_, i) => i !== idx));
+    props.setEntries(produce((entries) => { entries.splice(idx, 1); }));
   };
 
   const updateEntry = (idx: number, patch: Partial<ModuleEntry>) => {
-    const copy = [...props.entries];
-    copy[idx] = { ...copy[idx], ...patch };
-    props.setEntries(copy);
+    props.setEntries(idx, patch);
   };
 
   const updateConfig = (idx: number, key: string, value: unknown) => {
-    const copy = [...props.entries];
-    copy[idx] = { ...copy[idx], config: { ...copy[idx].config, [key]: value } };
-    props.setEntries(copy);
+    props.setEntries(idx, "config", (prev: Record<string, unknown> | undefined) => ({
+      ...(prev ?? {}),
+      [key]: value,
+    }));
   };
 
   return (
     <div class="space-y-4">
       <div>
-        <h4 class="text-sm font-semibold text-gray-900">{props.title}</h4>
-        <p class="text-xs text-gray-500 mt-0.5">{props.description}</p>
+        <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">{props.title}</h4>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{props.description}</p>
       </div>
 
       <Show when={props.fieldError(props.fieldPrefix)}>
-        <p class="text-xs text-red-600 flex items-center gap-1">
+        <p class="text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
           <AlertCircle size={12} />
           {props.fieldError(props.fieldPrefix)}
         </p>
@@ -750,23 +825,23 @@ function ModuleListEditor(props: {
         {(entry, idx) => {
           const mod = () => props.modules.find((m) => m.type === entry.type);
           return (
-            <div class="border border-gray-200 rounded-xl p-4 space-y-3 bg-gray-50/30">
+            <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4 space-y-3 bg-gray-50/30 dark:bg-gray-800/30">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase">
+                  <span class="text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-2 py-0.5 rounded-full uppercase">
                     {entry.type}
                   </span>
-                  <span class="text-sm font-medium text-gray-700">{mod()?.displayName ?? entry.type}</span>
+                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{mod()?.displayName ?? entry.type}</span>
                 </div>
                 <button
                   onClick={() => removeModule(idx())}
-                  class="p-1 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
+                  class="p-1 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
                 >
                   <Trash2 size={14} />
                 </button>
               </div>
 
-              <FormField label="Instance Name">
+              <FormField label="Instance Name" error={props.fieldError(`${props.fieldPrefix}[${idx()}].name`)}>
                 <input
                   type="text"
                   value={entry.name}
@@ -856,9 +931,9 @@ function ModuleFieldInput(props: {
               type="checkbox"
               checked={Boolean(props.value ?? f.default)}
               onChange={(e) => props.onChange(e.currentTarget.checked)}
-              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500/20"
+              class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
             />
-            <span class="text-xs text-gray-600">{f.description}</span>
+            <span class="text-xs text-gray-600 dark:text-gray-400">{f.description}</span>
           </label>
         </Match>
         <Match when={f.type === "number"}>
@@ -973,7 +1048,7 @@ function JwksUrlInput(props: {
           type="button"
           onClick={runProbe}
           disabled={probeState() === "checking" || !props.value.startsWith("https://")}
-          class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+          class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors"
         >
           <Switch>
             <Match when={probeState() === "checking"}>
@@ -995,7 +1070,7 @@ function JwksUrlInput(props: {
         </button>
       </div>
       <Show when={probeState() !== "idle"}>
-        <p class={`text-xs flex items-center gap-1 ${probeState() === "ok" ? "text-green-600" : probeState() === "error" ? "text-red-600" : "text-gray-500"}`}>
+        <p class={`text-xs flex items-center gap-1 ${probeState() === "ok" ? "text-green-600 dark:text-green-400" : probeState() === "error" ? "text-red-600 dark:text-red-400" : "text-gray-500 dark:text-gray-400"}`}>
           <Switch>
             <Match when={probeState() === "ok"}><CheckCircle size={11} /></Match>
             <Match when={probeState() === "error"}><XCircle size={11} /></Match>
@@ -1018,18 +1093,16 @@ function PreviewModal(props: {
 }) {
   const content = () => (props.tab === "yaml" ? props.data.authConfig : props.data.helmValues);
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(content());
-  };
-
   return (
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
-      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-gray-100">
-        <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+      <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-gray-100 dark:border-gray-800">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 dark:border-gray-800">
           <div class="flex gap-1">
             <button
               class={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                props.tab === "yaml" ? "bg-blue-600 text-white" : "text-gray-600 hover:bg-gray-100"
+                props.tab === "yaml"
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
               }`}
               onClick={() => props.setTab("yaml")}
             >
@@ -1037,29 +1110,22 @@ function PreviewModal(props: {
             </button>
             <button
               class={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                props.tab === "helm" ? "bg-blue-600 text-white" : "text-gray-600 hover:bg-gray-100"
+                props.tab === "helm"
+                  ? "bg-blue-600 text-white"
+                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
               }`}
               onClick={() => props.setTab("helm")}
             >
               Helm Values
             </button>
           </div>
-          <div class="flex items-center gap-2">
-            <button
-              onClick={copyToClipboard}
-              class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
-            >
-              <Copy size={12} />
-              Copy
-            </button>
-            <button onClick={props.onClose} class="p-1 hover:bg-gray-100 rounded-lg">
-              <X size={16} class="text-gray-400" />
-            </button>
-          </div>
+          <button onClick={props.onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg">
+            <X size={16} class="text-gray-400" />
+          </button>
         </div>
-        <pre class="flex-1 overflow-auto p-5 text-xs font-mono text-gray-800 bg-gray-50 leading-relaxed whitespace-pre-wrap">
-          {content()}
-        </pre>
+        <div class="flex-1 overflow-hidden p-4">
+          <CodeBlock code={content()} language="yaml" maxHeight="calc(80vh - 130px)" />
+        </div>
       </div>
     </div>
   );
@@ -1075,17 +1141,17 @@ function FormField(props: {
   children: any;
 }) {
   return (
-    <label class="block text-xs font-medium text-gray-700">
+    <label class="block text-xs font-medium text-gray-700 dark:text-gray-300">
       <span>
         {props.label}
         {props.required && <span class="text-red-500 ml-0.5">*</span>}
       </span>
       <Show when={props.description}>
-        <p class="font-normal text-gray-400 mt-0.5">{props.description}</p>
+        <p class="font-normal text-gray-400 dark:text-gray-500 mt-0.5">{props.description}</p>
       </Show>
       <div class="mt-1.5">{props.children}</div>
       <Show when={props.error}>
-        <p class="text-red-600 mt-1 flex items-center gap-1">
+        <p class="text-red-600 dark:text-red-400 mt-1 flex items-center gap-1">
           <AlertCircle size={11} />
           {props.error}
         </p>
