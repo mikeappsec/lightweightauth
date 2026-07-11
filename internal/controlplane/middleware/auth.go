@@ -89,8 +89,8 @@ func Auth(cfg RBACConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Skip health/readiness probes.
-			if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			// Skip health/readiness probes and the deploy-identity endpoint.
+			if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/version" {
 				next.ServeHTTP(w, r)
 				return
 			}

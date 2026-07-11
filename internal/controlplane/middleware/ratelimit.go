@@ -169,8 +169,8 @@ func RateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Skip health probes.
-			if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			// Skip health probes and the deploy-identity endpoint.
+			if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/version" {
 				next.ServeHTTP(w, r)
 				return
 			}

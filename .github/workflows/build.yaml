@@ -187,9 +187,80 @@ jobs:
             COMMIT=${{ github.sha }}
             GOFIPS140_VER=v1.0.0
 
-  build-controlplane:
+  # Boots the freshly built control-plane image in a real (ephemeral,
+  # in-CI) kind cluster and hits /healthz + /version before the image is
+  # ever considered promotable. Catches startup-wiring panics (e.g. a
+  # duplicate http.ServeMux route registration) that a unit test can miss
+  # but that `go test ./...` staying green would otherwise let through to
+  # the registry. Mirrors scripts/dev_up.py's proven local-dev pattern.
+  smoke-controlplane:
     runs-on: ubuntu-24.04
     needs: test
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
+      # Single-platform, load: true build — separate from build-controlplane's
+      # multi-platform buildx output below, which can't be docker-loaded.
+      - uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: .
+          file: Dockerfile.controlplane
+          platforms: linux/amd64
+          load: true
+          tags: lwauth-controlplane:ci
+          build-args: |
+            VERSION=ci
+            COMMIT=${{ github.sha }}
+      - name: Install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+      - uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+        with:
+          version: "v3.16.0"
+      - name: Create kind cluster
+        run: kind create cluster --name lwauth-ci --wait 60s
+      - name: Load image into kind
+        run: kind load docker-image lwauth-controlplane:ci --name lwauth-ci
+      - name: Deploy and wait for rollout
+        run: |
+          helm upgrade --install lwauth-cp deploy/helm/lightweightauth-controlplane \
+            --namespace lwauth-system --create-namespace \
+            --set image.repository=lwauth-controlplane \
+            --set image.tag=ci \
+            --set image.pullPolicy=Never \
+            --set replicaCount=1 \
+            --set leaderElection.enabled=false \
+            --set service.type=ClusterIP
+          kubectl rollout status deployment -n lwauth-system --timeout=90s
+      - name: Verify /healthz and /version
+        run: |
+          kubectl port-forward -n lwauth-system svc/lwauth-cp-lightweightauth-controlplane 8443:8443 &
+          sleep 3
+          curl -fsS http://localhost:8443/healthz
+          got=$(curl -fsS http://localhost:8443/version | jq -r .commit)
+          if [[ "$got" != "${{ github.sha }}" ]]; then
+            echo "::error::commit mismatch: image reports $got, expected ${{ github.sha }}"
+            exit 1
+          fi
+      - name: Dump pod logs on failure
+        if: failure()
+        run: kubectl logs -n lwauth-system -l app.kubernetes.io/name=lightweightauth-controlplane --all-containers --tail=200
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name lwauth-ci
+
+  build-controlplane:
+    runs-on: ubuntu-24.04
+    needs: [test, smoke-controlplane]
     permissions:
       contents: read
       packages: write
@@ -212,7 +283,8 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
-      - uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+      - id: push
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
         with:
           context: .
           file: Dockerfile.controlplane
@@ -225,6 +297,14 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
+      # Sign the pushed image by digest (keyless, Sigstore/Rekor) so the
+      # infra repo's promotion workflow can independently verify it came
+      # from this exact workflow+branch before promoting it to production.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v3.8.0
+        if: github.event_name != 'pull_request'
+      - name: Sign control-plane image (keyless, by digest)
+        if: github.event_name != 'pull_request'
+        run: cosign sign --yes ${{ env.REGISTRY }}/mikeappsec/lwauth-controlplane@${{ steps.push.outputs.digest }}
 
   e2e:
     runs-on: ubuntu-24.04
