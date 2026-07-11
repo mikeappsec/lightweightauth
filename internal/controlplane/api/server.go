@@ -78,7 +78,6 @@ func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, c
 func (s *Server) WithAlerting(engine *alerting.Engine, loader *alerting.ConfigMapLoader) *Server {
 	s.AlertEngine = engine
 	s.RulesLoader = loader
-	s.registerAlertRoutes()
 	return s
 }
 
@@ -131,18 +130,16 @@ func (s *Server) registerRoutes() {
 	// URL probe (JWKS reachability check for the create wizard).
 	s.Mux.HandleFunc("GET /v1/controlplane/probe/url", s.handleProbeURL)
 
-	// Alerting endpoints (Phase 2). Sub-registration is gated on
-	// WithAlerting having been called; the methods themselves also
-	// nil-check so direct calls via s.Mux dispatch degrade cleanly
-	// in local-dev where alerting is intentionally disabled.
+	// Alerting endpoints (Phase 2). Always registered; the handlers
+	// nil-check s.AlertEngine and s.RulesLoader so endpoints respond
+	// with a "not configured" stub rather than crashing when alerting
+	// is disabled in local-dev (i.e. WithAlerting was not called).
 	s.registerAlertRoutes()
 }
 
-// registerAlertRoutes wires the alert REST + WS endpoints. Safe to
-// call multiple times — the routes are idempotent on the same mux.
-// The handlers nil-check s.AlertEngine and s.RulesLoader so endpoints
-// respond with a "not configured" stub rather than crashing when
-// alerting is disabled in local-dev.
+// registerAlertRoutes wires the alert REST + WS endpoints. Called once
+// from registerRoutes(); http.ServeMux panics on duplicate pattern
+// registration, so this must not also be called from WithAlerting.
 func (s *Server) registerAlertRoutes() {
 	s.Mux.HandleFunc("GET /v1/controlplane/alerts", s.handleListAlerts)
 	s.Mux.HandleFunc("POST /v1/controlplane/alerts/{id}/ack", s.handleAckAlert)
