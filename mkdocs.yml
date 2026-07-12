@@ -145,6 +145,7 @@ nav:
           - HMAC (SigV4-style): modules/hmac.md
           - SAML 2.0: modules/saml.md
           - SCIM 2.0 provisioning: modules/scim.md
+          - ID-JAG (MCP enterprise auth): modules/idjag.md
           - DPoP wrapper: modules/dpop.md
           - gRPC plugin: modules/plugin-grpc.md
           - WASM plugin: modules/wasm.md
@@ -154,6 +155,7 @@ nav:
           - OPA: modules/opa.md
           - OpenFGA: modules/openfga.md
           - SpiceDB (ReBAC): modules/spicedb.md
+          - Step-up assurance (MFA): modules/assurance.md
           - Composite: modules/composite.md
       - Response mutators:
           - Header add: modules/header-add.md

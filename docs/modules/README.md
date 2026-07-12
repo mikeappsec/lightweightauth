@@ -30,8 +30,12 @@ the `pkg/module` interfaces these implement.
 | `apikey` | [apikey.md](apikey.md) | Long-lived API keys (with argon2id hashing for production). |
 | `mtls` | [mtls.md](mtls.md) | Service-to-service identity via client certificates / SPIFFE. |
 | `hmac` | [hmac.md](hmac.md) | AWS-SigV4-style request signatures (CLI tools, webhooks). |
+| `saml` | [saml.md](saml.md) | SAML 2.0 assertion validator for enterprise IdPs. |
+| `scim` | [scim.md](scim.md) | SCIM 2.0 provisioning callback authentication. |
+| `idjag` | [idjag.md](idjag.md) | Identity Assertion JWT Authorization Grant (MCP enterprise auth). |
 | `dpop` | [dpop.md](dpop.md) | RFC 9449 sender-constrained bearers (wraps another identifier). |
 | `grpc-plugin` | [plugin-grpc.md](plugin-grpc.md) | Out-of-process plugin (also valid under `authorizers:` and `mutators:`). |
+| `wasm` | [wasm.md](wasm.md) | Sandboxed WASM plugin (also valid under `authorizers:` and `mutators:`). |
 
 ## Authorizers
 
@@ -41,7 +45,11 @@ the `pkg/module` interfaces these implement.
 | `cel` | [cel.md](cel.md) | Single-line bool expressions over identity / request. |
 | `opa` | [opa.md](opa.md) | Full OPA / Rego policies. |
 | `openfga` | [openfga.md](openfga.md) | Zanzibar-style ReBAC against an external OpenFGA Pod. |
+| `spicedb` | [spicedb.md](spicedb.md) | Zanzibar-style ReBAC against SpiceDB. |
+| `assurance` | [assurance.md](assurance.md) | Step-up MFA / authentication assurance level per route. |
 | `composite` | [composite.md](composite.md) | Combine the above with `allOf` / `anyOf`. |
+| `grpc-plugin` | [plugin-grpc.md](plugin-grpc.md) | Out-of-process plugin (also valid under `identifiers:` and `mutators:`). |
+| `wasm` | [wasm.md](wasm.md) | Sandboxed WASM plugin (also valid under `identifiers:` and `mutators:`). |
 
 ## Response mutators
 
@@ -51,6 +59,8 @@ the `pkg/module` interfaces these implement.
 | `header-remove` | [header-remove.md](header-remove.md) | Strip sensitive headers before they reach upstream. |
 | `header-passthrough` | [header-passthrough.md](header-passthrough.md) | Allow-list specific incoming headers. |
 | `jwt-issue` | [jwt-issue.md](jwt-issue.md) | Mint a fresh internal JWT for the upstream. |
+| `grpc-plugin` | [plugin-grpc.md](plugin-grpc.md) | Out-of-process plugin (also valid under `identifiers:` and `authorizers:`). |
+| `wasm` | [wasm.md](wasm.md) | Sandboxed WASM plugin (also valid under `identifiers:` and `authorizers:`). |
 
 ## Cache backends
 

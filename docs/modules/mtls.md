@@ -24,7 +24,7 @@ identifiers:
       # itself. Set true only when a verified Envoy/Istio hop strips
       # inbound XFCC and re-emits its own.
       trustForwardedClientCert: true
-      header: x-forwarded-client-cert        # default
+      header: x-forwarded-client-cert        # default is "X-Forwarded-Client-Cert"; HTTP headers are case-insensitive so this is equivalent
 
       # Strongly recommended when trustForwardedClientCert is true:
       # pin the CA roots so a self-signed cert with a forged Issuer DN

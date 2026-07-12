@@ -33,7 +33,7 @@ identifiers:
         # 1. inline argon2id digests (small static fleets)
         entries:
           ak_alice_2026: { subject: alice, roles: [admin],
-                           digest: "$argon2id$v=19$m=65536,t=3,p=2$..." }
+                           hash: "$argon2id$v=19$m=65536,t=3,p=2$..." }
 
         # 2. flat file (one digest per line, ConfigMap-friendly)
         # file: /etc/lwauth/apikeys.txt
