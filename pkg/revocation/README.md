@@ -15,8 +15,8 @@ store := revocation.NewMemoryStore(
     revocation.WithMaxEntries(100000),
 )
 
-// Add a revocation
-store.Add(ctx, &revocation.Entry{
+// Add a revocation — Add takes Entry by value, not a pointer
+store.Add(ctx, revocation.Entry{
     Key:    "jti:abc123",
     Reason: "user-logout",
     TTL:    1 * time.Hour,
@@ -63,7 +63,8 @@ vStore, err := revocation.NewValkeyStore(revocation.ValkeyConfig{
 ## Features
 
 - **MemoryStore**: in-process map with lazy eviction + background reaper goroutine
-- **ValkeyStore**: shared storage via SET+EX/EXISTS for multi-replica deployments
+- **ValkeyStore**: shared storage via `SET ... PX <ms>`/`EXISTS` for multi-replica deployments
+- **CacheStore**: folds revocation onto a shared `pkg/cache` pool backend (`NewCacheStore`) — a third real backend, undocumented here previously
 - **NegCache**: local negative-result cache wrapper to avoid network round-trips
 - **ParallelChecker**: bounded goroutine pool for concurrent multi-key revocation checks
 - Key-agnostic: stores any opaque string (JTI, sha256(token), session ID, etc.)
@@ -98,7 +99,8 @@ For 0–1 keys, `ExistsAny` inlines the call without spawning goroutines.
 2. If key exists → credential is revoked → request denied.
 3. `NegCache` wraps the backing store: on "not revoked" result, caches locally for `negCacheTTL` to skip network calls.
 4. On `Add`, NegCache evicts the local entry to ensure immediate enforcement.
-5. ValkeyStore uses Redis `SET key reason EX ttl` for add, `EXISTS key` for lookup.
+5. ValkeyStore uses Redis `SET key reason PX <milliseconds>` for add
+   (millisecond precision, not `EX <seconds>`), `EXISTS key` for lookup.
 
 ## Thread Safety
 

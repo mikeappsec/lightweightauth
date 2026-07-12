@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("api-keys", "apikey", map[string]any{
+identifier, err := module.BuildIdentifier("apikey", "api-keys", map[string]any{
     "headerName": "X-Api-Key",
     "hashed": map[string]any{
         "file": "/etc/lwauth/api-keys.txt",
@@ -37,15 +37,19 @@ identifiers:
 | `static` | map | `nil` | Plaintext keys (dev/test only) |
 | `hashed.file` | string | — | Flat file of argon2id digests |
 | `hashed.dir` | string | — | Directory of digest files |
-| `hashed.entries` | []string | — | Inline argon2id hashes |
+| `hashed.entries` | map (id → `{hash, subject, roles}`) | — | Inline argon2id hashes, keyed by entry ID |
 
 ## Features
 
-- Argon2id hashing (RFC 9106 interactive profile: time=2, memory=64KB, threads=1)
+- Argon2id hashing (RFC 9106 interactive profile: time=2, memory=64MiB (`m=65536` KiB), threads=1)
 - Constant-time comparison via `subtle.ConstantTimeCompare`
 - Multiple backends: static (dev), hashed file, hashed directory, inline entries
 - Empty subjects rejected at configuration time across all backends (APIKEY-VULN-01 fix)
-- Key rotation support via `keyrotation.KeySet`
+- `pkg/identity/apikey/rotatable.go` implements time-bounded key rotation via
+  `keyrotation.KeySet`, but it's **not wired in** — `factory()` never
+  constructs it, and `secrets:` isn't a recognized config key (fails
+  with `unknown config key(s)`). Use `hashed.entries` with two
+  overlapping entries for manual rotation instead.
 - Revocation key derivation from keyId and subject
 - Production warning when plaintext static backend is loaded
 

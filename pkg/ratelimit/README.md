@@ -9,9 +9,11 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/ratelimit"
 )
 
-limiter := ratelimit.New(ratelimit.Spec{
-    PerTenant: &ratelimit.Bucket{RPS: 100, Burst: 200},
-    Default:   &ratelimit.Bucket{RPS: 50, Burst: 100},
+// New returns (*Limiter, error); PerTenant/Default are value-typed
+// Bucket fields, not *Bucket.
+limiter, err := ratelimit.New(ratelimit.Spec{
+    PerTenant: ratelimit.Bucket{RPS: 100, Burst: 200},
+    Default:   ratelimit.Bucket{RPS: 50, Burst: 100},
     Overrides: map[string]ratelimit.Bucket{
         "premium-tenant": {RPS: 500, Burst: 1000},
     },

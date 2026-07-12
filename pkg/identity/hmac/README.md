@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("hmac-auth", "hmac", map[string]any{
+identifier, err := module.BuildIdentifier("hmac", "hmac-auth", map[string]any{
     "keys": map[string]any{
         "service-a": map[string]any{
             "secret":  "base64-encoded-secret",
@@ -56,7 +56,12 @@ identifiers:
 - Mandatory `host` and `dateHeader` are always included in the required signed set — operator `requiredSignedHeaders` extends but cannot replace them (HMAC-VULN-01 fix)
 - Minimum 16-byte key length enforced at configuration time to prevent brute-force attacks (HMAC-VULN-02 fix)
 - Canonical request format with deterministic query param ordering
-- Key rotation via `keyrotation.KeySet[KeyEntry]`
+- `pkg/identity/hmac/rotatable.go` implements time-bounded key rotation
+  via `keyrotation.KeySet[KeyEntry]`, but it's **not wired in** —
+  `factory()` never constructs it, and `secrets` isn't in `knownKeys`
+  (fails with `unknown config key(s)`). Use `keys` with two entries
+  for manual overlap-based rotation instead (see the rotate-hmac
+  cookbook recipe).
 - Body hashing (SHA-256) included in canonical request
 
 ## Authorization Header Format

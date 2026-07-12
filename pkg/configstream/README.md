@@ -9,15 +9,14 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/configstream"
 )
 
-// Publisher side (controller)
+// Publisher side (controller) — Publish takes the raw AuthConfig
+// directly; the Broker assigns the version internally, it's not
+// caller-supplied, and there's no Snapshot literal to construct.
 broker := configstream.NewBroker()
-broker.Publish(&configstream.Snapshot{
-    Spec:    compiledAuthConfig,
-    Version: 1,
-})
+snap := broker.Publish(compiledAuthConfig)
 
-// Subscriber side (pod)
-ch := broker.Subscribe()
+// Subscriber side (pod) — Subscribe requires a context
+ch := broker.Subscribe(ctx)
 for snap := range ch {
     engine.Swap(snap.Spec)
 }
@@ -26,9 +25,9 @@ for snap := range ch {
 srv := configstream.NewServer(broker, myAuthorizer)
 srv.Register(grpcServer)
 
-// gRPC client
-configstream.Stream(ctx, conn, "node-1", func(snap *configstream.Snapshot) error {
-    return engine.Swap(snap.Spec)
+// gRPC client — the handler takes (ctx, version, spec), not a *Snapshot
+configstream.Stream(ctx, conn, "node-1", func(ctx context.Context, version uint64, spec *config.AuthConfig) error {
+    return engine.Swap(spec)
 })
 ```
 
@@ -36,7 +35,7 @@ configstream.Stream(ctx, conn, "node-1", func(snap *configstream.Snapshot) error
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `maxSnapshotBytes` | int | `4 MiB` | Max snapshot size on server |
+| `maxSnapshotBytes` | int | `4 MiB` | Max snapshot size — **unexported compile-time constant** (`grpc.go`), not configurable |
 | Authorizer | callback | *required* | Gates each inbound stream (fail-closed) |
 
 ## Features

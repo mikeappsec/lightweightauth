@@ -21,51 +21,61 @@ cfg := &federation.Config{
     RevocationTTL: 24 * time.Hour,
 }
 
-// Server side (publish snapshots to peers)
-server, err := federation.NewServer(cfg)
-server.Publish(&federation.Snapshot{
-    SpecJSON:        specJSON,
-    SourceClusterID: cfg.ClusterID,
-})
+// Server side (publish snapshots to peers) — NewServer takes a
+// revocation handler as a second arg; Publish takes raw bytes and
+// builds the Snapshot internally, it doesn't accept a *Snapshot literal
+server, err := federation.NewServer(cfg, myRevocationHandler)
+err = server.Publish(ctx, specJSON)
 
-// Peer side (accept snapshots)
-peer := federation.NewPeer(cfg, peerCfg)
+// Peer side (accept snapshots) — PeerConfig comes first, *Config second
+peer := federation.NewPeer(peerCfg, cfg)
 err := peer.AcceptSnapshot(snap, signature)
 
-// Broadcast a revocation to all peers
+// Broadcast a revocation to all peers — BroadcastRevocation takes a
+// context and a push function, not just the entry
 peerSet := federation.NewPeerSet(cfg)
-peerSet.BroadcastRevocation(&federation.RevocationEntry{
+err = peerSet.BroadcastRevocation(ctx, &federation.RevocationEntry{
     Key:             "jti:compromised-token",
     Reason:          "credential-leak",
     SourceClusterID: cfg.ClusterID,
-})
+}, myPushFunc)
 ```
 
 ## Configuration
 
+Field casing below matches the actual struct tags — `clusterId`
+(lowercase `d`), `revocationTtl`, `tlsCaFile` — not
+`clusterID`/`revocationTTL`/`tlsCAFile`. `federationKey` is tagged
+`json:"-" yaml:"-"` — it can **never** be populated from this YAML at
+all; set `Config.FederationKey` directly in Go. This package is also
+not currently reachable from `AuthConfig` — see
+[docs/modules/federation.md](../../../docs/modules/federation.md) for
+the full "not wired in" picture:
+
 ```yaml
 federation:
   enabled: true
-  clusterID: "us-east-1"
-  federationKey: "${secretRef:vault://kv/lwauth/federation-key}"
+  clusterId: "us-east-1"
+  # federationKey: cannot be set via YAML — see above
   syncInterval: "30s"
-  revocationTTL: "24h"
+  revocationTtl: "24h"
   peers:
-    - endpoint: "eu-west-1.lwauth:9443"
+    - clusterId: "eu-west-1"
+      endpoint: "eu-west-1.lwauth:9443"
       tlsCertFile: "/etc/lwauth/federation-client.pem"
       tlsKeyFile: "/etc/lwauth/federation-client-key.pem"
-      tlsCAFile: "/etc/lwauth/federation-ca.pem"
+      tlsCaFile: "/etc/lwauth/federation-ca.pem"
       namespaces: ["production"]
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable federation |
-| `clusterID` | string | *required* | This cluster's identity (max 253 chars) |
-| `federationKey` | []byte | *required* | HMAC pre-shared key (32–256 bytes) |
-| `peers` | []PeerConfig | — | Remote cluster connections |
+| `clusterId` | string | *required* | This cluster's identity (max 253 chars) |
+| `federationKey` | []byte | *required* | HMAC pre-shared key (32–256 bytes) — `yaml:"-"`, must be set in Go |
+| `peers` | []PeerConfig | — | Remote cluster connections, each requiring its own `clusterId` |
 | `syncInterval` | duration | `30s` | Heartbeat re-push interval |
-| `revocationTTL` | duration | `24h` | Federated revocation entry lifetime |
+| `revocationTtl` | duration | `24h` | Federated revocation entry lifetime |
 
 ## Constants
 

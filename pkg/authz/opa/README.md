@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-authorizer, err := module.BuildAuthorizer("opa-policy", "opa", map[string]any{
+authorizer, err := module.BuildAuthorizer("opa", "opa-policy", map[string]any{
     "rego": `package authz
 default allow = false
 allow { input.identity.claims.role == "admin" }`,

@@ -29,8 +29,12 @@ built-in connection multiplexing.
 
 ### HTTP
 
+`GetHTTP` takes an `HTTPConfig`, not a bare string:
+
 ```go
-httpClient := connpool.GetHTTP("https://idp.example.com")
+httpClient := connpool.GetHTTP(connpool.HTTPConfig{
+    BaseURL: "https://idp.example.com",
+})
 ```
 
 Returns a shared `*http.Client` keyed by base URL, configured with sensible
@@ -38,8 +42,13 @@ timeouts (30s overall, 10s TLS handshake, 5s response header wait).
 
 ### gRPC
 
+`GetGRPC` takes a `GRPCConfig`, not a bare target string — extra dial
+options are variadic after it:
+
 ```go
-conn, err := connpool.GetGRPC("spicedb:50051", grpc.WithTransportCredentials(creds))
+conn, err := connpool.GetGRPC(connpool.GRPCConfig{
+    Target: "spicedb:50051",
+}, grpc.WithTransportCredentials(creds))
 ```
 
 Returns a shared `*grpc.ClientConn` keyed by target + credentials. Used by
@@ -47,10 +56,16 @@ SpiceDB, OpenFGA, and plugin gRPC adapters.
 
 ## Testing
 
+`SetValkeyOverride` takes a **factory function**, not a client
+instance, and returns its own cleanup closure — there is no separate
+`ClearValkeyOverride` function:
+
 ```go
 // Override Valkey client for tests
-connpool.SetValkeyOverride(fakeClient)
-defer connpool.ClearValkeyOverride()
+restore := connpool.SetValkeyOverride(func(cfg connpool.ValkeyConfig) (valkey.Client, error) {
+    return fakeClient, nil
+})
+defer restore()
 ```
 
 ## Design

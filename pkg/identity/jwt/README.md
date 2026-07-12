@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("my-jwt", "jwt", map[string]any{
+identifier, err := module.BuildIdentifier("jwt", "my-jwt", map[string]any{
     "jwksUrl":  "https://idp.example.com/.well-known/jwks.json",
     "issuerUrl": "https://idp.example.com",
     "audiences": []string{"my-api"},

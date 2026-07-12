@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("dpop-jwt", "dpop", map[string]any{
+identifier, err := module.BuildIdentifier("dpop", "dpop-jwt", map[string]any{
     "required": true,
     "skew":     "30s",
     "inner": map[string]any{
@@ -48,6 +48,7 @@ identifiers:
 | `proofHeader` | string | `"DPoP"` | Header carrying the DPoP proof JWS |
 | `bearerHeader` | string | `"Authorization"` | Header for `ath` computation |
 | `inner` | object | *required* | Wrapped identifier spec (type + config) |
+| `pinnedKeys` | []object | — | Optional server-side proof-key pinning with `notBefore`/`notAfter`/`gracePeriod` rotation lifecycle per key (see `pkg/identity/dpop/dpop.go` and `pkg/identity/dpop/rotatable.go`) — unlike the apikey/hmac/oauth2/introspection "rotatable" variants elsewhere in this codebase, this one **is** wired into the live factory |
 
 ## Features
 
