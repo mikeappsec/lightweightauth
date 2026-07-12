@@ -55,12 +55,22 @@ revocation:
   backend: valkey
   addr: "valkey-master.cache.svc:6379"
   username: "lwauth-revocation"   # Valkey ACL user
-  password: "${VALKEY_PASSWORD}"
+  password: "${VALKEY_PASSWORD}"   # see warning below
   tls: true
   keyPrefix: "lwauth/rev/"
   defaultTTL: "24h"
   negCacheTTL: "2s"
 ```
+
+!!! warning "`password` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`. `revocation.password` does support the
+    real mechanism: `secretRef: "vault://kv/lwauth/valkey#password"`
+    (`internal/config/loader.go` checks it specifically, alongside
+    `cache.password`/`cache.sharedHmacKey`/`caches[].password`). Or
+    template the `AuthConfig` YAML itself at the deployment-pipeline
+    layer (Helm, Kustomize, CI) so the real password is already
+    inlined before lwauth ever parses it.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -153,16 +163,10 @@ config:
       enabled: true
       backend: valkey
       addr: "valkey-master.cache.svc:6379"
-      password: "${VALKEY_PASSWORD}"
+      password: "vault://kv/lwauth/valkey#password"
       tls: true
       defaultTTL: 24h
       negCacheTTL: 2s
-env:
-  - name: VALKEY_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: lwauth-valkey
-        key: password
 ```
 
 ## Operational notes

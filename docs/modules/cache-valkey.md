@@ -21,13 +21,23 @@ cache:
   addr:    valkey-master.cache.svc.cluster.local:6379
   # username / password / TLS as needed:
   username: lwauth
-  password: ${VALKEY_PASSWORD}
+  password: ${VALKEY_PASSWORD}        # see warning below
   tls: true
 
   keyPrefix: lwauth/                  # namespacing per-cluster
   ttl: 30s                            # decision cache TTL
   negativeTtl: 5s                     # deny-decision cache TTL
 ```
+
+!!! warning "`password` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`. `cache.password` does support the real
+    mechanism: `secretRef: "vault://kv/lwauth/valkey#password"`
+    (`internal/config/loader.go` checks it specifically, alongside
+    `cache.sharedHmacKey`/`revocation.password`/`caches[].password`).
+    Or template the `AuthConfig` YAML itself at the
+    deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    password is already inlined before lwauth ever parses it.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

@@ -23,7 +23,7 @@ identifiers:
     config:
       url:           https://idp.example.com/oauth2/introspect   # REQUIRED
       clientId:      my-api                                       # for Basic auth to /introspect
-      clientSecret:  ${INTROSPECT_SECRET}
+      clientSecret:  ${INTROSPECT_SECRET}   # see warning below
 
       headerName: Authorization    # default
       # cacheSize bounds in-process LRU; cluster-shared cache uses the
@@ -33,6 +33,16 @@ identifiers:
       negativeTtl: 10s             # how long to remember "active: false"
       errorTtl:    5s              # how long to remember "IdP failed for this token"
 ```
+
+!!! warning "`clientSecret` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${INTROSPECT_SECRET}`-style placeholders
+    anywhere in `AuthConfig`. Two ways to actually inject it:
+    `clientSecret: "vault://kv/lwauth/introspection#secret"` (resolved
+    at compile time — any string field in a module's `config:` is
+    checked recursively, `internal/config/loader.go`'s
+    `resolveMapSecrets`), or template the `AuthConfig` YAML itself at
+    the deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    secret is already inlined before lwauth ever parses it.
 
 The cache key is `sha256(token)`; entries TTL = `min(claims.exp - now, maxCacheTtl)`.
 
@@ -74,13 +84,17 @@ config:
         config:
           url: https://idp.example.com/oauth2/introspect
           clientId: my-api
-          clientSecret: ${INTROSPECT_SECRET}    # from a Secret env var
+          clientSecret: "vault://kv/lwauth/introspection#secret"
     authorizers:
       - { name: any-auth, type: rbac, config: { allow: ["*"] } }
 ```
 
-Inject `INTROSPECT_SECRET` from a Kubernetes Secret with the chart's
-`extraEnv` (M9 will add a first-class secret-ref helper).
+`secretRef:`-style resolution (the `vault://` scheme above) already
+shipped in `pkg/secrets` — see the warning above; there's no
+Kubernetes-Secret-via-env-var equivalent (setting `clientSecret:
+${INTROSPECT_SECRET}` and expecting a pod env var named
+`INTROSPECT_SECRET` to fill it in does not work — lwauth performs no
+`${VAR}` expansion at all).
 
 ## Worked example
 

@@ -197,42 +197,73 @@ No extra configuration needed — as long as your proxy sets
 
 ## 6. Replay prevention
 
-The `jti` claim prevents token replay. lwauth maintains an LRU cache
-of recently seen jti values:
+The `jti` claim prevents token replay. lwauth maintains a cache of
+recently seen jti values — but there's no `replayCache:` config block
+on the `dpop` identifier (`pkg/identity/dpop/dpop.go`'s `knownKeys`
+only has `replayCacheSize`, and that field is parsed but never
+actually read anywhere in the package — it's presently dead). The
+cache handle instead comes from the shared, named cache-pool
+infrastructure: `deps.CacheProvider().Cache("replay")` requests a
+pool named `"replay"` from the top-level `caches:` block. If you
+don't declare one, lwauth synthesizes an implicit in-memory default
+pool so existing configs keep working:
 
 ```yaml
-        replayCache:
-          maxSize: 100000    # max entries in LRU
-          ttl: 300s          # entries expire after this duration
+identifiers:
+  - name: dpop-bearer
+    type: dpop
+    config:
+      required: true
+      # no replayCache: block — nothing to configure here
+      inner:
+        type: oauth2-introspection
+        name: introspect
+        config: { ... }
 ```
 
-| Setting | Trade-off |
-|---------|-----------|
-| `maxSize: 100000` | ~8 MB memory; handles 100k unique proofs in the TTL window |
-| `ttl: 300s` | Proofs older than 5 min are forgotten; replay only prevented within window |
-| `ttl: 60s` | Tighter replay window; lower memory but stricter iat skew needed |
+To size or back the replay cache explicitly, declare a pool named
+`replay` at the top level (sibling to `identifiers:`/`authorizers:`):
 
-!!! warning "Per-replica cache"
-    The replay cache is local to each lwauth replica. With N replicas,
-    a proof sent to replica A can be replayed against replica B within
-    the TTL. For strict single-use enforcement, use the Valkey-backed
-    DPoP replay cache (see below).
+```yaml
+caches:
+  - name: replay
+    backend: memory
+    size: 100000
+```
+
+!!! warning "Per-replica cache (default `memory` backend)"
+    With `backend: memory`, the replay cache is local to each lwauth
+    replica. With N replicas, a proof sent to replica A can be
+    replayed against replica B. For strict single-use enforcement,
+    use the Valkey-backed pool below.
 
 ## 7. Valkey-backed replay cache (multi-replica)
 
-For strict cross-replica replay prevention:
+Point the same `replay` pool at Valkey instead of `memory` — this is
+a top-level `caches:` pool, not a per-identifier config block:
 
 ```yaml
-        replayCache:
-          backend: valkey
-          addr: valkey-master.cache.svc:6379
-          password: "${VALKEY_PASSWORD}"
-          keyPrefix: "lwauth/dpop-jti/"
-          ttl: 300s
+caches:
+  - name: replay
+    backend: valkey
+    addr: valkey-master.cache.svc:6379
+    password: "${VALKEY_PASSWORD}"   # see warning below
+    keyPrefix: "lwauth/dpop-jti/"
 ```
 
 Every jti is checked against Valkey before acceptance. One
 round-trip per request (~0.2ms in-cluster).
+
+!!! warning "`password` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`, including `caches[].password`. Two ways
+    to actually inject a secret: use `secretRef: "vault://kv/lwauth/valkey#password"`
+    (resolved at compile time — `internal/config/loader.go` checks
+    `caches[].password` for a `secretRef` specifically, alongside
+    every module config field recursively), or template the
+    `AuthConfig` YAML itself at the deployment-pipeline layer (Helm,
+    Kustomize, CI) so the real value is already inlined before lwauth
+    parses it.
 
 ## 8. Helm wiring
 

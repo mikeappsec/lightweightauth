@@ -29,16 +29,18 @@ spec:
     - name: opaque-bearer
       type: oauth2-introspection
       config:
-        # RFC 7662 introspection endpoint
-        introspectionUrl: https://idp.example.com/oauth2/introspect
+        # RFC 7662 introspection endpoint — field is `url`, not
+        # `introspectionUrl` (pkg/identity/introspection's knownKeys).
+        url: https://idp.example.com/oauth2/introspect
         # Client credentials for lwauth to authenticate
         clientId: lwauth-resource-server
         clientSecret: "${INTROSPECTION_CLIENT_SECRET}"
-        # Where to find the token in the request
-        header: Authorization
-        scheme: Bearer
-        # Timeout for the introspection call
-        timeout: 500ms
+        # Where to find the token in the request. There's no separate
+        # `scheme:` field — the "Bearer " prefix is stripped
+        # unconditionally (case-insensitive), not configurable.
+        headerName: Authorization
+        # There is no `timeout:` field on this module — per-call
+        # timeout is controlled through `resilience:` (see step 4).
 
   authorizers:
     - name: scope-check
@@ -47,6 +49,18 @@ spec:
         rolesFrom: claim:scope    # introspection returns scope
         allow: [read, write]
 ```
+
+!!! warning "`clientSecret` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${INTROSPECTION_CLIENT_SECRET}`-style
+    placeholders anywhere in `AuthConfig` — every `${VAR}` in this
+    recipe's YAML is notation for "your real secret goes here," not
+    something lwauth resolves itself. Two ways to actually inject it:
+    `clientSecret: "vault://kv/lwauth/introspection#secret"` (resolved
+    at compile time — any string field in a module's `config:` is
+    checked recursively for a `secretRef`, `internal/config/loader.go`'s
+    `resolveMapSecrets`), or template the `AuthConfig` YAML itself at
+    the deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    secret is already inlined before lwauth ever parses it.
 
 The introspection response fields are mapped to identity claims:
 
@@ -63,36 +77,30 @@ The introspection response fields are mapped to identity claims:
 ## 2. Multi-tier caching
 
 The introspection identifier uses a three-tier LRU cache to minimize
-IdP round-trips. Each tier has independent TTLs:
+IdP round-trips. There's no nested `cache:` block — the three tiers
+are flat, top-level fields, and only the positive tier's size is
+configurable (`cacheSize` bounds the whole in-process LRU; there's no
+per-tier `*MaxSize` knob):
 
 ```yaml
     - name: opaque-bearer
       type: oauth2-introspection
       config:
-        introspectionUrl: https://idp.example.com/oauth2/introspect
+        url: https://idp.example.com/oauth2/introspect
         clientId: lwauth-resource-server
         clientSecret: "${INTROSPECTION_CLIENT_SECRET}"
-        timeout: 500ms
 
-        cache:
-          # Positive cache: active=true responses
-          positiveTTL: 30s
-          positiveMaxSize: 50000
-
-          # Negative cache: active=false responses
-          negativeTTL: 5s
-          negativeMaxSize: 10000
-
-          # Error cache: introspection endpoint failures
-          errorTTL: 2s
-          errorMaxSize: 1000
+        cacheSize: 100000     # shared LRU size across all tiers; default 100000
+        maxCacheTtl: 30s       # positive tier: cap on min(claims.exp - now, this)
+        negativeTtl: 5s        # negative tier: how long "active: false" is remembered
+        errorTtl: 2s           # error tier: how long an upstream failure is remembered — 0 disables it
 ```
 
-| Cache tier | Purpose | Recommended TTL |
-|-----------|---------|-----------------|
-| Positive | Token is valid; avoid re-introspecting | 30s–60s |
-| Negative | Token is invalid/revoked; fast-reject | 2s–5s |
-| Error | IdP is down; avoid hammering | 1s–5s |
+| Cache tier | Field | Purpose | Recommended TTL |
+|-----------|-------|---------|-----------------|
+| Positive | `maxCacheTtl` | Token is valid; avoid re-introspecting | 30s–60s |
+| Negative | `negativeTtl` | Token is invalid/revoked; fast-reject | 2s–5s |
+| Error | `errorTtl` | IdP is down; avoid hammering | 1s–5s |
 
 !!! tip "Cache key security"
     The cache key is `sha256(token)` — raw tokens are **never**
@@ -125,18 +133,18 @@ providing circuit-breaker protection:
     - name: opaque-bearer
       type: oauth2-introspection
       config:
-        introspectionUrl: https://idp.example.com/oauth2/introspect
+        url: https://idp.example.com/oauth2/introspect
         clientId: lwauth-resource-server
         clientSecret: "${INTROSPECTION_CLIENT_SECRET}"
-        timeout: 500ms
 
+        # retries.max, not retries.maxRetries — see pkg/upstream/config.go
         resilience:
           breaker:
             failureThreshold: 5
             coolDown: 30s
             halfOpenSuccesses: 2
           retries:
-            maxRetries: 1
+            max: 1
             backoffBase: 50ms
             backoffMax: 200ms
 ```
@@ -156,11 +164,10 @@ spec:
     - name: opaque-bearer
       type: oauth2-introspection
       config:
-        introspectionUrl: https://idp.example.com/oauth2/introspect
+        url: https://idp.example.com/oauth2/introspect
         clientId: lwauth-resource-server
         clientSecret: "${INTROSPECTION_CLIENT_SECRET}"
-        header: Authorization
-        scheme: Bearer
+        headerName: Authorization
 
     # Fallback to JWT validation (self-contained tokens)
     - name: jwt-bearer
@@ -187,15 +194,12 @@ config:
       - name: opaque-bearer
         type: oauth2-introspection
         config:
-          introspectionUrl: https://idp.example.com/oauth2/introspect
+          url: https://idp.example.com/oauth2/introspect
           clientId: lwauth-resource-server
           clientSecret: "${INTROSPECTION_CLIENT_SECRET}"
-          timeout: 500ms
-          cache:
-            positiveTTL: 30s
-            positiveMaxSize: 50000
-            negativeTTL: 5s
-            negativeMaxSize: 10000
+          cacheSize: 100000
+          maxCacheTtl: 30s
+          negativeTtl: 5s
     authorizers:
       - name: scope-check
         type: rbac
@@ -229,19 +233,23 @@ curl -H "Authorization: Bearer expired-token" https://gateway/api/resource
 # Dry-run
 lwauthctl explain --config api-opaque-tokens.yaml \
     --request '{"method":"GET","path":"/api/resource","headers":{"authorization":"Bearer '${TOKEN}'"}}'
-# identify  ✓  oauth2-introspection  subject=service-account
-# authorize ✓  rbac (scope: [read, write])
+# identify:
+#   ✓ opaque-bearer (oauth2-introspection) → subject="service-account" claims=N
+# authorize: ✓ scope-check (rbac) allow: ...
+# decision: allow identifier="opaque-bearer" authorizer="scope-check" upstreamHeaders=0 responseHeaders=0
 ```
 
 ## Operational notes
 
 - **IdP load.** With a 30s positive cache and 10k RPM, you'll see
   ~333 introspection calls/min to the IdP (assuming uniform token
-  distribution). Monitor `lwauth_introspection_cache_hit_ratio`.
-- **Token hash in logs.** Only the first 8 chars of `sha256(token)`
-  appear in debug logs — enough for correlation, not enough for replay.
-- **Metric:** `lwauth_introspection_duration_seconds` histogram
-  tracks IdP latency; alert on p99 > timeout.
+  distribution) — modulo singleflight coalescing on hot tokens.
+  There's no `lwauth_introspection_*` metric to monitor this directly
+  (no such metric exists in `pkg/observability/metrics`); use IdP-side
+  request counts instead.
+- **No debug logging in this module.** `pkg/identity/introspection/introspection.go`
+  doesn't log anything — there's no token-hash-in-logs behavior to
+  rely on for correlation.
 
 ## Teardown
 

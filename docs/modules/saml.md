@@ -87,6 +87,14 @@ config:
       - { name: gate, type: rbac, config: { rolesFrom: "claim:groups", allow: ["admin"] } }
 ```
 
+`${IDP_CERT_PEM}` here is notation for "your real PEM goes here" —
+lwauth does not expand `${VAR}`-style placeholders anywhere in
+`AuthConfig`. Since the IdP certificate isn't sensitive (it's a public
+cert, not a secret), the practical fix is Helm's own `{{ .Values.x }}`
+templating (or Kustomize/CI) at chart-render time — `secretRef:` isn't
+necessary here, though it would also work if you prefer to source it
+from Vault.
+
 CRD mode adds nothing extra — the same YAML lives under
 `spec.identifiers` of an `AuthConfig` CR.
 

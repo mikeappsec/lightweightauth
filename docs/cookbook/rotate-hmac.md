@@ -107,20 +107,30 @@ identifiers:
       keys:
         # OLD KEY — keep accepting it for the duration of phase 2.
         abc:
-          secret: ${HMAC_KEY_ABC}
+          secret: "vault://kv/lwauth/hmac-keys#abc"
           subject: service-a
           roles: [machine]
         # NEW KEY — verifier will accept it as soon as this rolls out.
         # No client has switched to it yet.
         svc-2026-04:
-          secret: ${HMAC_KEY_SVC_2026_04}
+          secret: "vault://kv/lwauth/hmac-keys#svc-2026-04"
           subject: service-a
           roles: [machine]
 ```
 
+!!! warning "`secret` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${HMAC_KEY_ABC}`-style placeholders
+    anywhere in `AuthConfig`. `keys.<id>.secret` is nested inside a
+    module config, so it *is* covered by the recursive secret
+    resolver (`internal/config/loader.go`'s `resolveMapSecrets` walks
+    every nested map) — `secretRef: "vault://..."` as shown above
+    works. The alternative is templating the `AuthConfig` YAML itself
+    at the deployment-pipeline layer (Helm, Kustomize, CI) so the
+    real secret is already inlined before lwauth ever parses it.
+
 Validate offline before applying. `lwauthctl validate` compiles the
-config end-to-end with the daemon's own loader, so a typo or a
-missing env-var binding fails here, not after rollout:
+config end-to-end with the daemon's own loader, so a YAML typo or a
+`vault://` ref that fails to resolve is caught here, not after rollout:
 
 ```bash
 lwauthctl validate --config new-config.yaml

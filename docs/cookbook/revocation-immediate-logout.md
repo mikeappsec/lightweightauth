@@ -59,12 +59,23 @@ one replica is immediately visible to all:
     backend: valkey
     addr: "valkey-master.cache.svc:6379"
     username: "lwauth-revocation"
-    password: "${VALKEY_PASSWORD}"
+    password: "${VALKEY_PASSWORD}"   # see warning below
     tls: true
     keyPrefix: "lwauth/rev/"
     defaultTTL: "24h"
     negCacheTTL: "2s"
 ```
+
+!!! warning "`password` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`. `revocation.password` (unlike
+    `rateLimit.distributed.password`) does support the real
+    mechanism: `secretRef: "vault://kv/lwauth/valkey#password"`,
+    checked specifically by `internal/config/loader.go` alongside
+    `cache.password`/`cache.sharedHmacKey`/`caches[].password`. Or
+    template the `AuthConfig` YAML itself at the deployment-pipeline
+    layer (Helm, Kustomize, CI) so the real password is already
+    inlined before lwauth ever parses it.
 
 ## 3. Revoking credentials via the Admin API
 
@@ -236,7 +247,7 @@ config:
       enabled: true
       backend: valkey
       addr: "valkey-master.cache.svc:6379"
-      password: "${VALKEY_PASSWORD}"
+      password: "${VALKEY_PASSWORD}"   # see warning in step 2 — use secretRef: vault://... for a real fix
       tls: true
       keyPrefix: "lwauth/rev/"
       defaultTTL: 24h

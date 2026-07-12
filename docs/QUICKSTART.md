@@ -417,9 +417,16 @@ cache:
 See [cookbook/cache-invalidation.md](cookbook/cache-invalidation.md) for
 operational invalidation recipes.
 
-### Federation (multi-cluster)
+### Federation (multi-cluster) — not currently wired in
 
-Replicate config and revocations across clusters:
+`pkg/federation` is a real, tested package, but there is no
+`federation:` key on `AuthConfig` and nothing in
+`cmd/lwauth`/`cmd/lwauth-controlplane` constructs it — applying the
+block below to a real config has no effect. See
+[modules/federation.md](modules/federation.md) for the full picture,
+including why `federationKey` (tagged `json:"-" yaml:"-"` on the Go
+struct) couldn't be set via plain YAML like this even if the feature
+were wired in:
 
 ```yaml
 federation:
@@ -429,6 +436,3 @@ federation:
   peers:
     - endpoint: "eu-west-1.lwauth:9443"
 ```
-
-See [modules/federation.md](modules/federation.md) for the full
-multi-cluster setup guide.

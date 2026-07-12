@@ -1,5 +1,20 @@
 # Multi-cluster federation & revocation sync
 
+> **Status: not currently wired in.** `pkg/federation` is a real,
+> tested package, but there is no `federation:` key on `AuthConfig`
+> (`internal/config/config.go` has no such field) and nothing in
+> `cmd/lwauth`/`cmd/lwauth-controlplane` ever constructs a
+> `federation.Server`/`Peer`/`PeerSet`. Applying the `federation:`
+> blocks in this recipe to a real `AuthConfig` has no effect — the
+> key is silently ignored (`yaml.Unmarshal` doesn't error on unknown
+> top-level keys). Additionally, `federationKey` is tagged
+> `json:"-" yaml:"-"` on the underlying Go struct, so even a wired-in
+> version of this feature could not accept it via plain YAML as
+> shown below. Treat this recipe as documenting the package's
+> intended shape, not a procedure you can run today. See
+> [docs/modules/federation.md](../modules/federation.md) for the full
+> picture.
+
 Replicate AuthConfig snapshots and revocation entries across clusters
 via HMAC-signed gRPC streams. Each cluster independently evaluates
 requests using its local engine, receiving config updates and

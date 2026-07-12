@@ -272,7 +272,7 @@ cache:
   # L2 connection (used by "valkey" and "tiered").
   addr: valkey-master.cache.svc:6379
   username: default
-  password: ${VALKEY_PASSWORD}
+  password: ${VALKEY_PASSWORD}   # not resolved by lwauth — secretRef: vault://... or deployment-time templating
   tls: true
   keyPrefix: lwauth/prod/
 ```

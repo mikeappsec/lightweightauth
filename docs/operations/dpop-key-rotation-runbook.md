@@ -76,8 +76,13 @@ config:
             type: oauth2-introspection
             name: introspect
             config:
-              introspectionUrl: https://idp.example.com/oauth2/introspect
+              # field is `url`, not `introspectionUrl`
+              # (pkg/identity/introspection's knownKeys)
+              url: https://idp.example.com/oauth2/introspect
               clientId: lwauth-rs
+              # lwauth does not expand ${VAR} placeholders anywhere in
+              # AuthConfig — use clientSecret: "vault://kv/lwauth/introspection#secret"
+              # or template this YAML at the deployment-pipeline layer.
               clientSecret: ${INTROSPECT_SECRET}
 ```
 

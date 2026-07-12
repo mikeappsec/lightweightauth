@@ -27,7 +27,7 @@ authorizers:
       apiUrl:                https://openfga.svc.cluster.local:8080
       storeId:               01HQ...
       authorizationModelId:  01HQ...   # optional, latest if empty
-      apiToken:              ${FGA_TOKEN}
+      apiToken:              ${FGA_TOKEN}   # see warning below
       timeout:               150ms     # per-call deadline; default 2s
 
       # user/relation/object are Go text/template strings, NOT CEL —
@@ -49,7 +49,26 @@ Per-request flow: render the three templates → `POST /stores/{id}/check`
 (through the `resilience:` circuit breaker if configured) → `Permit{}`
 on `allowed=true`.
 
+!!! warning "`apiToken` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${FGA_TOKEN}`-style placeholders anywhere
+    in `AuthConfig`. `apiToken:` is forwarded to OpenFGA verbatim as
+    `Authorization: Bearer <value>` — pasting `"${FGA_TOKEN}"` into a
+    real config sends FGA the literal six characters, which it
+    rejects with 401. Two ways to actually inject a secret:
+    `apiToken: "vault://kv/lwauth/openfga#token"` (resolved at compile
+    time — any string field in a module's `config:` is checked
+    recursively, `internal/config/loader.go`'s `resolveMapSecrets`),
+    or template the `AuthConfig` YAML itself at the deployment-pipeline
+    layer (Helm, Kustomize, CI) so the real token is already inlined
+    before lwauth ever parses it.
+
 ## Helm wiring
+
+A pod `env:` var (like `FGA_TOKEN` below) is **not** automatically
+substituted into `apiToken:` — lwauth doesn't read process environment
+variables to fill in config placeholders. Use `secretRef:` instead,
+which lwauth resolves itself via a direct call to the secret backend
+(Vault) at compile time:
 
 ```yaml
 # values.yaml
@@ -62,14 +81,11 @@ config:
           apiUrl: https://openfga.openfga.svc:8080
           storeId: 01HQ...
           authorizationModelId: 01HQ...
-          apiToken: ${FGA_TOKEN}
+          apiToken: "vault://kv/lwauth/openfga#token"
           check:
             user: "user:{{ .Identity.Subject }}"
             relation: viewer
             object: "document:{{ index .Request.PathParts 1 }}"
-env:
-  - name: FGA_TOKEN
-    valueFrom: { secretKeyRef: { name: lwauth-secrets, key: fga } }
 ```
 
 ## Worked example

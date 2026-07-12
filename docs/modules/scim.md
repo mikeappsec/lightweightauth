@@ -66,10 +66,16 @@ config:
       - name: scim-provisioning
         type: scim
         config:
-          bearerToken: ${SCIM_PROVISIONING_TOKEN}
+          bearerToken: "vault://kv/lwauth/scim#token"
     authorizers:
       - { name: gate, type: rbac, config: { rolesFrom: "claim:groups", allow: ["provisioner"] } }
 ```
+
+lwauth does not expand `${VAR}`-style placeholders anywhere in
+`AuthConfig` — `bearerToken: ${SCIM_PROVISIONING_TOKEN}` would send
+the literal six characters. `secretRef: "vault://..."` (shown above)
+is resolved at compile time; templating the YAML at the
+deployment-pipeline layer (Helm, Kustomize, CI) works too.
 
 CRD mode adds nothing extra — the same YAML lives under
 `spec.identifiers` of an `AuthConfig` CR.

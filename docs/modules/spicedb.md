@@ -36,7 +36,7 @@ authorizers:
     type: spicedb
     config:
       endpoint: "spicedb.authz.svc:50051"
-      token: "${SPICEDB_PRESHARED_KEY}"
+      token: "${SPICEDB_PRESHARED_KEY}"   # see warning below
       insecure: false              # set true only for local dev
       timeout: "200ms"
       consistency: "minimize_latency"   # or "fully_consistent" — no third option
@@ -61,6 +61,16 @@ authorizers:
 | `check.subjectType` | template | *required* | Subject object type |
 | `check.subjectId` | template | *required* | Resolves to the subject's object ID |
 
+!!! warning "`token` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${SPICEDB_PRESHARED_KEY}`-style
+    placeholders anywhere in `AuthConfig`. Two ways to actually inject
+    it: `token: "vault://kv/lwauth/spicedb#token"` (resolved at
+    compile time — any string field in a module's `config:` is
+    checked recursively, `internal/config/loader.go`'s
+    `resolveMapSecrets`), or template the `AuthConfig` YAML itself at
+    the deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    token is already inlined before lwauth ever parses it.
+
 ## Template functions
 
 Templates in the `check` block receive `{Identity, Request}`
@@ -79,7 +89,7 @@ indexing/field access instead:
 | `.Identity.Subject` | Authenticated subject |
 | `.Identity.Claims` | Map of identity claims |
 | `.Identity.Source` | Identifier that matched |
-| `lower` / `upper` | Only two helper functions available, e.g. `{{ .Request.Method \| lower }}` |
+| `lower` / `upper` / `sanitize` | Only three helper functions available, e.g. `{{ .Request.Method \| lower }}` (`sanitize` restricts a string to SpiceDB-safe object-ID characters) |
 
 ## Helm wiring
 
@@ -92,19 +102,13 @@ config:
         type: spicedb
         config:
           endpoint: "spicedb.authz.svc:50051"
-          token: "${SPICEDB_PRESHARED_KEY}"
+          token: "vault://kv/lwauth/spicedb#token"
           check:
             resourceType: document
             resourceId: "{{ index .Request.PathParts 1 }}"
             permission: view
             subjectType: user
             subjectId: "{{ .Identity.Subject }}"
-env:
-  - name: SPICEDB_PRESHARED_KEY
-    valueFrom:
-      secretKeyRef:
-        name: lwauth-spicedb
-        key: token
 ```
 
 ## Operational notes

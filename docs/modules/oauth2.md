@@ -25,7 +25,7 @@ identifiers:
     config:
       issuerUrl:    https://idp.example.com
       clientId:     webapp
-      clientSecret: ${OIDC_SECRET}
+      clientSecret: ${OIDC_SECRET}    # see warning below
       redirectUrl:  https://app.example.com/oauth2/callback
       scopes: ["openid", "email", "profile", "offline_access"]
 
@@ -36,7 +36,7 @@ identifiers:
       cookie:
         name:   lwauth_session
         domain: app.example.com
-        secret: ${SESSION_SECRET}    # 32 bytes, base64 or hex
+        secret: ${SESSION_SECRET}    # 32 bytes, base64 or hex — see warning below
         secure: true
         sameSite: lax
         maxAge: 8h                  # NOT "ttl" — that key is silently ignored
@@ -49,6 +49,16 @@ identifiers:
       postLogoutPath: /             # NOT "postLogoutRedirectUrl" — that key
                                      # fails config validation (unknown key)
 ```
+
+!!! warning "`clientSecret`/`cookie.secret` are read literally — no `${VAR}` substitution"
+    lwauth does not expand `${OIDC_SECRET}`/`${SESSION_SECRET}`-style
+    placeholders anywhere in `AuthConfig`. Two ways to actually inject
+    them: `secretRef: "vault://kv/lwauth/oauth2#secret"` (resolved at
+    compile time — any string field in a module's `config:` is
+    checked recursively, `internal/config/loader.go`'s
+    `resolveMapSecrets`), or template the `AuthConfig` YAML itself at
+    the deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    secret is already inlined before lwauth ever parses it.
 
 Mounts under the lwauth HTTP server:
 
