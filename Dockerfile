@@ -5,7 +5,15 @@
 # docs/DESIGN.md §7 (roadmap).
 
 # ---- build stage -------------------------------------------------------------
-FROM golang:1.26.2-alpine AS build
+# --platform=$BUILDPLATFORM pins this stage to the runner's own arch (amd64)
+# regardless of which target platform is being assembled, so on a
+# multi-platform build (linux/amd64,linux/arm64) this stage's expensive
+# steps -- apk add, go mod download, go build -- run natively exactly once
+# and are reused for both targets, instead of BuildKit running the whole
+# stage a second time under QEMU emulation for arm64. Go cross-compiles the
+# arm64 binary itself (GOARCH=$TARGETARCH below) with no emulation needed;
+# only the tiny final runtime stage actually varies per target platform.
+FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS build
 
 RUN apk add --no-cache ca-certificates git
 
@@ -13,15 +21,20 @@ WORKDIR /src
 
 # Cache modules
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Build
 COPY . .
 ARG VERSION=dev
 ARG COMMIT=unknown
-ENV CGO_ENABLED=0 GOOS=linux
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH
 
-RUN go build -trimpath \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build,id=gobuild-${TARGETARCH} \
+    go build -trimpath \
         -ldflags "-s -w \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT} \
