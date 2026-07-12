@@ -22,7 +22,17 @@
 # handling). Falls back to public golang:1.26.2-alpine if dhi.io is
 # unavailable during local development (use `make fips` which pulls
 # from cache).
-FROM dhi.io/golang:1 AS build
+# --platform=$BUILDPLATFORM pins this stage to the runner's own arch (amd64)
+# regardless of which target platform is being assembled, so go mod download
+# and go build run natively exactly once per target's cross-compile instead
+# of the whole stage running a second time under QEMU emulation for arm64.
+# Go cross-compiles the arm64 binary itself (GOARCH=$TARGETARCH below) with
+# no emulation needed. The self-verification step below (which must
+# actually *execute* the built binary) is split into its own non-pinned
+# stage for exactly that reason -- you can't run an arm64 binary in an
+# amd64 build stage without emulation, but that's a few seconds of
+# emulated execution, not the whole build.
+FROM --platform=$BUILDPLATFORM dhi.io/golang:1 AS build
 
 # dhi.io/golang already includes ca-certificates and git.
 
@@ -30,7 +40,8 @@ WORKDIR /src
 
 # Cache modules
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Build
 COPY . .
@@ -40,9 +51,13 @@ ARG COMMIT=unknown
 # certified profile shipped with Go 1.24+; override at build time when
 # a later certificate revision is required.
 ARG GOFIPS140_VER=v1.0.0
-ENV CGO_ENABLED=0 GOOS=linux GOFIPS140=${GOFIPS140_VER}
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFIPS140=${GOFIPS140_VER}
 
-RUN go build -trimpath \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build,id=gobuild-${TARGETARCH} \
+    go build -trimpath \
         -ldflags "-s -w \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT}" \
@@ -53,11 +68,15 @@ RUN go build -trimpath \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT}" \
         -o ./out/lwauthctl  ./cmd/lwauthctl
 
-# Self-verify the produced artifact: this layer fails if the built
-# binary somehow doesn't carry the FIPS module (e.g. a future Go
-# refactor that ignores GOFIPS140 silently). Catching it here is far
-# cheaper than a post-promotion incident.
-RUN OUTPUT=$(./out/lwauth --print-build-info) && case "$OUTPUT" in *fips_enabled=true*) ;; *) echo "FIPS verification failed: $OUTPUT"; exit 1;; esac
+# ---- verify stage --------------------------------------------------------
+# Runs on the actual target platform (not $BUILDPLATFORM) so the built
+# binary can be executed directly. Self-verifies the produced artifact:
+# this layer fails if the built binary somehow doesn't carry the FIPS
+# module (e.g. a future Go refactor that ignores GOFIPS140 silently).
+# Catching it here is far cheaper than a post-promotion incident.
+FROM dhi.io/golang:1 AS verify
+COPY --from=build /src/out/lwauth /tmp/lwauth
+RUN OUTPUT=$(/tmp/lwauth --print-build-info) && case "$OUTPUT" in *fips_enabled=true*) ;; *) echo "FIPS verification failed: $OUTPUT"; exit 1;; esac
 
 # ---- runtime stage -----------------------------------------------------------
 # dhi.io/alpine-base is a distroless-style image (no apk, no shell).
@@ -80,8 +99,8 @@ root:x:0:
 lwauth:x:10001:
 EOF
 
-COPY --from=build --chmod=755 /src/out/lwauth     /usr/local/bin/lwauth
-COPY --from=build --chmod=755 /src/out/lwauthctl  /usr/local/bin/lwauthctl
+COPY --from=verify --chmod=755 /tmp/lwauth        /usr/local/bin/lwauth
+COPY --from=build  --chmod=755 /src/out/lwauthctl /usr/local/bin/lwauthctl
 COPY --chmod=644 examples/config.yaml /etc/lwauth/config.yaml
 
 # Image-level marker so operators can grep `docker image inspect` and

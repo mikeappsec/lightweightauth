@@ -1,7 +1,17 @@
 # syntax=docker/dockerfile:1.7
 # Control-plane Dockerfile — builds cmd/lwauth-controlplane with embedded UI.
 
-FROM golang:1.26.2-alpine AS build
+# --platform=$BUILDPLATFORM pins this stage to the runner's own arch (amd64)
+# regardless of which target platform is being assembled. Without this, a
+# multi-platform build (linux/amd64,linux/arm64) runs the ENTIRE stage --
+# apk add, npm ci, npx vite build, go build -- a second time under QEMU
+# emulation for arm64, and npm/vite under emulation is the dominant cost of
+# the whole image build (confirmed via CI job timing: ~25 of ~26 minutes was
+# a single multi-platform docker/build-push-action step). The UI output is
+# platform-agnostic anyway, so building it twice was pure waste. Go
+# cross-compiles the arm64 binary itself (GOARCH=$TARGETARCH below) with no
+# emulation needed; only the tiny final runtime stage varies per target.
+FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS build
 
 RUN apk add --no-cache ca-certificates git nodejs npm
 
@@ -9,11 +19,13 @@ WORKDIR /src
 
 # Cache Go modules.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Build UI.
 COPY ui/console/package.json ui/console/package-lock.json ./ui/console/
-RUN cd ui/console && npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    cd ui/console && npm ci
 
 COPY ui/ ./ui/
 RUN cd ui/console && npx vite build
@@ -22,9 +34,13 @@ RUN cd ui/console && npx vite build
 COPY . .
 ARG VERSION=dev
 ARG COMMIT=unknown
-ENV CGO_ENABLED=0 GOOS=linux
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH
 
-RUN go build -trimpath \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build,id=gobuild-${TARGETARCH} \
+    go build -trimpath \
         -ldflags "-s -w \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Version=${VERSION} \
           -X github.com/mikeappsec/lightweightauth/pkg/buildinfo.Commit=${COMMIT} \

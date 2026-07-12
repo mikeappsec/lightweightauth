@@ -119,6 +119,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
+          cache-from: type=gha,scope=build
+          cache-to:   type=gha,mode=max,scope=build
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
@@ -182,6 +184,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
+          cache-from: type=gha,scope=build-fips
+          cache-to:   type=gha,mode=max,scope=build-fips
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
@@ -210,6 +214,12 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: lwauth-controlplane:ci
+          # Shares a cache scope with build-controlplane below (same
+          # Dockerfile) -- whichever job runs first primes the cache for
+          # the other, since this job runs on every push/PR while
+          # build-controlplane only runs on push to main/tags.
+          cache-from: type=gha,scope=build-controlplane
+          cache-to:   type=gha,mode=max,scope=build-controlplane
           build-args: |
             VERSION=ci
             COMMIT=${{ github.sha }}
@@ -294,6 +304,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
+          cache-from: type=gha,scope=build-controlplane
+          cache-to:   type=gha,mode=max,scope=build-controlplane
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
