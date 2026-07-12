@@ -11,22 +11,26 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("custom-check", "wasm", map[string]any{
-    "path":        "/opt/plugins/check.wasm",
-    "maxMemoryMB": 32,
-    "maxFuel":     2000000,
-    "timeout":     "200ms",
+identifier, err := module.BuildIdentifier("wasm", "custom-check", map[string]any{
+    "path":        "/etc/lwauth/plugins/wasm/check.wasm",
+    "maxMemoryMB": 32,   // parsed but NOT enforced — see below
+    "maxFuel":     2000000, // parsed but NOT enforced — see below
+    "timeout":     "200ms", // the only real budget
 })
 ```
 
 ## Configuration
+
+`.wasm` files must live under a plugin base directory — default
+`/etc/lwauth/plugins/wasm`, overridable only via the
+`LWAUTH_WASM_PLUGIN_DIR` environment variable, not a config field.
 
 ```yaml
 identifiers:
   - name: custom-header-check
     type: wasm
     config:
-      path: /opt/plugins/check.wasm
+      path: /etc/lwauth/plugins/wasm/check.wasm
       maxMemoryMB: 32
       maxFuel: 2000000
       timeout: 200ms
@@ -34,10 +38,10 @@ identifiers:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `path` | string | *required* | Filesystem path to `.wasm` module |
-| `maxMemoryMB` | uint32 | `16` | Maximum guest memory (MiB) |
-| `maxFuel` | uint64 | `1000000` | CPU fuel budget per invocation |
-| `timeout` | duration | `100ms` | Wall-clock deadline per invocation |
+| `path` | string | *required* | Filesystem path to `.wasm` module — must resolve under the plugin base directory |
+| `maxMemoryMB` | uint32 | `16` | **Parsed but not enforced.** The real limit is a hardcoded, engine-wide 16 MiB (`WithMemoryLimitPages(256)`), applied once for every module regardless of this value |
+| `maxFuel` | uint64 | `1000000` | **Parsed but not enforced.** No `WithFuel`/fuel-related wazero API call exists anywhere in `runtime.go` — fuel metering has no effect |
+| `timeout` | duration | `100ms` | Wall-clock deadline per invocation — the only real budget |
 | `kind` | string | — | Plugin kind (identifier/authorizer/mutator) |
 
 ## Guest ABI
@@ -58,8 +62,8 @@ Input/output format: JSON.
 ## Features
 
 - Pure-Go WASM runtime via wazero (no CGO, no system dependencies)
-- CPU budget via fuel metering (per-instruction accounting)
-- Memory cap enforced per module instance
+- CPU budget via fuel metering: **not implemented** — `maxFuel` has no effect
+- Memory cap: **not per-module** — a single hardcoded 16 MiB engine-wide limit applies regardless of `maxMemoryMB`
 - Wall-clock deadline with `context.WithTimeout` + `WithCloseOnContextDone`
 - 1 MiB max response size cap
 - WASI preview1 available for stdlib needs (clocks, random)

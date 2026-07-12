@@ -28,12 +28,10 @@ metadata:
   namespace: production
 spec:
   revocation:
+    enabled: true            # required — revocation is opt-in
     backend: memory
     defaultTTL: "24h"        # revocations expire after 24h
-    maxEntries: 100000       # cap in-memory entries
-    negativeCache:
-      ttl: "2s"              # cache "not revoked" for 2s
-      maxSize: 100000
+    negCacheTTL: "2s"        # cache "not revoked" for 2s
 
   identifiers:
     - name: bearer
@@ -57,19 +55,37 @@ one replica is immediately visible to all:
 
 ```yaml
   revocation:
+    enabled: true
     backend: valkey
     addr: "valkey-master.cache.svc:6379"
     username: "lwauth-revocation"
-    password: "${VALKEY_PASSWORD}"
+    password: "${VALKEY_PASSWORD}"   # see warning below
     tls: true
     keyPrefix: "lwauth/rev/"
     defaultTTL: "24h"
-    negativeCache:
-      ttl: "2s"
-      maxSize: 100000
+    negCacheTTL: "2s"
 ```
 
+!!! warning "`password` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`. `revocation.password` (unlike
+    `rateLimit.distributed.password`) does support the real
+    mechanism: `secretRef: "vault://kv/lwauth/valkey#password"`,
+    checked specifically by `internal/config/loader.go` alongside
+    `cache.password`/`cache.sharedHmacKey`/`caches[].password`. Or
+    template the `AuthConfig` YAML itself at the deployment-pipeline
+    layer (Helm, Kustomize, CI) so the real password is already
+    inlined before lwauth ever parses it.
+
 ## 3. Revoking credentials via the Admin API
+
+`POST /v1/admin/revoke` accepts exactly these body fields: `jti`,
+`token_hash`, `subject`, `tenant`, `reason`, `ttl`. At least one of
+`jti`, `token_hash`, or `subject` is required. There is no generic
+`key` field — you can't hand it a pre-formatted `sid:`/`serial:`/`kid:`
+string; the handler builds its own internal keys from the fields
+above (`jti` → `jti:<value>`, `token_hash` → `hash:<value>`, `subject`
+→ `sub:[tenant:]<value>`).
 
 ### Revoke a JWT by JTI
 
@@ -82,54 +98,49 @@ curl -X POST https://lwauth:9000/v1/admin/revoke \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "{
-    \"key\": \"jti:${JTI}\",
+    \"jti\": \"${JTI}\",
     \"reason\": \"user-logout\",
     \"ttl\": \"1h\"
   }"
-# Response: {"status":"revoked","key":"jti:abc123","expiresAt":"2026-05-03T14:00:00Z"}
+# Response (202 Accepted): {"accepted":true,"keys":["jti:abc123"],"admin":"..."}
 ```
 
-### Revoke an API key by hash
+### Revoke all credentials for a subject
 
-```bash
-# The key derivation for API keys uses sha256
-KEY_HASH=$(echo -n "${API_KEY}" | sha256sum | cut -d' ' -f1)
-
-curl -X POST https://lwauth:9000/v1/admin/revoke \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"key\": \"sha256:${KEY_HASH}\",
-    \"reason\": \"credential-compromise\",
-    \"ttl\": \"24h\"
-  }"
-```
-
-### Revoke an OAuth2 session
+The `jwt`/`oauth2`/`mtls`/`hmac`/`apikey` identifiers all key their
+subject-level revocation the same way (`sub:[tenant:]<subject>`), so
+this is the one body shape that reliably revokes *every* credential a
+subject holds, regardless of identifier type:
 
 ```bash
 curl -X POST https://lwauth:9000/v1/admin/revoke \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
-    "key": "sid:session-id-from-idp",
-    "reason": "force-logout",
-    "ttl": "8h"
-  }'
-```
-
-### Revoke a certificate by serial
-
-```bash
-curl -X POST https://lwauth:9000/v1/admin/revoke \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "key": "serial:ABCDEF1234567890",
-    "reason": "compromised-workload",
+    "subject": "service-a",
+    "tenant": "acme",
+    "reason": "credential-compromise",
     "ttl": "24h"
   }'
+# Response (202 Accepted): {"accepted":true,"keys":["sub:acme:service-a"],"admin":"..."}
 ```
+
+### What you *cannot* precisely revoke today
+
+`token_hash` exists as a body field (→ a `hash:<value>` revocation
+entry) but no identifier module currently emits a `hash:`-prefixed
+`RevocationKeys()` entry to match against it — so submitting
+`token_hash` writes a revocation entry that nothing will ever look
+up. Similarly, there's no body field for an OAuth2 session ID
+(`sid:`, produced internally by the `oauth2` identifier), an API-key
+key ID (`kid:`, from `apikey`/`hmac`), or an mTLS certificate serial
+(`serial:`, from `mtls`) — those key spaces exist inside the
+identifier modules but the admin API has no way to submit them
+directly. Until that's added, revoking one specific API key, HMAC
+key, OAuth2 session, or certificate without also revoking every other
+credential that subject holds isn't possible through this endpoint —
+use subject-level revocation (above) instead, which is blunter but
+actually works.
 
 ## 4. Pipeline integration
 
@@ -145,15 +156,18 @@ Request → Rate Limit → Revocation Check → Identify → Authorize → Mutat
                    not revoked? → continue pipeline
 ```
 
-Key derivation by identifier type:
+Key derivation by identifier type (`RevocationKeys()` on each
+identifier — see "What you cannot precisely revoke today" above for
+which of these the admin API can actually address):
 
 | Identifier | Key format | Source |
 |------------|-----------|--------|
 | JWT | `jti:<jti_claim>` | Token's `jti` claim |
-| API key | `sha256:<hex(sha256(key))>` | Raw key hash |
-| OAuth2 token | `token:<sha256(access_token)>` | Access token hash |
-| Session | `sid:<session_id>` | Session cookie value |
-| mTLS cert | `serial:<hex_serial>` | Certificate serial |
+| JWT / OAuth2 / mTLS / HMAC / API key | `sub:[tenant:]<subject>` | Identity subject — revokes everything |
+| API key / HMAC | `kid:<keyId>` | The entry ID in `hashed.entries`/`.file`/`.dir` |
+| OAuth2 | `sid:<session_id>` | `sid` claim from the identity provider |
+| mTLS cert | `serial:<hex_serial>` | Certificate `serialNumber` claim |
+| Introspection | `client:<client_id>` | `client_id` from the introspection response |
 
 ## 5. Implementing logout in your application
 
@@ -170,7 +184,7 @@ def logout(user_jti: str, admin_token: str):
         "https://lwauth:9000/v1/admin/revoke",
         headers={"Authorization": f"Bearer {admin_token}"},
         json={
-            "key": f"jti:{user_jti}",
+            "jti": user_jti,
             "reason": "user-logout",
             "ttl": "1h",  # match remaining token lifetime
         },
@@ -182,7 +196,7 @@ def logout(user_jti: str, admin_token: str):
 // Go example — logout handler
 func handleLogout(w http.ResponseWriter, r *http.Request) {
     jti := extractJTI(r) // from the user's current token
-    body := fmt.Sprintf(`{"key":"jti:%s","reason":"user-logout","ttl":"1h"}`, jti)
+    body := fmt.Sprintf(`{"jti":%q,"reason":"user-logout","ttl":"1h"}`, jti)
     req, _ := http.NewRequest("POST", "https://lwauth:9000/v1/admin/revoke",
         strings.NewReader(body))
     req.Header.Set("Authorization", "Bearer "+adminToken)
@@ -208,29 +222,20 @@ is **immediately evicted** on the local replica. Cross-replica
 propagation depends on the cache TTL (Valkey backend) or federation
 broadcast delay.
 
-## 7. Federation broadcast (multi-cluster)
+## 7. Federation broadcast (multi-cluster) — not currently wired in
 
-When federation is enabled, revocations are automatically broadcast
-to all configured peers:
-
-```yaml
-  revocation:
-    backend: valkey
-    addr: "valkey-master.cache.svc:6379"
-    password: "${VALKEY_PASSWORD}"
-    defaultTTL: "24h"
-
-  federation:
-    enabled: true
-    clusterID: "us-east-1"
-    federationKey: "${FEDERATION_PSK}"
-    peers:
-      - endpoint: "eu-west-1.lwauth.internal:9443"
-```
-
-A revocation in `us-east-1` propagates to `eu-west-1` within one
-`syncInterval` (default 30s). For faster propagation, lower the
-interval — but at the cost of higher inter-cluster traffic.
+`pkg/federation` implements exactly this (HMAC-signed snapshot +
+revocation fan-out between clusters, see
+[its README](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/federation/README.md)
+for the real `federation.Config` shape), but nothing in `cmd/lwauth`
+or `cmd/lwauth-controlplane` loads it — there's no `federation:` key
+on `AuthConfig` (`internal/config/config.go` has no such field), and
+no flag wires a `federation.Server`/`federation.Peer` into the
+running daemon. Multi-cluster revocation sync is a library that
+exists but isn't reachable from configuration today; the only
+cross-replica propagation that actually runs in production is the
+`PeerBroadcaster` within a single cluster (`internal/admin/handler.go`),
+which is what section 8 below covers via Valkey, not federation.
 
 ## 8. Helm wiring
 
@@ -239,15 +244,14 @@ interval — but at the cost of higher inter-cluster traffic.
 config:
   inline: |
     revocation:
+      enabled: true
       backend: valkey
       addr: "valkey-master.cache.svc:6379"
-      password: "${VALKEY_PASSWORD}"
+      password: "${VALKEY_PASSWORD}"   # see warning in step 2 — use secretRef: vault://... for a real fix
       tls: true
       keyPrefix: "lwauth/rev/"
       defaultTTL: 24h
-      negativeCache:
-        ttl: 2s
-        maxSize: 100000
+      negCacheTTL: 2s
     identifiers:
       - name: bearer
         type: jwt
@@ -282,18 +286,18 @@ curl -H "Authorization: Bearer ${TOKEN}" https://gateway/api/resource
 # Revoke it
 curl -X POST https://lwauth:9000/v1/admin/revoke \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -d "{\"key\":\"jti:${JTI}\",\"reason\":\"test\",\"ttl\":\"5m\"}"
-# expect: 200
+  -d "{\"jti\":\"${JTI}\",\"reason\":\"test\",\"ttl\":\"5m\"}"
+# expect: 202
 
-# Verify it's now rejected (within negativeCache.ttl seconds)
+# Verify it's now rejected (within negCacheTTL seconds)
 sleep 2
 curl -H "Authorization: Bearer ${TOKEN}" https://gateway/api/resource
 # expect: 401
 
 # Check metrics
 curl -s https://lwauth:9090/metrics | grep revocation
-# lwauth_revocation_checks_total{result="hit"} 1
-# lwauth_revocation_checks_total{result="miss"} 1
+# lwauth_revocation_checks_total{tenant="...",result="revoked"} 1
+# lwauth_revocation_checks_total{tenant="...",result="not_revoked"} 1
 ```
 
 ## Security notes
@@ -307,7 +311,7 @@ curl -s https://lwauth:9090/metrics | grep revocation
 - **Negative cache and instant revocation.** The local cache evicts
   immediately on write, but cross-replica propagation depends on the
   Valkey backend. For truly instant cross-replica enforcement, set
-  `negativeCache.ttl: 0s` (at the cost of a Valkey hit per request).
+  `negCacheTTL: 0s` (at the cost of a Valkey hit per request).
 - **Audit trail.** The `reason` field is logged to the audit log.
   Use meaningful values for incident response.
 

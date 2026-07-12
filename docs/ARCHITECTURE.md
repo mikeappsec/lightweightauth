@@ -132,8 +132,8 @@ config.Source ── pushes ──► config.Compiler ── builds ──► *E
 // pkg/module/generic_registry.go
 type Registry[T any] struct { ... }
 func NewRegistry[T any](kind string) *Registry[T]
-func (r *Registry[T]) Register(typeName string, factory FactoryFunc[T])
-func (r *Registry[T]) Build(typeName, instanceName string, cfg map[string]any) (T, error)
+func (r *Registry[T]) Register(typeName string, factory ModuleFactory[T])
+func (r *Registry[T]) Build(typeName, instanceName string, cfg map[string]any, deps Deps) (T, error)
 ```
 
 The `Registry[T]` is generic over `Identifier`, `Authorizer`, and `ResponseMutator`.
@@ -168,13 +168,13 @@ every module produced by `Build()` in the order they are added (first = innermos
 | File | Responsibility |
 |------|----------------|
 | `internal/server/http.go` | Native HTTP API + `/healthz`, `/metrics`. |
-| `internal/server/grpc_native.go` | `lightweightauth.v1.Auth` service. |
-| `internal/server/extauthz.go` | `envoy.service.auth.v3.Authorization`; translates `CheckRequest` ↔ `module.Request` and `Decision` ↔ `CheckResponse`. |
+| `internal/server/native.go` | `lightweightauth.v1.Auth` service. |
+| `internal/server/grpc.go` | `envoy.service.auth.v3.Authorization`; translates `CheckRequest` ↔ `module.Request` and `Decision` ↔ `CheckResponse`. |
 
-> **Note.** The reverse-proxy (Mode B) data plane is **not** in this repo.
-> It lives in the sibling `lightweightauth-proxy` repository, which imports
-> this module and wraps `pipeline.Evaluate` with `httputil.ReverseProxy`.
-> See [DESIGN.md §9](DESIGN.md#9-repository-topology).
+> **Note.** The reverse-proxy (Mode B) data plane that used to live in a
+> `lightweightauth-proxy` repository has been deprecated and removed
+> (see [docs/security/v1.0-review.md §10](security/v1.0-review.md#10-outstanding-follow-ups-post-v10)).
+> Use Door A/B (gRPC), Door C (HTTP), or embed the library directly.
 
 ## Error taxonomy
 

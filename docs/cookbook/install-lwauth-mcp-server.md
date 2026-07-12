@@ -155,11 +155,11 @@ status:
 
 ---
 
-## Step 4 — Configure the token-exchange endpoint (`idjag` + `jwtissue`)
+## Step 4 — Configure the token-exchange endpoint (`idjag` + `jwt-issue`)
 
 LightweightAuth's token endpoint accepts the IdP's ID-JAG assertion,
 verifies it with the **`idjag`** identifier, and mints the MCP access token
-with the **`jwtissue`** mutator. Wire them with an `AuthConfig`:
+with the **`jwt-issue`** mutator. Wire them with an `AuthConfig`:
 
 ```yaml
 apiVersion: lightweightauth.io/v1alpha1
@@ -168,7 +168,7 @@ metadata:
   name: mcp-token-endpoint
   namespace: lwauth-system
 spec:
-  identify:
+  identifiers:
     - name: verify-idjag
       type: idjag
       config:
@@ -185,7 +185,7 @@ spec:
         # Remember consumed jti values to block replay.
         replayWindow: 10m
 
-  mutate:
+  response:
     - name: issue-mcp-token
       type: jwt-issue
       config:
@@ -233,7 +233,7 @@ metadata:
   name: mcp-server-extauthz
   namespace: lwauth-system
 spec:
-  identify:
+  identifiers:
     - name: verify-access-token
       type: jwt
       config:
@@ -242,7 +242,7 @@ spec:
         issuerUrl: https://lwauth.example.com/
         audiences:
           - https://lwauth-mcp.internal.example.com/
-  authorize:
+  authorizers:
     - name: require-role
       type: cel
       config:

@@ -11,16 +11,17 @@ under the looked-up key, and the two are compared in constant time.
 identifiers:
   - name: services
     type: hmac
-    header: Authorization              # default
-    scheme: HMAC-SHA256                # default
-    dateHeader: Date                   # default
-    clockSkew: 5m                      # default
-    requiredSignedHeaders: [host, date]  # default; extend to harden
-    keys:
-      abc:
-        secret: "<base64-or-utf8>"
-        subject: service-a
-        roles: [machine]
+    config:
+      header: Authorization              # default
+      scheme: HMAC-SHA256                # default
+      dateHeader: Date                   # default
+      clockSkew: 5m                      # default
+      requiredSignedHeaders: [host, date]  # default; extend to harden
+      keys:
+        abc:
+          secret: "<base64-or-utf8, decoded form must be >= 16 bytes>"
+          subject: service-a
+          roles: [machine]
 ```
 
 | Field | Default | Notes |
@@ -30,7 +31,7 @@ identifiers:
 | `dateHeader` | `Date` | Used for replay protection; auto-added to `requiredSignedHeaders`. |
 | `clockSkew` | `5m` | Reject if `\|now - Date\|` exceeds this. Set to `0` to disable (not recommended). |
 | `requiredSignedHeaders` | `[host, date]` | Headers the signer **must** declare in `signedHeaders`. The verifier rejects an Authorization that omits any of these, even if the math is consistent. Empty list rejected at config load. |
-| `keys` | — | Map of `keyId → {secret, subject, roles}`. `secret` is base64 by default; if it doesn't decode, the literal UTF-8 bytes are used. |
+| `keys` | — | Map of `keyId → {secret, subject, roles}`. `secret` is base64 by default; if it doesn't decode, the literal UTF-8 bytes are used. The decoded secret **must be at least 16 bytes (128 bits)** — shorter secrets fail identifier construction. |
 
 ## Wire format
 

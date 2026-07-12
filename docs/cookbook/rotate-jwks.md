@@ -104,18 +104,19 @@ still verify) but is no longer used for new signatures.
 Monitor the transition. Tokens already issued carry the old `kid` and
 remain valid until they expire. New tokens carry the new `kid`:
 
-```bash
-# Watch the per-kid verification metric. Over time, the old kid's
-# rate drops to zero as tokens expire.
-kubectl -n lwauth-system exec deploy/lwauth -c lwauth -- \
-  curl -s localhost:8080/metrics | grep lwauth_decisions_total | \
-  grep 'identifier="jwt"'
-
-# Or via PromQL:
-#   rate(lwauth_decisions_total{identifier="jwt"}[5m])
-# broken down by the token's kid (available in audit JSONL as
-# identifier_attrs.kid).
-```
+Neither lwauth's metrics nor its audit log carry per-`kid` granularity
+today: `lwauth_decisions_total` is labeled `{outcome, authorizer,
+tenant}` (no `identifier` or `kid`), the separate
+`lwauth_identifier_total{identifier, outcome}` counter only tracks
+which *identifier* matched (its config name, e.g. `jwt-bearer`), not
+which signing key the token used, and the audit event schema
+(`pkg/observability/audit.Event`) has no per-token claim capture
+either. There's no config-level way to split by `kid` on the `jwt`
+identifier (no such filter field exists). Practically: rely on your
+IdP's own signing-key usage telemetry (Keycloak/Auth0/Entra all
+expose this) to confirm the old `kid` has stopped being issued, and
+lean on the overlap-window math below instead of trying to observe
+old-`kid` usage from the lwauth side.
 
 The overlap window length = the maximum `exp - iat` of tokens minted
 under the old key. For short-lived tokens (5–15 min) the window is
@@ -129,19 +130,12 @@ old key from the IdP's JWKS endpoint.
 
 **How to know it is safe:**
 
-```bash
-# Option A: Check the audit log for any decision that verified
-# using the old kid. Zero hits = safe to retire.
-kubectl -n lwauth-system exec deploy/lwauth -c lwauth -- \
-  cat /var/log/lwauth/audit.jsonl | \
-  jq -r 'select(.identifier == "jwt") | .identifier_attrs.kid' | \
-  sort | uniq -c | sort -nr
-# expect: only the new kid appears.
-
-# Option B: PromQL — the old kid's verification rate is zero
-# across all replicas for at least 2× the max token lifetime.
-#   sum(rate(lwauth_decisions_total{identifier="jwt",kid="rsa-2025-11"}[1h])) == 0
-```
+As noted above, lwauth doesn't expose per-`kid` audit or metrics data,
+so the audit-log and PromQL approaches below don't work today — the
+only reliable signal is your IdP's own signing-key usage dashboard
+(check that the old `kid` has zero recent verifications there) plus
+waiting out the overlap window (2× the max token lifetime minted
+under the old key) computed in Phase 2.
 
 Remove the old key from the IdP, then confirm lwauth's next JWKS
 refresh drops it:

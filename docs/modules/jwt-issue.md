@@ -16,24 +16,26 @@ a uniform signed assertion.
 ## Configuration
 
 ```yaml
-mutators:
+response:
   - name: internal-jwt
     type: jwt-issue
     config:
       issuer:    https://lwauth.svc.cluster.local
       audience:  internal-services
       ttl:       2m                 # short — refreshed per request anyway
-      algorithm: ES256              # ES256 | RS256 | EdDSA
+      algorithm: RS256              # HS256 | HS384 | HS512 | RS256 | RS384 | RS512
 
       header: Authorization         # default
       scheme: Bearer                # default
 
-      # Pick ONE of:
+      # Which key field is used depends on the algorithm family, not
+      # interchangeable "pick one of these" options:
+      # - RS*: privateKeyFile, a PEM-encoded RSA private key (PKCS#1 or
+      #   PKCS#8 — an EC or Ed25519 key here will fail to parse).
       privateKeyFile: /etc/lwauth/keys/internal.pem
-      # key: |
-      #   -----BEGIN EC PRIVATE KEY-----
-      #   ...
-      #   -----END EC PRIVATE KEY-----
+      # - HS*: key, a raw shared secret (optionally "hex:"-prefixed).
+      #   Only used when algorithm is HS256/HS384/HS512; ignored for RS*.
+      # key: "hex:0123456789abcdef..."
 
       # Whitelist of claim keys to copy from Identity.Claims.
       copyClaims: [tenant, roles, email]
@@ -63,7 +65,7 @@ Sibling services verify with `pkg/identity/jwt` pointed at lwauth's
 # values.yaml
 config:
   inline: |
-    mutators:
+    response:
       - name: strip
         type: header-remove
         config: { upstream: [Authorization, Cookie, X-Api-Key] }
@@ -73,7 +75,7 @@ config:
           issuer: https://lwauth.svc
           audience: internal-services
           ttl: 2m
-          algorithm: ES256
+          algorithm: RS256
           privateKeyFile: /etc/lwauth/keys/internal.pem
           copyClaims: [tenant, roles, email]
 extraVolumes:
@@ -109,5 +111,5 @@ Authorization: Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6Im...
 
 ## References
 
-- RFC 7519 (JWT), RFC 8037 (EdDSA JWS).
+- RFC 7519 (JWT), RFC 7518 (JWA — HS256/384/512, RS256/384/512).
 - Source: [pkg/mutator/jwtissue/jwtissue.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/mutator/jwtissue/jwtissue.go).

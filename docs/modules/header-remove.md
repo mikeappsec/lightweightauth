@@ -16,7 +16,7 @@ which auth-relevant headers cross the trust boundary.
 ## Configuration
 
 ```yaml
-mutators:
+response:
   - name: strip
     type: header-remove
     config:
@@ -37,7 +37,7 @@ substitution — names are literal.
 # values.yaml
 config:
   inline: |
-    mutators:
+    response:
       - name: strip
         type: header-remove
         config:
@@ -46,10 +46,10 @@ config:
         type: header-add
         config:
           subjectHeader: X-User-Id
-          upstream: { X-Roles: "{{ joinClaims .Claims.roles \", \" }}" }
+          upstream: { X-Tenant: "${claim:tenant}" }
 ```
 
-The order in `mutators` is significant — strip first, then stamp.
+The order in `response` is significant — strip first, then stamp.
 
 ## Worked example
 

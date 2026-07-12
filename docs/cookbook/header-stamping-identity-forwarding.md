@@ -41,7 +41,7 @@ spec:
         rolesFrom: claim:roles
         allow: [user, admin]
 
-  mutators:
+  response:
     # Step 1: Strip the raw credential
     - name: strip-auth
       type: header-remove
@@ -56,7 +56,7 @@ spec:
 Add structured identity information for upstream consumption:
 
 ```yaml
-  mutators:
+  response:
     - name: strip-auth
       type: header-remove
       config:
@@ -113,13 +113,14 @@ against a shared HMAC key:
     - name: internal-jwt
       type: jwt-issue
       config:
-        # Signing key (HS256). Mount from a Secret.
+        # Signing key (HS256).
         algorithm: HS256
-        key: "${INTERNAL_JWT_KEY}"   # hex-encoded or raw
-        # Standard claims
+        key: "${INTERNAL_JWT_KEY}"   # see warning below — hex-encoded or raw
+        # Standard claims — audience is a single string, not a list;
+        # ttl, not expiry (pkg/mutator/jwtissue's knownKeys).
         issuer: lwauth-gateway
-        audiences: [internal-services]
-        expiry: 60s               # short-lived; re-issued per request
+        audience: internal-services
+        ttl: 60s                  # short-lived; re-issued per request
         # Propagate selected claims from the original identity
         copyClaims:
           - sub
@@ -130,6 +131,20 @@ against a shared HMAC key:
         header: X-Internal-Auth
         scheme: Bearer            # upstream sees: X-Internal-Auth: Bearer <jwt>
 ```
+
+!!! warning "`key` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${INTERNAL_JWT_KEY}`-style placeholders
+    anywhere in `AuthConfig`. Two ways to actually inject the signing
+    key: `key: "vault://kv/lwauth/internal-jwt#key"` (resolved at
+    compile time — any string field in a module's `config:` is
+    checked recursively, `internal/config/loader.go`'s
+    `resolveMapSecrets`), or template the `AuthConfig` YAML itself at
+    the deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    key is already inlined before lwauth parses it. Mounting the key
+    as a file via `extraVolumes`/`extraVolumeMounts` doesn't help
+    here specifically — `jwt-issue`'s HS* path only has a `key:`
+    string field, not a `keyFile:`-style option (RS* does have
+    `privateKeyFile`, which file-mounting works for).
 
 Upstream services validate `X-Internal-Auth` using the shared key:
 
@@ -168,7 +183,7 @@ spec:
         rolesFrom: claim:roles
         allow: [user, admin]
 
-  mutators:
+  response:
     - name: strip-auth
       type: header-remove
       config:
@@ -187,10 +202,10 @@ spec:
       type: jwt-issue
       config:
         algorithm: HS256
-        key: "${INTERNAL_JWT_KEY}"
+        key: "${INTERNAL_JWT_KEY}"   # see warning in step 4
         issuer: lwauth-gateway
-        audiences: [internal-services]
-        expiry: 60s
+        audience: internal-services
+        ttl: 60s
         copyClaims: [sub, email, roles, tenant_id]
         header: X-Internal-Auth
         scheme: Bearer
@@ -219,7 +234,7 @@ config:
         config:
           rolesFrom: claim:roles
           allow: [user, admin]
-    mutators:
+    response:
       - name: strip-auth
         type: header-remove
         config:
@@ -234,10 +249,10 @@ config:
         type: jwt-issue
         config:
           algorithm: HS256
-          key: "${INTERNAL_JWT_KEY}"
+          key: "${INTERNAL_JWT_KEY}"   # see warning in step 4
           issuer: lwauth-gateway
-          audiences: [internal-services]
-          expiry: 60s
+          audience: internal-services
+          ttl: 60s
           copyClaims: [sub, roles]
           header: X-Internal-Auth
           scheme: Bearer
@@ -264,11 +279,14 @@ curl -v -H "Authorization: Bearer ${TOKEN}" https://gateway/api/whoami
 # Dry-run
 lwauthctl explain --config api-gateway.yaml \
     --request '{"method":"GET","path":"/api/whoami","headers":{"authorization":"Bearer '${TOKEN}'"}}'
-# identify   ✓  jwt      subject=alice
-# authorize  ✓  rbac
-# mutate     ✓  strip-auth        removed: [Authorization]
-# mutate     ✓  identity-headers  added: X-User-ID=alice
-# mutate     ✓  internal-jwt      issued: X-Internal-Auth (exp=60s)
+# identify:
+#   ✓ bearer (jwt) → subject="alice" claims=4
+# authorize: ✓ rbac (rbac) allow: ...
+# mutate:
+#   ✓ strip-auth (header-remove)
+#   ✓ identity-headers (header-add)
+#   ✓ internal-jwt (jwt-issue)
+# decision: allow identifier="bearer" authorizer="rbac" upstreamHeaders=4 responseHeaders=1
 ```
 
 ## Security notes

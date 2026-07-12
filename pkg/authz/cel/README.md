@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-authorizer, err := module.BuildAuthorizer("cel-check", "cel", map[string]any{
+authorizer, err := module.BuildAuthorizer("cel", "cel-check", map[string]any{
     "expression": `identity.claims.role == "admin" || request.method == "GET"`,
 })
 ```

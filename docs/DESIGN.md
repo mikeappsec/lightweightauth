@@ -2232,7 +2232,25 @@ G9. ~~**ID-SAML-1 — SAML 2.0 + SCIM 2.0 identifiers.**~~ ✅ Done
   Promotion trigger: at least one customer commitment — adds
   significant XML / xmldsig dependency surface.
 
-G10. **CTRL-UI-1 — Management UI and multi-instance control plane.**
+G10. ~~**CTRL-UI-1 — Management UI and multi-instance control plane.**~~ ✅ Done
+
+> **Status note (added during a documentation audit):** unlike the rest
+> of this section's prose, which is written in the future/proposal tense
+> this doc uses throughout, **this feature has shipped** — it's the
+> largest single component in the repository. `cmd/lwauth-controlplane`,
+> `ui/console/` (SolidJS console with `Instances`, `InstanceDetail`,
+> `CreateInstanceWizard`, `MeshGraph`, `Routes`, `ConfigEditor`,
+> `Clusters`, `Alerts`, `Decisions`, `Dashboard`, `Login` pages),
+> `internal/controlplane/instance_reconciler.go`, and
+> `internal/controlplane/proxyroute_reconciler.go` are all real, and
+> the control plane is what runs in production at
+> `lwauth.lightweightauth.cc` today. Treat the architecture below as a
+> description of the shipped system, not a proposal — but note it was
+> **not** re-verified line-by-line against current code as part of this
+> pass (only the top-level "does this exist" facts above were checked);
+> some interaction details, endpoint names, or diagrams below may have
+> drifted from the current implementation the way other docs in this
+> repo were found to.
 
 > **One-liner:** A web-based management console and backing API that lets
 > operators create, configure, observe, and interconnect lwauth instances
@@ -2653,7 +2671,7 @@ binary. Auth: admin JWT / mTLS (same as `/v1/admin/*` on lwauth itself).
 
 ---
 
-*Former G10–G20 have been moved to [Milestone H](#milestone-h--post-g-enterprise-features) below.*
+*Former G10–G20 have been moved to [Milestone H](#milestone-h-post-g-enterprise-features) below.*
 
 ---
 

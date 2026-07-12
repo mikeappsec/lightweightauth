@@ -132,6 +132,18 @@ global quotas, enable distributed limiting via Valkey:
       failOpen: false     # deny on backend error (safe default)
 ```
 
+!!! warning "`rateLimit.distributed.password` is read literally — no `${VAR}` substitution, and no `secretRef:` support either"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`. Unlike identifier/authorizer/response
+    module configs (and `cache:`/`revocation:`/`caches:`), the
+    top-level `rateLimit:` block is **not** walked by
+    `internal/config/loader.go`'s secret-resolution pass — a
+    `secretRef: vault://...` value here would be used as a literal
+    string, not resolved. The only real option is to template the
+    `AuthConfig` YAML itself at the deployment-pipeline layer (Helm,
+    Kustomize, CI) so the real password is already inlined before
+    lwauth ever parses it.
+
 Cluster cap = `perTenant.burst` requests per `window` across **all**
 replicas. So `rps: 200, burst: 400, window: 1s` means ≤ 400
 requests/second per tenant fleet-wide.
@@ -155,20 +167,22 @@ per-replica floor — a transient `N × rps` worst case, not unbounded.
 
 ## 6. Monitoring and alerting
 
-Key metrics to watch:
+The only real rate-limit metric is a dedicated counter — there is no
+`lwauth_ratelimit_bucket_tokens_remaining` gauge or
+`lwauth_ratelimit_valkey_duration_seconds` histogram anywhere in
+`pkg/observability/metrics/metrics.go` (rate limiting also runs
+before any authorizer, so there's no `authorizer="ratelimit"` label
+value on `lwauth_decisions_total` either):
 
 ```promql
-# Rate-limited requests per tenant
+# Rate-limited requests per tenant — the one real signal
 sum by (tenant) (
-  rate(lwauth_decisions_total{outcome="deny", authorizer="ratelimit"}[5m])
+  rate(lwauth_ratelimit_denied_total[5m])
 )
-
-# Bucket utilization (are tenants close to their limits?)
-lwauth_ratelimit_bucket_tokens_remaining{tenant="acme-corp"}
-
-# Distributed backend latency
-histogram_quantile(0.99, lwauth_ratelimit_valkey_duration_seconds)
 ```
+
+For bucket-fill visibility or distributed-backend latency, you'd need
+to add your own instrumentation — neither is exposed today.
 
 Alert when a tenant is consistently hitting their limit — it may
 indicate a need for quota increase or a misbehaving client.
@@ -195,7 +209,7 @@ config:
       distributed:
         type: valkey
         addr: valkey-master.cache.svc:6379
-        password: "${VALKEY_PASSWORD}"
+        password: "${VALKEY_PASSWORD}"   # see warning in step 4 — must be templated in, not resolved by lwauth
         keyPrefix: lwauth-rl/
         window: 1s
         timeout: 50ms

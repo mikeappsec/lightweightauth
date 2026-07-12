@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-authorizer, err := module.BuildAuthorizer("fga", "openfga", map[string]any{
+authorizer, err := module.BuildAuthorizer("openfga", "fga", map[string]any{
     "apiUrl":  "http://openfga:8080",
     "storeId": "01HXYZ...",
     "check": map[string]any{

@@ -18,9 +18,13 @@ ks.Put(keyrotation.KeyMeta{
     GracePeriod: 5 * time.Minute,
 }, []byte("secret-material"))
 
-key, meta, ok := ks.Get("key-2024")
-if ok && meta.IsValid(time.Now()) {
-    // Use key for verification
+// Get returns only (value, ok) — it doesn't hand back the KeyMeta,
+// so validity is already checked internally, not something the caller
+// re-checks against a returned meta.
+key, ok := ks.Get("key-2024")
+if ok {
+    // Use key for verification — Get() already applied the
+    // notBefore/notAfter/gracePeriod validity window.
 }
 ```
 

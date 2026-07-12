@@ -19,8 +19,10 @@ reg := module.NewRegistry[module.Identifier]("identifier")
 reg.Register("jwt", jwtFactory)
 reg.Register("mtls", mtlsFactory)
 
-id, err := reg.Build("jwt", "my-jwt", rawConfig)
+id, err := reg.Build("jwt", "my-jwt", rawConfig, module.Deps{})
 ```
+
+`Build` takes a fourth argument, `deps Deps` — this is required, not optional.
 
 `DecoratedRegistry[T]` extends `Registry[T]` with decorator chains applied at build time:
 
@@ -78,7 +80,7 @@ inner module.
 
 ```go
 guard := upstream.NewGuard(upstream.GuardConfig{
-    Breaker:    upstream.BreakerConfig{Threshold: 5, Window: 10 * time.Second},
+    Breaker:    upstream.BreakerConfig{FailureThreshold: 5, CoolDown: 10 * time.Second},
     MaxRetries: 2,
 })
 module.WithIdentifierBreaker(guard)
@@ -108,16 +110,30 @@ module.WithObservability(func(name string, err error) {
 
 ## Configuration Helper
 
-`DecodeConfig(raw map[string]any, target *T)` uses struct tags for validation:
+`DecodeConfig(raw map[string]any, dest any) error` — there is no
+`lwauth:` struct-tag vocabulary (`required`, `default=`, `min=`,
+`max=` don't exist anywhere in this codebase). What it actually does:
+derives the known-keys set from each field's `yaml` tag (falling back
+to the `json` tag, then the lowercased field name), rejects any raw
+key not in that set, then JSON-round-trips the map into the typed
+struct (`encoding/json` with `DisallowUnknownFields` on nested
+structs) for numeric/bool/string coercion. There's no defaulting and
+no min/max validation — a factory sets defaults itself after decoding:
 
 ```go
 type Config struct {
-    Address string `lwauth:"required"`
-    Timeout string `lwauth:"default=5s"`
-    Retries int    `lwauth:"default=3,min=0,max=10"`
+    HeaderName string   `yaml:"headerName"`
+    Required   bool     `yaml:"required"`
+    Issuers    []string `yaml:"trustedIssuers"`
 }
-var cfg Config
-err := module.DecodeConfig(rawMap, &cfg)
+
+func factory(name string, raw map[string]any) (module.Identifier, error) {
+    var cfg Config
+    if err := module.DecodeConfig(raw, &cfg); err != nil {
+        return nil, err
+    }
+    // use cfg.HeaderName, cfg.Required, etc.
+}
 ```
 
 ## Design Principles

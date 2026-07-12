@@ -53,7 +53,7 @@ spec:
               apiUrl: http://openfga.openfga.svc:8080
               storeId: 01HX...
               authorizationModelId: 01HX...
-              apiToken: "${FGA_TOKEN}"
+              apiToken: "${FGA_TOKEN}"   # see warning below
               timeout: 150ms
               check:
                 user: 'user:{{ .Identity.Subject }}'
@@ -71,6 +71,25 @@ admin user → RBAC permits → short-circuit → 200 (no FGA call)
 regular user → RBAC denies → try OpenFGA → permits → 200
 regular user → RBAC denies → try OpenFGA → denies → 403
 ```
+
+!!! warning "`apiToken` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${FGA_TOKEN}`-style placeholders anywhere
+    in `AuthConfig`. `apiToken:` is forwarded to OpenFGA verbatim as
+    `Authorization: Bearer <value>` — if you paste `"${FGA_TOKEN}"`
+    into a real config, FGA sees the literal six characters and
+    rejects the call with 401. Two ways to actually inject a secret:
+
+    1. **`secretRef:`** — any string field in an identifier/authorizer/
+       response module's `config:` (recursively, not just this one)
+       is resolved at compile time if it matches
+       `<scheme>://<path>[#field]`, e.g.
+       `apiToken: "vault://kv/lwauth/openfga#token"`
+       (`internal/config/loader.go`'s `resolveMapSecrets`,
+       `pkg/secrets`). The built-in backend is HashiCorp Vault.
+    2. **Template the AuthConfig itself** at the deployment-pipeline
+       layer (Helm `{{ .Values.fgaToken }}`, Kustomize, CI
+       substitution) so the real secret is already inlined before
+       lwauth ever parses the YAML.
 
 ## 2. allOf — require multiple conditions
 

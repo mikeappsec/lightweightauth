@@ -49,11 +49,15 @@ registering the service on an unauthenticated listener. If you truly
 intend an open stream in a trusted test harness, pass an explicit
 allow-all function in that code.
 
-`Broker.Publish` is the **single-writer** path. Calling Publish from
-multiple goroutines is supported but has a known caveat (an older
-snapshot can win against a newer one under contention) — multi-writer
-support is tracked as a v1.1 follow-up. See
-[DESIGN.md §M12 follow-ups](../DESIGN.md).
+`Broker.Publish` supports concurrent multi-writer calls. This used to
+have a known caveat (an older snapshot could win against a newer one
+under contention), but that's fixed as of v1.1
+(`pkg/configstream/broker.go`'s `subscription.deliver` rejects any
+snapshot whose version isn't strictly greater than the subscriber's
+high-water mark; see DESIGN.md's M12-BROKER-MW entry, "shipped
+(v1.1)"), fenced by `TestBrokerStress_MultiWriter` and
+`TestBrokerDeliver_RejectsStaleVersion` in
+`pkg/configstream/stress_test.go`.
 
 ## Client side
 
@@ -88,8 +92,8 @@ service ConfigDiscovery {
 }
 
 message AuthConfigSnapshot {
-  uint64 version  = 2;   // monotonic per-Broker
-  bytes  spec_json = 3;  // JSON-encoded AuthConfig
+  uint64 version  = 1;   // monotonic per-Broker
+  bytes  spec_json = 2;  // JSON-encoded AuthConfig
 }
 ```
 

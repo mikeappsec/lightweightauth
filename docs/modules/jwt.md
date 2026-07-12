@@ -22,9 +22,12 @@ identifiers:
   - name: bearer
     type: jwt
     config:
-      # REQUIRED: one of these. issuerUrl auto-discovers JWKS via
-      # /.well-known/openid-configuration.
+      # REQUIRED. There is no discovery -- jwksUrl must point directly
+      # at the IdP's JWKS document.
       jwksUrl:   https://idp.example.com/.well-known/jwks.json
+
+      # Optional. Independent of jwksUrl: if set, pins the `iss` claim
+      # (via jwtlib.WithIssuer) rather than fetching anything from it.
       # issuerUrl: https://idp.example.com
 
       audiences:                  # optional; verify `aud` claim

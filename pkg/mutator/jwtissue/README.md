@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-mutator, err := module.BuildMutator("mint-internal", "jwt-issue", map[string]any{
+mutator, err := module.BuildMutator("jwt-issue", "mint-internal", map[string]any{
     "issuer":   "lwauth",
     "audience": "backend-api",
     "ttl":      "60s",
@@ -26,7 +26,7 @@ mutator, err := module.BuildMutator("mint-internal", "jwt-issue", map[string]any
 ## Configuration
 
 ```yaml
-mutators:
+response:
   - name: mint-internal
     type: jwt-issue
     config:

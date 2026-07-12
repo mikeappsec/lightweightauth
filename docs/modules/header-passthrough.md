@@ -16,7 +16,7 @@ what stays, not what goes.
 ## Configuration
 
 ```yaml
-mutators:
+response:
   - name: allowlist
     type: header-passthrough
     config:
@@ -39,7 +39,7 @@ not affected — this mutator only filters incoming client headers.
 # values.yaml
 config:
   inline: |
-    mutators:
+    response:
       - name: allowlist
         type: header-passthrough
         config:

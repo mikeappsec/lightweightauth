@@ -20,9 +20,18 @@ for revocation-bearing storage.
 
 ## Configuration
 
-`session` is configured under `oauth2.session:` rather than as a
-top-level module (it is the OAuth2 identifier's storage, not a
-pipeline stage):
+`session` is configured under `oauth2.cookie:` (not `session:` —
+that key doesn't exist; `pkg/identity/oauth2/config.go`'s
+`knownKeys` only recognizes `cookie`, and using `session:` fails
+config validation with `unknown config key(s): session`). It's the
+OAuth2 identifier's storage, not a pipeline stage. There is also no
+`{ fromEnv: ... }` structured-secret syntax anywhere in this
+codebase — `clientSecret`/`cookie.secret` are plain strings; use a
+literal value your deployment pipeline substitutes, or a real
+`secretRef: vault://...` reference for fields that support secret
+resolution (see [pkg/secrets](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/secrets/secrets.go)).
+`{ fromEnv: X }` as a YAML mapping fails the `.(string)` type
+assertion silently, leaving the field empty:
 
 ```yaml
 identifiers:
@@ -31,30 +40,31 @@ identifiers:
     config:
       issuerUrl: https://idp.example.com
       clientId:  web-app
-      clientSecret: { fromEnv: OAUTH_CLIENT_SECRET }
-      redirectUrl: https://app.example.com/callback
+      clientSecret: "${OAUTH_CLIENT_SECRET}"
+      redirectUrl: https://app.example.com/oauth2/callback
       scopes: [openid, profile, email]
 
-      session:
+      cookie:
         # Cookie name. Default: _lwauth_session
         name: _lwauth_session
         # AES-256 key is SHA-256(secret); ≥32 bytes random recommended.
-        secret: { fromEnv: SESSION_SECRET }
+        secret: "${SESSION_SECRET}"
         path: /
         domain: app.example.com           # optional
-        secure: true                       # default true; false only for local-dev plaintext
+        secure: true                       # bool; unset defaults per session.CookieStoreConfig
         sameSite: Lax                      # Lax | Strict | None
-        httpOnly: true                     # default true
-        maxAge: 8h                         # default 8h
-        cookieMaxBytes: 3500               # default 3500; hard fail above to dodge browser 4KB limit
+        httpOnly: true                     # bool
+        maxAge: 8h                         # default 8h — NOT "ttl"
+        # There is no cookieMaxBytes here — oauth2.CookieConfig doesn't
+        # expose it, even though the underlying session.CookieStoreConfig
+        # supports it (default 3500, hard-coded when the oauth2 module
+        # builds its cookie store).
 ```
 
 ## Helm wiring
 
 ```yaml
 # values.yaml
-secrets:
-  sessionSecret: ""                     # rendered into a K8s Secret if non-empty
 config:
   inline: |
     identifiers:
@@ -63,10 +73,10 @@ config:
         config:
           issuerUrl: https://idp.example.com
           clientId:  web-app
-          clientSecret: { fromEnv: OAUTH_CLIENT_SECRET }
-          redirectUrl: https://app.example.com/callback
-          session:
-            secret: { fromEnv: SESSION_SECRET }
+          clientSecret: "${OAUTH_CLIENT_SECRET}"
+          redirectUrl: https://app.example.com/oauth2/callback
+          cookie:
+            secret: "${SESSION_SECRET}"
 ```
 
 ## Wire format
@@ -77,8 +87,12 @@ plaintext    = JSON-encoded session.Session
 ```
 
 - 12-byte nonce is fresh `crypto/rand` per `Save` (never reused).
-- AEAD tag detects tampering — any modification fails decryption and
-  returns `module.ErrCredentialInvalid`.
+- AEAD tag detects tampering — any modification fails decryption.
+  `pkg/session/cookie.go` doesn't import `pkg/module` and returns a
+  plain `fmt.Errorf("session: cookie auth failed: %w", err)`, not a
+  module sentinel error. The `oauth2` identifier discards this error
+  and just falls through to `module.ErrNoMatch` when no session is
+  found (`Identify` in `pkg/identity/oauth2/oauth2.go`).
 
 ## Operational notes
 
@@ -86,10 +100,12 @@ plaintext    = JSON-encoded session.Session
   cookie at once (forced re-login). For graceful rotation, run two
   lwauth replicas with `secret_v2` accepted and `secret_v1` decommissioned
   after `maxAge` elapses (planned, see [DESIGN.md](../DESIGN.md) M14).
-- **Size.** Browsers cap cookies near 4 KiB. `cookieMaxBytes` (default
-  3500) is a hard fail — the OAuth2 module surfaces a clear error
-  rather than silently truncating, so deployments swap to a server-side
-  store when sessions outgrow the cookie.
+- **Size.** Browsers cap cookies near 4 KiB. `session.CookieStoreConfig.CookieMaxBytes`
+  (default 3500, not overridable through the `oauth2` module's
+  `cookie:` block) is a hard fail — an encoded cookie over the limit
+  returns an error rather than being silently truncated, so
+  deployments swap to a server-side store when sessions outgrow the
+  cookie.
 - **Cross-origin.** Set `sameSite: None` + `secure: true` if the lwauth
   callback is served from a different origin than the protected app.
 

@@ -51,7 +51,7 @@ identifiers:
 | `idpCertPEM` | string | *required* | PEM-encoded IdP X.509 certificate for signature verification |
 | `entityId` | string | *required* | SP entity ID (validates Response Destination and SubjectConfirmation Recipient) |
 | `issuer` | string | — | Expected IdP issuer URI |
-| `audienceRestriction` | string | — | Required audience value in assertion conditions |
+| `audienceRestriction` | string | *required* | Required audience value in assertion conditions — `factory()` fails with "audienceRestriction is required (prevents cross-SP assertion acceptance)" (SAML-VULN-04) if omitted |
 | `maxClockSkew` | duration | `"30s"` | Tolerance for NotBefore/NotOnOrAfter validation |
 | `header` | string | `"X-SAML-Response"` | HTTP header containing the Base64-encoded SAMLResponse |
 | `formField` | string | `"SAMLResponse"` | POST form field name (POST binding) |

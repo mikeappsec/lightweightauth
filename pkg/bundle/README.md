@@ -10,8 +10,8 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/bundle"
 )
 
-// Pack a bundle directory into a tar.gz archive
-archive, err := bundle.Pack("/path/to/my-bundle/")
+// Pack a bundle directory into a tar.gz archive — three return values
+archive, meta, err := bundle.Pack("/path/to/my-bundle/")
 
 // Push to OCI registry
 digest, err := bundle.Push(ctx, "/path/to/my-bundle/", bundle.PushOptions{
@@ -72,7 +72,11 @@ my-bundle/
 - Entry count limit (1000) prevents inode exhaustion
 - Pre-checks total uncompressed size before packing
 - Metadata validation with path safety checks
-- Registry auth via username/password or environment variables
+- Registry auth via username/password (`PushOptions`/`PullOptions`) —
+  no environment-variable fallback inside this package itself (the
+  `lwauthctl bundle` CLI subcommands add
+  `$LWAUTH_REGISTRY_USERNAME`/`$LWAUTH_REGISTRY_PASSWORD` on top, but
+  that's CLI-layer, not this package)
 
 ## How It Works
 

@@ -108,16 +108,17 @@ spec:
       type: spicedb
       config:
         endpoint: "spicedb.authz.svc:50051"
-        token: "${SPICEDB_PRESHARED_KEY}"
+        token: "${SPICEDB_PRESHARED_KEY}"   # see warning below
         insecure: false
         timeout: "200ms"
         consistency: "minimize_latency"
-        tls:
-          caFile: /etc/lwauth/spicedb-ca.pem
+        # There is no `tls:` block — TLS uses the system CA pool
+        # unconditionally (grpcutil.WithSystemCerts); there's no way
+        # to pin a custom CA file today.
 
         check:
           resourceType: "document"
-          resourceID: "{{ .Request.PathSegment 2 }}"
+          resourceId: "{{ index .Request.PathParts 2 }}"
           permission: |-
             {{- if eq .Request.Method "GET" -}}view
             {{- else if eq .Request.Method "PUT" -}}edit
@@ -125,30 +126,49 @@ spec:
             {{- else -}}view
             {{- end -}}
           subjectType: "user"
-          subjectID: "{{ .Identity.Subject }}"
+          subjectId: "{{ .Identity.Subject }}"
 ```
+
+!!! warning "`token` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${SPICEDB_PRESHARED_KEY}`-style
+    placeholders anywhere in `AuthConfig`. Two ways to actually inject
+    it: `token: "vault://kv/lwauth/spicedb#token"` (resolved at
+    compile time — any string field in a module's `config:` is
+    checked recursively, `internal/config/loader.go`'s
+    `resolveMapSecrets`), or template the `AuthConfig` YAML itself at
+    the deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    token is already inlined before lwauth ever parses it.
 
 ## 5. Template functions
 
-The `check` block uses Go `text/template` with these variables:
+The `check` block uses Go `text/template` with these variables. Field
+names use lowercase-`d` `Id` (`resourceId`, `subjectId`), not
+`resourceID`/`subjectID`, and there is no `.Request.PathSegment N`,
+`.Request.Header "..."`, or `.Request.Query "..."` method — use
+`index`/field access on `.Request.PathParts`/`.Request.Headers` instead:
 
 | Variable | Example | Description |
 |----------|---------|-------------|
 | `.Request.Method` | `GET` | HTTP method |
 | `.Request.Path` | `/api/documents/doc1` | Full path |
-| `.Request.PathSegment N` | `doc1` (N=2) | Nth path segment (0-indexed) |
-| `.Request.Header "X-Foo"` | `bar` | Request header |
-| `.Request.Query "key"` | `value` | Query parameter |
+| `.Request.PathParts` | `["api","documents","doc1"]` | Path split on `/`, leading empty segment stripped — index into it, e.g. `index .Request.PathParts 2` |
+| `.Request.Headers` | map | Lowercased keys, first value only |
 | `.Identity.Subject` | `alice` | Authenticated subject |
 | `.Identity.Claims` | map | All identity claims |
+| `lower` / `upper` / `sanitize` | — | The only three template helper functions available |
 
 ## 6. Consistency levels
+
+Only two consistency levels are actually accepted — config validation
+rejects anything else with `consistency must be 'minimize_latency' or
+'fully_consistent'` (`pkg/authz/spicedb/spicedb.go`). There is no
+`at_least_as_fresh`/ZedToken support today, despite it appearing in
+the field's Go doc comment as an aspirational third mode:
 
 | Level | Behavior | Latency | Use when |
 |-------|----------|---------|----------|
 | `minimize_latency` | Use SpiceDB cache | Lowest (~1-5ms) | Reads that can tolerate eventual consistency |
 | `fully_consistent` | Full consistency | Higher (~10-50ms) | After relationship writes (e.g. sharing a document) |
-| `at_least_as_fresh` | With ZedToken | Medium | When you have the write's ZedToken |
 
 For most read traffic, `minimize_latency` is correct. Use
 `fully_consistent` only for operations immediately after a permission
@@ -176,15 +196,15 @@ Avoid SpiceDB calls for obvious cases:
             type: spicedb
             config:
               endpoint: "spicedb.authz.svc:50051"
-              token: "${SPICEDB_PRESHARED_KEY}"
+              token: "${SPICEDB_PRESHARED_KEY}"   # see warning in step 4
               timeout: "200ms"
               consistency: "minimize_latency"
               check:
                 resourceType: "document"
-                resourceID: "{{ .Request.PathSegment 2 }}"
+                resourceId: "{{ index .Request.PathParts 2 }}"
                 permission: view
                 subjectType: "user"
-                subjectID: "{{ .Identity.Subject }}"
+                subjectId: "{{ .Identity.Subject }}"
 ```
 
 ## 8. Decision caching
@@ -231,15 +251,15 @@ config:
               type: spicedb
               config:
                 endpoint: "spicedb.authz.svc:50051"
-                token: "${SPICEDB_PRESHARED_KEY}"
+                token: "${SPICEDB_PRESHARED_KEY}"   # see warning in step 4
                 timeout: 200ms
                 consistency: minimize_latency
                 check:
                   resourceType: document
-                  resourceID: "{{ .Request.PathSegment 2 }}"
+                  resourceId: "{{ index .Request.PathParts 2 }}"
                   permission: view
                   subjectType: user
-                  subjectID: "{{ .Identity.Subject }}"
+                  subjectId: "{{ .Identity.Subject }}"
     cache:
       backend: valkey
       addr: valkey-master.cache.svc:6379

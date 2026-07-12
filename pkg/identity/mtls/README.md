@@ -1,6 +1,9 @@
 # pkg/identity/mtls
 
-mTLS/SPIFFE client certificate identifier with hot-reloadable CA bundles.
+mTLS/SPIFFE client certificate identifier. The CA bundle is loaded
+once at factory build time — see the "not wired in" note under
+Features below; it is **not** actually hot-reloadable today despite
+`NewCABundleWatcher` existing in the package.
 
 ## Usage
 
@@ -11,7 +14,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("mtls-id", "mtls", map[string]any{
+identifier, err := module.BuildIdentifier("mtls", "mtls-id", map[string]any{
     "trustForwardedClientCert": true,
     "trustedCAFiles":           []string{"/etc/lwauth/ca-bundle.pem"},
 })
@@ -44,7 +47,13 @@ identifiers:
 - In-process TLS termination (PeerCerts) and Envoy XFCC header support
 - XFCC trust is opt-in (`trustForwardedClientCert: true`) — default-deny
 - SPIFFE URI SAN support (`spiffe://` URIs become the identity subject)
-- CA bundle hot-reload via fsnotify (zero-downtime rotation)
+- `ca_watcher.go` implements a fully-built `NewCABundleWatcher`
+  (fsnotify-based hot-reload with `keyrotation.Metrics.RefreshTotal`
+  counters), but it's **not wired in** — `factory()` calls the
+  static, one-shot `loadCAPool()` and never constructs a
+  `CABundleWatcher`. Changing the CA bundle file on disk has no
+  effect until the process restarts (or the whole `AuthConfig`
+  reloads, which rebuilds the identifier from scratch).
 - Fail-closed: XFCC trust requires at least one CA anchor
 - Revocation key derivation from certificate serial number
 
@@ -55,4 +64,5 @@ identifiers:
 3. Decodes the URL-encoded PEM certificate from the XFCC `Cert=` field.
 4. Verifies the certificate chain against the configured CA bundle.
 5. Extracts identity: SPIFFE URI (if present), or CN, plus full claims (issuer, serial, DNS SANs, etc.).
-6. `CABundleWatcher` uses fsnotify to hot-reload the CA file without pod restart.
+6. The CA bundle is loaded once when the identifier is built — see
+   the not-wired-in note above.

@@ -14,25 +14,29 @@ path", "must pass all", or "any one is enough" without code.
 
 ## Configuration
 
+There is no `mode:`/`children:` shape — the config has exactly two
+possible top-level keys, `anyOf` and `allOf`, each holding the child
+list directly (`pkg/authz/composite/composite.go`'s `knownKeys`).
+Using both, or any other key, fails with `unknown config key(s)`.
+
 ```yaml
 authorizers:
   - name: gate
     type: composite
     config:
-      mode: firstAllow      # firstAllow | allOf | anyOf | firstDeny
-      children:
+      anyOf:                # or allOf — pick exactly one
         - { name: admins, type: rbac, config: { rolesFrom: claim:roles, allow: [admin] } }
-        - { name: rebac,  type: openfga, config: { ... } }
+        - { name: rebac,  type: openfga, config: { apiUrl: ..., storeId: ..., check: { ... } } }
 ```
 
 Modes:
 
-| `mode` | Semantics |
+| Key | Semantics |
 |---|---|
-| `firstAllow` | Stop at the first child that returns `Permit`. Default for fast-path-first stacks. |
-| `allOf` | Every child must permit. First deny short-circuits. |
-| `anyOf` | At least one child permits. All deny → deny. |
-| `firstDeny` | Stop at the first child that returns `Deny`. Useful for "veto chains". |
+| `anyOf` | At least one child permits wins. All deny → deny. |
+| `allOf` | Every child must permit. First deny short-circuits (no further children evaluated). |
+
+There is no third "firstDeny"/veto mode — only these two.
 
 Children can themselves be `composite`, so arbitrary trees compose.
 
@@ -46,8 +50,7 @@ config:
       - name: gate
         type: composite
         config:
-          mode: firstAllow
-          children:
+          anyOf:
             - name: admins
               type: rbac
               config: { rolesFrom: claim:roles, allow: [admin] }
@@ -57,24 +60,24 @@ config:
                 expression: |
                   request.method == "GET" &&
                   request.path.startsWith("/tenants/" + identity.claims.tenant)
-            - name: rebac
-              type: openfga
-              config: { apiUrl: ..., storeId: ..., check: { ... } }
 ```
 
 ## Worked example
 
-`firstAllow` chain `[rbac(admins), cel(tenant-scoped), openfga(rebac)]`:
+`anyOf` chain `[rbac(admins), cel(tenant-scoped)]`:
 
-- Request from an admin → `rbac` permits → done. No CEL eval, no FGA call.
+- Request from an admin → `rbac` permits → done. No CEL eval.
 - Request from a viewer to their own tenant → `rbac` denies → `cel`
-  permits → done. No FGA call.
-- Cross-tenant viewer → `rbac` and `cel` deny → `openfga.Check` runs.
+  permits → done.
+- Cross-tenant viewer → both deny → overall deny.
 
 ## Composition
 
-- Always order children cheap → expensive in `firstAllow` to maximize cache hits.
-- For "veto" patterns (revocation, deny lists) put a [`cel`](cel.md) deny check first under `firstDeny`, then your normal `firstAllow` tree as the fallback.
+- Order children cheap → expensive under `anyOf` so a fast permit
+  short-circuits the rest.
+- Under `allOf`, put the child most likely to deny first so an
+  expensive downstream check (e.g. [`openfga`](openfga.md),
+  [`spicedb`](spicedb.md)) is skipped on the common deny path.
 
 ## References
 

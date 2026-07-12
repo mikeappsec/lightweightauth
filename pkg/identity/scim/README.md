@@ -39,6 +39,7 @@ identifiers:
 | `scheme` | string | `"Bearer"` | Authentication scheme prefix (e.g. `Bearer`) |
 | `subjectClaim` | string | `"userName"` | JSON field in the SCIM body to extract as subject |
 | `groupsClaim` | string | `"groups"` | JSON field in the SCIM body to extract as groups claim |
+| `subjectPrefix` | string | `"scim:"` | Prepended to the extracted subject (SCIM-VULN-02) — set to `""` to opt out (not recommended) |
 
 ## Features
 
@@ -56,7 +57,10 @@ identifiers:
 2. Computes SHA-256 hash of the presented token.
 3. Constant-time compares the hash against the stored hash — rejects on mismatch.
 4. If the request body is present and within the size limit, parses it as JSON.
-5. Extracts the subject from the configured `subjectClaim` field (default: `userName`).
+5. Extracts the subject from the configured `subjectClaim` field
+   (default: `userName`) and prepends `subjectPrefix` (default
+   `"scim:"`) — so by default the resulting subject is namespaced,
+   e.g. `scim:alice`, not the raw claim value.
 6. Extracts groups, SCIM schemas, display name, and active status into claims.
 7. Returns an `Identity` with the extracted subject and claims.
 

@@ -4,24 +4,26 @@ Go SDK for callers of lwauth-protected services.
 
 ## Usage
 
+The package name is `lwauthclient` (not `lwclient` — an unaliased
+import resolves to `lwauthclient.Dial`, etc.):
+
 ```go
 import (
-    "github.com/mikeappsec/lightweightauth/pkg/client/go"
+    lwauthclient "github.com/mikeappsec/lightweightauth/pkg/client/go"
 )
 
 // Connect to lwauth Door B
-client, err := lwclient.Dial("localhost:9001")
+client, err := lwauthclient.Dial("localhost:9001")
 if err != nil {
     log.Fatal(err)
 }
 defer client.Close()
 
-// Direct authorization call
-resp, err := client.Authorize(ctx, &lwclient.Request{
-    Method:  "GET",
-    Host:    "api.example.com",
-    Path:    "/users/123",
-    Headers: map[string]string{"Authorization": "Bearer token"},
+// Direct authorization call — Request has Resource, not Host/Path
+resp, err := client.Authorize(ctx, &lwauthclient.Request{
+    Method:   "GET",
+    Resource: "/users/123",
+    Headers:  map[string]string{"Authorization": "Bearer token"},
 })
 if resp.Allow { ... }
 

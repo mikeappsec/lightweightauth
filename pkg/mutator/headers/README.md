@@ -11,8 +11,15 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-mutator, err := module.BuildMutator("add-user-header", "header-add", map[string]any{
-    "upstream": map[string]string{
+// BuildMutator(typeName, instanceName, cfg) — type name first, not
+// instance name; using ("add-user-header", "header-add", ...) fails
+// with "unknown mutator type" since "add-user-header" isn't
+// registered. Also, upstream/response values must be map[string]any
+// (matching what a real YAML/JSON decode produces) — a
+// map[string]string here fails the factory's type assertion and
+// silently leaves the map empty.
+mutator, err := module.BuildMutator("header-add", "add-user-header", map[string]any{
+    "upstream": map[string]any{
         "X-User":  "${sub}",
         "X-Email": "${claim:email}",
     },
@@ -24,7 +31,7 @@ mutator, err := module.BuildMutator("add-user-header", "header-add", map[string]
 ### header-add
 
 ```yaml
-mutators:
+response:
   - name: add-user-header
     type: header-add
     config:
@@ -46,7 +53,7 @@ mutators:
 ### header-remove
 
 ```yaml
-mutators:
+response:
   - name: strip-internal
     type: header-remove
     config:
@@ -62,7 +69,7 @@ mutators:
 ### header-passthrough
 
 ```yaml
-mutators:
+response:
   - name: pass-trace
     type: header-passthrough
     config:

@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("introspect", "oauth2-introspection", map[string]any{
+identifier, err := module.BuildIdentifier("oauth2-introspection", "introspect", map[string]any{
     "url":          "https://idp.example.com/oauth2/introspect",
     "clientId":     "lwauth",
     "clientSecret": "secret",
@@ -52,7 +52,10 @@ identifiers:
 - Circuit breaker via `upstream.Guard` for IdP resilience
 - Response body capped at 1 MiB (prevents memory attacks)
 - Cache key uses `sha256(token)` — raw tokens never stored
-- Client-secret rotation via `keyrotation.KeySet[string]`
+- `pkg/identity/introspection/rotatable.go` implements client-secret
+  rotation via `keyrotation.KeySet[string]`, but it's **not wired
+  in** — `factory()` always uses `cfg.ClientSecret` as a plain string;
+  `rotatableIdentifier` is never constructed anywhere
 - Negative cache prevents DoS amplification to the IdP (K-AUTHN-2)
 
 ## How It Works

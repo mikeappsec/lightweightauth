@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-authorizer, err := module.BuildAuthorizer("my-rbac", "rbac", map[string]any{
+authorizer, err := module.BuildAuthorizer("rbac", "my-rbac", map[string]any{
     "rolesFrom": "claim:roles",
     "allow":     []string{"admin", "editor"},
 })
@@ -49,7 +49,7 @@ authorizers:
 1. Extracts the subject's roles from `Identity.Claims` using the `claim:<key>` syntax.
 2. Checks each role against the allow-set (stored as a hash map).
 3. If any role matches, returns `Allow: true`.
-4. Otherwise returns 403 with reason: `"subject '<sub>' has no allowed role"`.
+4. Otherwise returns 403 with reason: `rbac: subject "<sub>" has no allowed role` (double-quoted via `%q`, prefixed with `rbac: `).
 
 ## Thread Safety
 

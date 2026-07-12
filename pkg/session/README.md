@@ -9,26 +9,27 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/session"
 )
 
+secure := true // Secure/HTTPOnly are *bool, not bool — nil means "use default"
 store, err := session.NewCookieStore(session.CookieStoreConfig{
     Name:   "_lwauth_session",
     Secret: []byte("at-least-16-bytes-secret-key!!"),
-    Secure: true,
+    Secure: &secure,
 })
 if err != nil {
     log.Fatal(err)
 }
 
-// Save a session
+// Save a session — Save takes the *http.Request too
 sess := &session.Session{
     Subject: "user@example.com",
     Email:   "user@example.com",
     Expiry:  time.Now().Add(8 * time.Hour),
 }
-store.Save(w, sess)
+store.Save(w, r, sess)
 
 // Load a session
 sess, err := store.Load(r)
-if sess.Valid() { ... }
+if sess.Valid(time.Now()) { ... } // Valid takes the current time
 ```
 
 ## Configuration
@@ -40,9 +41,9 @@ if sess.Valid() { ... }
 | `Name` | string | `"_lwauth_session"` | Cookie name |
 | `Secret` | []byte | *required* (≥16 bytes) | AES-256 key material |
 | `Path` | string | `"/"` | Cookie scope |
-| `Secure` | bool | `true` | HTTPS-only |
+| `Secure` | *bool | `true` when nil | HTTPS-only — pointer, so nil means "use default", explicit false is distinguishable |
 | `SameSite` | http.SameSite | `Lax` | SameSite attribute |
-| `HTTPOnly` | bool | `true` | No JavaScript access |
+| `HTTPOnly` | *bool | `true` when nil | No JavaScript access — pointer, same nil-vs-false distinction |
 | `MaxAge` | duration | `8h` | Browser cookie lifetime |
 | `CookieMaxBytes` | int | `3500` | Max encrypted cookie size |
 
@@ -65,7 +66,7 @@ if sess.Valid() { ... }
 ## How It Works
 
 - **CookieStore**: serializes session to JSON, encrypts with AES-256-GCM (random 12-byte nonce), base64url-encodes `nonce || ciphertext || tag`, sets as cookie value.
-- **MemoryStore**: generates a 256-bit random session ID, stores session in a `sync.Map`, sets the session ID as a cookie. Janitor periodically removes expired entries.
+- **MemoryStore**: generates a 256-bit random session ID, stores session in a `map[string]*Session` guarded by `sync.Mutex` (not `sync.Map`), sets the session ID as a cookie. Janitor periodically removes expired entries.
 
 ## Thread Safety
 

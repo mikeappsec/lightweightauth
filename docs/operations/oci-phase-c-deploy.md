@@ -783,12 +783,22 @@ curl -s -o /dev/null -w "%{http_code}" -X POST \
   -d '{"method":"GET","path":"/","host":"example.com","headers":{"x-api-key":["bad"]}}'
 # Expected: 401
 
-# 3. Verify ArgoCD auto-sync after CP image bump (GitOps test):
-#    Edit lightweightauth-infra/argocd/values/oci-free/lwauth-controlplane.yaml
-#    Bump image.tag to current tag (no-op change)
-#    git commit && git push
+# 3. Verify the control-plane image promotion pipeline end-to-end:
+#    Image tag bumps to argocd/values/oci-free/lwauth-controlplane.yaml are
+#    no longer manual. The argocd-image-updater controller (installed via
+#    lightweightauth-infra-oci/argocd/apps/argocd-image-updater.yaml) polls
+#    ghcr.io/mikeappsec/lwauth-controlplane on an interval, and its
+#    ImageUpdater CR (argocd/image-updater/lwauth-controlplane.yaml) writes
+#    a commit bumping image.tag whenever a new sha-<shortsha> tag appears
+#    (built by the app repo's build.yaml on every push to main). ArgoCD's
+#    existing selfHeal then rolls it out -- no manual edit or git push step.
+#    To verify a real cycle: merge a no-op commit to the app repo's main,
+#    then watch:
+#    kubectl -n argocd get imageupdater lwauth-controlplane -o wide
+#    kubectl -n argocd logs -l app.kubernetes.io/name=argocd-image-updater -f
 #    argocd app wait lwauth-controlplane --sync --timeout 300
 #    kubectl rollout status deployment -n lwauth-system --timeout=120s
+#    curl -fsS https://lwauth.lightweightauth.cc/version   # confirm .commit
 ```
 
 ---

@@ -25,7 +25,7 @@ identifiers:
     config:
       issuerUrl:    https://idp.example.com
       clientId:     webapp
-      clientSecret: ${OIDC_SECRET}
+      clientSecret: ${OIDC_SECRET}    # see warning below
       redirectUrl:  https://app.example.com/oauth2/callback
       scopes: ["openid", "email", "profile", "offline_access"]
 
@@ -36,16 +36,29 @@ identifiers:
       cookie:
         name:   lwauth_session
         domain: app.example.com
-        secret: ${SESSION_SECRET}    # 32 bytes, base64 or hex
+        secret: ${SESSION_SECRET}    # 32 bytes, base64 or hex — see warning below
         secure: true
         sameSite: lax
-        ttl:    8h
-        refreshLeeway: 60s           # opportunistic RT refresh window
+        maxAge: 8h                  # NOT "ttl" — that key is silently ignored
+
+      # refreshLeeway is a top-level oauth2 key, not nested under cookie:
+      refreshLeeway: 60s            # opportunistic RT refresh window
 
       # Optional RP-Initiated Logout (OIDC RP-Initiated Logout 1.0).
-      endSessionUrl:        https://idp.example.com/oauth2/logout
-      postLogoutRedirectUrl: https://app.example.com/
+      endSessionUrl:  https://idp.example.com/oauth2/logout
+      postLogoutPath: /             # NOT "postLogoutRedirectUrl" — that key
+                                     # fails config validation (unknown key)
 ```
+
+!!! warning "`clientSecret`/`cookie.secret` are read literally — no `${VAR}` substitution"
+    lwauth does not expand `${OIDC_SECRET}`/`${SESSION_SECRET}`-style
+    placeholders anywhere in `AuthConfig`. Two ways to actually inject
+    them: `secretRef: "vault://kv/lwauth/oauth2#secret"` (resolved at
+    compile time — any string field in a module's `config:` is
+    checked recursively, `internal/config/loader.go`'s
+    `resolveMapSecrets`), or template the `AuthConfig` YAML itself at
+    the deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    secret is already inlined before lwauth ever parses it.
 
 Mounts under the lwauth HTTP server:
 
@@ -53,7 +66,7 @@ Mounts under the lwauth HTTP server:
 |---|---|
 | `/oauth2/start` | Begin auth-code flow (PKCE, state set as cookie). |
 | `/oauth2/callback` | Exchange code for tokens, mint session cookie. |
-| `/oauth2/userinfo` | Returns `{sub, email, accessTokenExpiry}`; opportunistically refreshes. |
+| `/oauth2/userinfo` | Returns `{subject, email, claims, expiry}` (field is `subject`, not `sub`; `accessTokenExpiry` isn't a top-level field — it's inside `claims` if present). |
 | `/oauth2/refresh` | Explicit refresh-token rotation (RFC 6749 §6). |
 | `/oauth2/logout` | Clears session + RP-initiated logout if `endSessionUrl` set. |
 | `/oauth2/device/start` | Device Authorization Grant request (M6.5). |
@@ -76,7 +89,7 @@ config:
         config: { issuerUrl: https://idp.example.com, ... }
     authorizers:
       - { name: any, type: rbac, config: { allow: ["*"] } }
-extraEnv:
+env:
   - name: SESSION_SECRET
     valueFrom: { secretKeyRef: { name: lwauth-secrets, key: session } }
   - name: OIDC_SECRET
@@ -97,8 +110,10 @@ extraEnv:
   fall through to OAuth2 cookie.
 - Pair with [`composite`](composite.md) `anyOf: [rbac, openfga]` for the
   authorize step.
-- Switch the cookie store for `MemoryStore` (M6) when you need
-  server-side opaque-SID sessions instead of cookie payloads.
+- There is no config knob to swap in a server-side store — the
+  `oauth2` identifier is hardcoded to `session.NewCookieStore`
+  (`pkg/identity/oauth2/config.go`). `pkg/session` has other store
+  implementations, but nothing in `oauth2` selects between them.
 
 ## References
 

@@ -44,6 +44,40 @@ Per-request checks (RFC 9449 §4.3):
 7. If inner identity surfaces `cnf.jkt`, it must equal RFC 7638 SHA-256 thumbprint of the proof's JWK.
 8. If a bearer header is present, proof's `ath` must equal `base64url(sha256(token))`.
 
+## Proof key pinning (optional)
+
+Beyond the `cnf.jkt` cross-check above (which trusts whatever thumbprint
+the inner identifier's token asserts), `pinnedKeys` lets you pin proof
+keys to an explicit, operator-controlled allowlist independent of what
+the bearer token claims — useful when you don't fully trust the IdP to
+enforce key binding, or want a hard key-rotation boundary:
+
+```yaml
+identifiers:
+  - name: dpop-bearer
+    type: dpop
+    config:
+      # ... required/inner/etc. as above ...
+      pinnedKeys:
+        - kid: "2026-q3"
+          thumbprint: "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"  # RFC 7638 SHA-256
+          notBefore: "2026-07-01T00:00:00Z"   # optional, RFC 3339
+          notAfter:  "2026-10-01T00:00:00Z"   # optional, RFC 3339
+          gracePeriod: 24h                    # optional, tolerance past notAfter
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `kid` | string | *required* | Key identifier for this pinned entry. |
+| `thumbprint` | string | *required* | RFC 7638 SHA-256 JWK thumbprint the proof's embedded `jwk` must match. |
+| `notBefore` | RFC 3339 timestamp | — | Key not valid before this time. |
+| `notAfter` | RFC 3339 timestamp | — | Key not valid after this time. |
+| `gracePeriod` | duration | — | Extends acceptance past `notAfter` for in-flight rotation windows. |
+
+When `pinnedKeys` is set (non-empty), every proof's key is checked
+against this set in addition to the standard RFC 9449 checks above — a
+proof signed by a key not in the set is rejected even if otherwise valid.
+
 ## Helm wiring
 
 ```yaml

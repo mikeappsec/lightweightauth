@@ -40,7 +40,7 @@ identifiers:
     config: { jwksUrl: https://idp.example.com/.well-known/jwks.json, audiences: [my-api] }
 authorizers:
   - { name: gate, type: rbac, config: { rolesFrom: "claim:roles", allow: [admin] } }
-mutators:
+response:
   - { name: stamp, type: header-add, config: { headers: { "X-User": "${identity.subject}" } } }
 ```
 

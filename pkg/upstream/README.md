@@ -22,42 +22,61 @@ guard := upstream.NewGuard(upstream.GuardConfig{
     MaxRetries: 2,
 })
 
-result, err := guard.Do(ctx, func(ctx context.Context) (any, error) {
-    return http.Get("https://idp.example.com/introspect")
+var resp *http.Response
+err := guard.Do(ctx, func(ctx context.Context) error {
+    var err error
+    resp, err = http.Get("https://idp.example.com/introspect")
+    return err
 })
 ```
 
+`Do(ctx context.Context, fn func(context.Context) error) error` takes
+a function returning only `error` and itself returns only `error` —
+there's no `(any, error)` variant; capture results via closure as
+shown above.
+
 ## Configuration
+
+The YAML shape is **nested**, not flat — `breaker:` and `retries:`
+sub-blocks, with the retry budget nested *inside* `retries:`
+(`pkg/upstream/config.go`'s `FromMap`). A flat `resilience:
+{failureThreshold: ..., retryBudgetCapacity: ...}` shape (as an
+earlier version of this README showed) is silently ignored — `FromMap`
+finds no `breaker`/`retries` sub-maps at the top level and produces an
+all-defaults `GuardConfig`, discarding every value you set:
 
 ```yaml
 # In any module's config block:
 resilience:
-  failureThreshold: 5
-  coolDown: "30s"
-  halfOpenSuccesses: 1
-  retryBudgetCapacity: 10
-  retryBudgetRefillPerSec: 1
-  maxRetries: 2
-  backoffBase: "100ms"
-  backoffMax: "5s"
+  breaker:
+    failureThreshold: 5
+    coolDown: "30s"
+    halfOpenSuccesses: 1
+  retries:
+    max: 2
+    backoffBase: "100ms"
+    backoffMax: "5s"
+    budgetCapacity: 10
+    budgetRefillPerSec: 1
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `failureThreshold` | int | `5` | Consecutive failures before opening |
-| `coolDown` | duration | `30s` | Time in open state before half-open probe |
-| `halfOpenSuccesses` | int | `1` | Successes to close from half-open |
-| `retryBudgetCapacity` | int | `10` | Retry token bucket size |
-| `retryBudgetRefillPerSec` | float | `1` | Tokens added per second |
-| `maxRetries` | int | `0` | Max retry attempts (0 = no retries) |
-| `backoffBase` | duration | `100ms` | Initial backoff |
-| `backoffMax` | duration | `5s` | Maximum backoff |
+| Block | Field | Default | Description |
+|-------|-------|---------|-------------|
+| `breaker` | `failureThreshold` | `5` | Consecutive failures before opening |
+| `breaker` | `coolDown` | `30s` | Time in open state before half-open probe |
+| `breaker` | `halfOpenSuccesses` | `1` | Successes to close from half-open |
+| `retries` | `max` | `0` | Max retry attempts (0 = no retries) |
+| `retries` | `backoffBase` | `0` | Initial backoff (0 = no backoff) |
+| `retries` | `backoffMax` | `0` | Maximum backoff |
+| `retries` | `budgetCapacity` | `0` | Retry token bucket size (0 = unlimited, bounded only by `max`) |
+| `retries` | `budgetRefillPerSec` | `0` | Tokens added per second |
 
 ## Features
 
 - Hystrix-style circuit breaker: Closed → Open → Half-Open → Closed
 - Token-bucket retry budget prevents retry storms
-- Bounded exponential backoff with jitter
+- Bounded exponential backoff — **purely deterministic, no jitter**
+  (`Guard.backoff()`: `BackoffBase * 2^(N-1)`, capped at `BackoffMax`)
 - First attempt is always free (budget only gates retries)
 - `ErrCircuitOpen` and `ErrRetryBudgetExceeded` sentinel errors
 - Configurable `Retryable` predicate (default excludes context errors)

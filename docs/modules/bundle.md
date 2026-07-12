@@ -58,21 +58,34 @@ policies:
 
 ## CLI usage
 
+Every subcommand takes flags, not positional arguments — `go`'s
+`flag` package stops parsing at the first non-flag token, so a
+positional directory/reference like the pre-flag-syntax examples
+below would silently prevent any later flags (`--registry`, `--out`,
+etc.) from being read at all:
+
 ```bash
 # Pack a bundle directory into a .tar.gz
-lwauthctl bundle pack ./my-bundle/
+lwauthctl bundle pack --dir ./my-bundle/ --out my-bundle.tar.gz
 
 # Push to OCI registry
-lwauthctl bundle push ./my-bundle/ \
+lwauthctl bundle push --dir ./my-bundle/ \
   --registry ghcr.io/myorg/lwauth-bundles/payments:v1.2.0
 
-# Pull from registry
-lwauthctl bundle pull ghcr.io/myorg/lwauth-bundles/payments:v1.2.0 \
-  --output /etc/lwauth/bundles/
+# Pull from registry (--registry and --tag are separate)
+lwauthctl bundle pull \
+  --registry ghcr.io/myorg/lwauth-bundles/payments --tag v1.2.0 \
+  --out /etc/lwauth/bundles/
 
-# Inspect metadata without pulling
-lwauthctl bundle inspect ghcr.io/myorg/lwauth-bundles/payments:v1.2.0
+# Inspect a LOCAL bundle directory's metadata — this does not talk to
+# a registry at all; there's no way to inspect a remote ref without
+# pulling it first.
+lwauthctl bundle inspect --dir ./my-bundle/
 ```
+
+`--username`/`--password` (or `$LWAUTH_REGISTRY_USERNAME`/
+`$LWAUTH_REGISTRY_PASSWORD`) are available on `push`/`pull` for
+authenticated registries.
 
 ## Security constraints
 
@@ -93,17 +106,16 @@ lwauthctl bundle inspect ghcr.io/myorg/lwauth-bundles/payments:v1.2.0
 | Layers | Single layer (gzipped tar) |
 | Registry protocol | ORAS v2 / OCI Distribution Spec 1.1 |
 
-## Helm wiring (pull at startup)
+## Helm wiring — not currently supported
 
-```yaml
-# values.yaml
-config:
-  bundleRef: ghcr.io/myorg/lwauth-bundles/payments:v1.2.0
-  bundlePullSecret: lwauth-registry-creds
-```
-
-The init container pulls the bundle and mounts it at `/etc/lwauth/bundles/`;
-the main container loads policies from that directory.
+There's no `bundleRef`/`bundlePullSecret` values, init container, or
+any other bundle-pulling mechanism anywhere in
+`deploy/helm/lightweightauth/` or
+`deploy/helm/lightweightauth-controlplane/` — this whole feature
+doesn't exist in the chart today. Pulling a bundle is a manual
+`lwauthctl bundle pull` step (e.g. in an init job or a CI pipeline
+step that then feeds the result into a ConfigMap/Secret), not
+something the chart does for you.
 
 ## GitOps workflow example
 
@@ -120,8 +132,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          lwauthctl bundle pack ./policies/
-          lwauthctl bundle push ./policies/ \
+          lwauthctl bundle push --dir ./policies/ \
             --registry ghcr.io/${{ github.repository }}/policy:${{ github.sha }}
 ```
 

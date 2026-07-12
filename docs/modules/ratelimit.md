@@ -51,7 +51,10 @@ rateLimit:
 - The deny short-circuits **before** any identifier work — no JWKS
   fetch, no introspection, no OPA evaluation. Cost of a rate-limited
   request is one map lookup + one CAS.
-- Counted in `lwauth_decisions_total{outcome="deny", authorizer="ratelimit"}`.
+- Counted in the dedicated `lwauth_ratelimit_denied_total{tenant}`
+  counter (`pkg/observability/metrics/metrics.go`), not
+  `lwauth_decisions_total` — rate limiting runs before any authorizer,
+  so there is no `authorizer="ratelimit"` label value anywhere.
 
 ## Helm wiring
 
@@ -104,8 +107,8 @@ rateLimit:
   distributed:
     type: valkey
     addr: valkey-master.cache.svc:6379
-    username: ${VALKEY_USERNAME}     # optional, Valkey ACL user
-    password: ${VALKEY_PASSWORD}     # optional
+    username: ${VALKEY_USERNAME}     # optional, Valkey ACL user — see warning below
+    password: ${VALKEY_PASSWORD}     # optional — see warning below
     keyPrefix: lwauth-rl/           # optional, default empty
     tls: false
     window: 1s                      # rolling window length (default 1s)
@@ -122,6 +125,18 @@ rateLimit:
 | `window`     | Sliding-window length. Default 1s.                                                     |
 | `timeout`    | Per-call deadline; on expiry the limiter falls back to the local bucket.               |
 | `failOpen`   | If true, allow on backend error instead of falling back to the local bucket.           |
+
+!!! warning "`distributed.password` is read literally — no `${VAR}` substitution, and no `secretRef:` support either"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`. Unlike identifier/authorizer/response
+    module configs (and `cache:`/`revocation:`/`caches:`), the
+    top-level `rateLimit:` block is **not** walked by
+    `internal/config/loader.go`'s secret-resolution pass — a
+    `secretRef: vault://...` value here is used as a literal string,
+    not resolved. The only real option is to template the
+    `AuthConfig` YAML itself at the deployment-pipeline layer (Helm,
+    Kustomize, CI) so the real password is already inlined before
+    lwauth ever parses it.
 
 **Cluster cap = `perTenant.burst` requests per `window`** (or
 `perTenant.rps × window` when `burst` is zero). So
@@ -169,15 +184,13 @@ valkey` block accepts. Use a dedicated Valkey user with `+EVAL +ZADD
 +ZCARD +ZREMRANGEBYSCORE +PEXPIRE -@all` ACL when running on a shared
 Valkey deployment.
 
-## Sample dry-run
+## `lwauthctl explain` does not cover rate limiting
 
-```bash
-$ lwauthctl explain --config tenant-a.yaml \
-    --request '{"method":"GET","path":"/api/things","tenantId":"acme"}'
-ratelimit  ✓  acme   tokens=199.7  bucket=400
-identify   ✓  bearer subject=alice
-authorize  ✓  rbac
-```
+`lwauthctl explain` (`cmd/lwauthctl/main.go`) dry-runs only the
+identify/authorize/response stages — it has no rate-limit stage at
+all, so there is no way to preview a rate-limit decision through it.
+See [ratelimit-tenant-isolation.md](../cookbook/ratelimit-tenant-isolation.md)
+for a real dry-run/validation approach for this module.
 
 ## References
 

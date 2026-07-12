@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-identifier, err := module.BuildIdentifier("my-oidc", "oauth2", map[string]any{
+identifier, err := module.BuildIdentifier("oauth2", "my-oidc", map[string]any{
     "clientId":    "my-app",
     "clientSecret": "secret",
     "authUrl":     "https://idp.example.com/authorize",
@@ -79,7 +79,10 @@ identifiers:
 - Encrypted stateless session cookies (AES-256-GCM)
 - Open-redirect prevention via `allowedRedirectHosts`
 - RFC 8628 Device Authorization Grant support
-- Client-secret rotation via `keyrotation.KeySet`
+- `pkg/identity/oauth2/rotatable.go` implements client-secret rotation
+  via `keyrotation.KeySet`, but it's **not wired in** — `factory()`
+  always builds a plain `identifier` via `newIdentifier`;
+  `rotatableIdentifier` is never constructed anywhere
 - RP-Initiated Logout (OpenID Connect RP-Initiated Logout 1.0)
 - Proactive token refresh endpoint
 

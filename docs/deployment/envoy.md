@@ -81,15 +81,19 @@ typed_per_filter_config:
 ## 3. SEC-PROXY-1 parity
 
 [SEC-PROXY-1](../security/v1.0-review.md#10-outstanding-follow-ups-post-v10)
-was a Mode B (`lightweightauth-proxy`) bug that had **three** sub-bugs;
-two of them don't exist in Mode A, but **one is a configuration trap
-that bites Envoy operators by default**.
+was a bug in the now-removed `lightweightauth-proxy` component (the
+directory no longer exists in this repo — see
+[docs/security/v1.0-review.md §10](../security/v1.0-review.md#10-outstanding-follow-ups-post-v10),
+"no longer applicable... has been deprecated and removed") that had
+**three** sub-bugs. Two don't apply to an Envoy-fronted deployment at
+all; the third is a configuration trap Envoy operators can still hit
+today if they get the ext_authz wiring wrong:
 
-| Sub-bug | Mode B (proxy) | Mode A (Envoy) |
+| Sub-bug | The old proxy's bug | Envoy (this repo's supported ext_authz path) |
 |---|---|---|
-| Query string dropped before auth | Code bug, fixed | Not affected — Envoy populates `attributes.request.http.path` with the full request URI, which lwauth reads. |
-| Engine never sees the request body | Code bug, fixed (bounded buffer + replay) | **Configuration trap** — Envoy doesn't send the body unless you opt in via `with_request_body`, **and** the opt-in has two non-obvious flags that must be set correctly. See below. |
-| Verbose deny reasons leak to clients | Code bug, fixed (`publicReason` redaction) | Not affected — Envoy renders the response body, not the engine. The verbose reason flows to the proxy log via the `x-lwauth-reason` response header which operators are expected to strip at the edge (see [§4.4](#44-strip-internal-headers-at-the-edge)). |
+| Query string dropped before auth | Code bug, fixed before removal | Not applicable — Envoy populates `attributes.request.http.path` with the full request URI, which lwauth reads. |
+| Engine never sees the request body | Code bug, fixed before removal (bounded buffer + replay) | **Configuration trap** — Envoy doesn't send the body unless you opt in via `with_request_body`, **and** the opt-in has two non-obvious flags that must be set correctly. See below. |
+| Verbose deny reasons leak to clients | Code bug, fixed before removal (`publicReason` redaction) | Not applicable — Envoy renders the response body, not the engine. The verbose reason flows to the proxy log via the `X-Lwauth-Reason` response header which operators are expected to strip at the edge (see [§4.4](#44-strip-internal-headers-at-the-edge)). |
 
 ### 3.1 `allow_partial_message: false` is mandatory
 
@@ -132,8 +136,7 @@ Envoy's `use_remote_address`, `xff_num_trusted_hops`, and
 `skip_xff_append` settings determine what `X-Forwarded-For` value
 reaches lwauth. If a malicious client can prepend XFFs that survive
 into lwauth's view of `peerAddr`, **any policy that keys off source
-IP is spoofable**. The Mode B equivalent is the `--trust-forward-headers`
-flag, which defaults to off.
+IP is spoofable**.
 
 ```yaml
 http_connection_manager:
@@ -169,18 +172,17 @@ If your identifier chain uses the `mtls` module, you need both:
 
 ### 4.4 Strip internal headers at the edge
 
-lwauth surfaces the verbose deny reason on the `x-lwauth-reason`
-response header so operators can correlate denies to logs. **Strip it
-at the public edge** — it's the same vocabulary the proxy now redacts:
+lwauth surfaces the verbose deny reason on the `X-Lwauth-Reason`
+response header (`internal/server/grpc.go`) so operators can
+correlate denies to logs. **Strip it at the public edge**:
 
 ```yaml
 response_headers_to_remove:
-  - x-lwauth-reason
-  - x-lwauth-decision-id   # if you don't want correlation IDs leaking
+  - X-Lwauth-Reason
 ```
 
 If you run a public-facing Envoy fronted by a private one (the typical
-"two-tier" setup), strip these on the **outer** Envoy and keep them on
+"two-tier" setup), strip this on the **outer** Envoy and keep it on
 the inner one for log joins.
 
 ## 5. Production checklist
@@ -215,6 +217,5 @@ explicitly verify:
 - Sample boot config: [deploy/envoy/sample.yaml](https://github.com/mikeappsec/lightweightauth/blob/main/deploy/envoy/sample.yaml)
 - Topology + Helm wiring: [docs/DEPLOYMENT.md](../DEPLOYMENT.md)
 - SEC-PROXY-1 write-up: [docs/security/v1.0-review.md](../security/v1.0-review.md)
-- Mode B (proxy) equivalent flags: [lightweightauth-proxy/cmd/lwauth-proxy/main.go](https://github.com/mikeappsec/lightweightauth/blob/main/lightweightauth-proxy/cmd/lwauth-proxy/main.go) — `--max-auth-body`, `--trust-forward-headers`.
 - mTLS module + anchor requirement: [docs/modules/mtls.md](../modules/mtls.md)
 - Envoy ext_authz reference: <https://www.envoyproxy.io/docs/envoy/v1.37.3/configuration/http/http_filters/ext_authz_filter>

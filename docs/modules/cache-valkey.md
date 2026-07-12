@@ -4,7 +4,7 @@ Valkey-/Redis-protocol-compatible shared cache. Used cluster-wide for
 introspection results, DPoP `jti` replay, decision cache (M5), and the
 M14 revocation lists (when enabled).
 
-**Source:** [pkg/cache](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/cache) — registered as `valkey`.
+**Source:** [internal/cache/valkey](https://github.com/mikeappsec/lightweightauth/tree/main/internal/cache/valkey) — wired via `internal/config/loader.go`. (`pkg/cache/valkey.go` is a different, unrelated pool-cache subsystem — don't confuse the two.)
 
 ## When to use
 
@@ -21,13 +21,23 @@ cache:
   addr:    valkey-master.cache.svc.cluster.local:6379
   # username / password / TLS as needed:
   username: lwauth
-  password: ${VALKEY_PASSWORD}
+  password: ${VALKEY_PASSWORD}        # see warning below
   tls: true
 
   keyPrefix: lwauth/                  # namespacing per-cluster
   ttl: 30s                            # decision cache TTL
   negativeTtl: 5s                     # deny-decision cache TTL
 ```
+
+!!! warning "`password` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${VALKEY_PASSWORD}`-style placeholders
+    anywhere in `AuthConfig`. `cache.password` does support the real
+    mechanism: `secretRef: "vault://kv/lwauth/valkey#password"`
+    (`internal/config/loader.go` checks it specifically, alongside
+    `cache.sharedHmacKey`/`revocation.password`/`caches[].password`).
+    Or template the `AuthConfig` YAML itself at the
+    deployment-pipeline layer (Helm, Kustomize, CI) so the real
+    password is already inlined before lwauth ever parses it.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -36,10 +46,10 @@ cache:
 | `username` | string | `""` | Valkey ACL username |
 | `password` | string | `""` | Valkey ACL password |
 | `tls` | bool | `false` | Enable TLS (min 1.2) |
-| `keyPrefix` | string | `"lwauth/"` | Key namespace — lets multiple deployments share a Valkey |
+| `keyPrefix` | string | `""` (no prefix at all) | Key namespace — lets multiple deployments share a Valkey; there's no default prefix applied |
 | `ttl` | duration | `30s` | Positive (allow) decision cache TTL |
 | `negativeTtl` | duration | `5s` | Negative (deny) decision cache TTL |
-| `key` | []string | `["sub","method","path"]` | Fields hashed into the cache key |
+| `key` | []string | none — omitted `key` yields an effectively empty cache key, not a 3-field default | Fields hashed into the cache key; set explicitly |
 | `l1Size` | int | `10000` | L1 LRU size (only for `backend: tiered`) |
 
 Failure mode is **fail-closed for security-critical reads** (DPoP
@@ -59,7 +69,7 @@ config:
       keyPrefix: lwauth/prod/
       ttl: 30s
       negativeTtl: 5s
-extraEnv:
+env:
   - name: VALKEY_PASSWORD
     valueFrom: { secretKeyRef: { name: lwauth-secrets, key: valkey } }
 ```
@@ -99,5 +109,5 @@ IdP saw exactly one call.
 ## References
 
 - Valkey docs: <https://valkey.io>.
-- Source: [pkg/cache/valkey.go](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/cache/valkey.go).
+- Source: [internal/cache/valkey/valkey.go](https://github.com/mikeappsec/lightweightauth/blob/main/internal/cache/valkey/valkey.go).
 - DESIGN.md §5 (decision cache), §M14 (revocation).

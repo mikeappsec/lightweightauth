@@ -114,36 +114,42 @@ helm install lwauth ./deploy/helm/lightweightauth \
 | `rbac.create` | `true` | Install ClusterRole + binding on `lightweightauth.io/*`. |
 | `autoscaling.enabled` | `false` | HPA on CPU. |
 | `podDisruptionBudget.enabled` | `false` | PDB with `minAvailable: 1`. |
-| `networkPolicy.enabled` | `false` | Lock ingress to listed peers. |
+| `networkPolicy.enabled` | `true` | Lock ingress to listed peers — **default-on**: a fresh install with no `allowedFrom` selectors blocks ingress entirely (safe failure mode). |
 | `metrics.serviceMonitor` | `false` | Requires prometheus-operator CRDs. |
-| `cache.backend` | `memory` | Cache backend: `memory`, `valkey`, or `tiered`. |
-| `cache.addr` | `""` | Valkey address (required when backend is `valkey` or `tiered`). |
-| `rateLimit.perTenant.rps` | `0` (disabled) | Per-tenant token refill rate (tokens/sec). |
-| `rateLimit.perTenant.burst` | `0` | Per-tenant bucket capacity. |
-| `rateLimit.default.rps` | `0` (disabled) | Fallback rate when tenantID is empty. |
-| `revocation.backend` | `""` (disabled) | Revocation store: `memory` or `valkey`. |
-| `revocation.addr` | `""` | Valkey address for revocation (required when `valkey`). |
 | `gateway.enabled` | `false` | Embed Envoy as a sidecar (no external Envoy needed). |
 | `gateway.upstream.service` | `""` | Target upstream service name. |
 | `gateway.upstream.port` | `8000` | Target upstream port. |
 
-> All module-level features (cache, rate limiting, revocation,
-> federation, session store) are wired in the chart. See the full
-> `values.yaml` for the complete reference.
+There are no separate top-level Helm values for cache, rate limiting,
+or revocation (`cache.backend`, `rateLimit.perTenant.*`,
+`revocation.backend`, etc. don't exist in `values.yaml`) — those are
+`AuthConfig` fields (`cache:`, `rateLimit:`, `revocation:`) and belong
+inside `config.inline` alongside `identifiers`/`authorizers`/`response`,
+not as separate chart values. See
+[revocation-immediate-logout.md](cookbook/revocation-immediate-logout.md)
+and [ratelimit-tenant-isolation.md](cookbook/ratelimit-tenant-isolation.md)
+for worked examples of that inline shape.
 
 For the data-plane, install one of:
 
 - An Envoy chart of your choice, configured with `ext_authz` pointing at
   the `lwauth` Service (sample config under [deploy/envoy/](https://github.com/mikeappsec/lightweightauth/tree/main/deploy/envoy/)).
-- The `lightweightauth-proxy` chart (sibling repo) for Mode B.
+- `gateway.enabled: true` on this chart to embed Envoy as a sidecar
+  instead of running a separate Envoy deployment.
 
 ## CRDs
 
-Three CRDs in `lightweightauth.io/v1alpha1`:
+Four CRDs in `lightweightauth.io/v1alpha1` (`deploy/helm/lightweightauth/templates/crds.yaml`):
 
-- `AuthConfig` (namespaced) — main config: identifiers + authorizers + mutators.
+- `AuthConfig` (namespaced) — main config: identifiers + authorizers + response mutators.
 - `AuthPolicy` (namespaced) — binds an `AuthConfig` to hosts/paths.
 - `IdentityProvider` (cluster) — reusable IdP definitions.
+- `PolicyBinding` (namespaced) — admin-plane RBAC: which users/groups may
+  read/write `AuthConfig` in this namespace, enforced by the admission
+  webhook (`internal/webhook`), not the reconcile controller below.
+
+The control-plane chart (`deploy/helm/lightweightauth-controlplane`) adds
+two more, `LwauthInstance` and `ProxyRoute` — out of scope for this doc.
 
 A controller (controller-runtime) watches these and:
 

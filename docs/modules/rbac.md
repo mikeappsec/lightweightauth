@@ -1,8 +1,8 @@
 # `rbac` — Role-based access control
 
-Static, declarative role gate. Pulls the role list out of an `Identity`
-field (claim, source, or subject) and checks it against an allow-list.
-The cheapest authorizer in the kit.
+Static, declarative role gate. Pulls the role list out of an
+`Identity` claim and checks it against an allow-list. The cheapest
+authorizer in the kit.
 
 **Source:** [pkg/authz/rbac](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/rbac/rbac.go) — registered as `rbac`.
 
@@ -10,7 +10,7 @@ The cheapest authorizer in the kit.
 
 - Role list lives directly on the identity (JWT `roles` claim, API-key store).
 - Coarse "admin / editor / viewer" gating that doesn't need per-resource policy.
-- Fast path before expensive authorizers under [`composite`](composite.md) `firstAllow`.
+- Fast path before expensive authorizers under [`composite`](composite.md) `anyOf`.
 
 **Don't use** for relationship checks (use [`openfga`](openfga.md)) or
 expression logic (use [`cel`](cel.md)).
@@ -22,21 +22,24 @@ authorizers:
   - name: gate
     type: rbac
     config:
-      # Where to read the role list from. Supported prefixes:
-      #   claim:<key>   – Identity.Claims[key] (string or []string)
-      #   source        – Identity.Source (the identifier name)
-      #   subject       – Identity.Subject
+      # Only "claim:<key>" is supported — Identity.Claims[key], which
+      # may be a string, []string, or []any of strings. There is no
+      # "source" or "subject" prefix; any other value silently yields
+      # zero roles (extractRoles returns nil), which denies everything.
       rolesFrom: "claim:roles"
 
       allow:
         - admin
         - editor
-        # "*" matches any non-empty role
+        # No wildcard support — "*" only matches a role literally
+        # named "*", it doesn't match "any non-empty role".
 ```
 
 Decision logic: extract the role set → intersect with `allow` →
-`Permit{}` on hit, `Deny{Reason: "rbac: role not allowed"}` on miss.
-Empty role list against a non-`["*"]` allow-list → deny.
+`Permit{}` on hit. On miss:
+`Deny{Status: 403, Reason: fmt.Sprintf("rbac: subject %q has no allowed role", id.Subject)}`
+— e.g. `rbac: subject "alice" has no allowed role`. Empty role list
+always denies.
 
 ## Helm wiring
 
@@ -61,7 +64,7 @@ JWT carries `"roles": ["editor", "viewer"]`. Config has
 
 ## Composition
 
-- `composite` `firstAllow: [rbac, openfga]` — coarse role gate first;
+- `composite` `anyOf: [rbac, openfga]` — coarse role gate first;
   fall back to relationship check only when needed.
 - Stack with [`cel`](cel.md) for "admin OR (editor AND owns the resource)"
   patterns — `cel` reads `identity.claims.roles` directly.

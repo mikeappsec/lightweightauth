@@ -15,7 +15,7 @@ without re-parsing the bearer.
 ## Configuration
 
 ```yaml
-mutators:
+response:
   - name: stamp
     type: header-add
     config:
@@ -23,19 +23,26 @@ mutators:
       subjectHeader: X-User-Id
 
       upstream:
-        X-Tenant: "{{ .Claims.tenant }}"
-        X-Roles:  "{{ joinClaims .Claims.roles \", \" }}"
-        X-Source: "{{ .Source }}"
+        X-Tenant: "${claim:tenant}"
+        X-User:   "${sub}"
 
       response:
         X-Auth-By: lwauth
 ```
 
-Values are Go `text/template` expressions evaluated per request with
-`.Subject`, `.Source`, and `.Claims` (a `map[string]any`). The helper
-`joinClaims` is registered for the common list-of-strings case.
+Values support two placeholders, expanded per request: `${sub}`
+(`Identity.Subject`) and `${claim:<name>}` (looked up in
+`Identity.Claims`, stringified with `fmt.Sprint`). There is no
+template engine (`.Source` / `.Claims` / `{{ }}` / `joinClaims` don't
+exist) — an unknown `${...}` token is left in the header verbatim, so
+a typo'd claim name is easy to spot at runtime. A claim holding a list
+(e.g. `roles: [editor, admin]`) stringifies as Go's default slice
+format (`[editor admin]`), not a custom join — do the join upstream if
+you need `editor, admin` shaped output.
 
-Setting an empty value omits the header (handy for conditional templates).
+Setting `at least one of upstream / response / subjectHeader` is
+required; unmatched keys are left unset (no `X-Foo: ""` emitted for a
+header you didn't configure).
 
 ## Helm wiring
 
@@ -43,14 +50,13 @@ Setting an empty value omits the header (handy for conditional templates).
 # values.yaml
 config:
   inline: |
-    mutators:
+    response:
       - name: stamp
         type: header-add
         config:
           subjectHeader: X-User-Id
           upstream:
-            X-Tenant: "{{ .Claims.tenant }}"
-            X-Roles:  "{{ joinClaims .Claims.roles \", \" }}"
+            X-Tenant: "${claim:tenant}"
 ```
 
 In Mode A (Envoy ext_authz) the `upstream` map maps to the
@@ -58,14 +64,11 @@ In Mode A (Envoy ext_authz) the `upstream` map maps to the
 
 ## Worked example
 
-Identity `{subject: alice, claims: {tenant: acme, roles: [editor]}}` →
-upstream sees:
+Identity `{subject: alice, claims: {tenant: acme}}` → upstream sees:
 
 ```http
 X-User-Id: alice
 X-Tenant:  acme
-X-Roles:   editor
-X-Source:  bearer
 ```
 
 ## Composition

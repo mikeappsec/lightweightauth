@@ -107,28 +107,39 @@ identifiers:
       keys:
         # OLD KEY — keep accepting it for the duration of phase 2.
         abc:
-          secret: ${HMAC_KEY_ABC}
+          secret: "vault://kv/lwauth/hmac-keys#abc"
           subject: service-a
           roles: [machine]
         # NEW KEY — verifier will accept it as soon as this rolls out.
         # No client has switched to it yet.
         svc-2026-04:
-          secret: ${HMAC_KEY_SVC_2026_04}
+          secret: "vault://kv/lwauth/hmac-keys#svc-2026-04"
           subject: service-a
           roles: [machine]
 ```
 
+!!! warning "`secret` is read literally — no `${VAR}` substitution"
+    lwauth does not expand `${HMAC_KEY_ABC}`-style placeholders
+    anywhere in `AuthConfig`. `keys.<id>.secret` is nested inside a
+    module config, so it *is* covered by the recursive secret
+    resolver (`internal/config/loader.go`'s `resolveMapSecrets` walks
+    every nested map) — `secretRef: "vault://..."` as shown above
+    works. The alternative is templating the `AuthConfig` YAML itself
+    at the deployment-pipeline layer (Helm, Kustomize, CI) so the
+    real secret is already inlined before lwauth ever parses it.
+
 Validate offline before applying. `lwauthctl validate` compiles the
-config end-to-end with the daemon's own loader, so a typo or a
-missing env-var binding fails here, not after rollout:
+config end-to-end with the daemon's own loader, so a YAML typo or a
+`vault://` ref that fails to resolve is caught here, not after rollout:
 
 ```bash
 lwauthctl validate --config new-config.yaml
-# expect: "OK: <N> identifiers, <M> authorizers, <K> mutators"
+# expect: OK  hosts=[...] identifiers=1 authorizers=1 mutators=0 cache=false rateLimit=false
 
 lwauthctl diff --from config-baseline.yaml --to new-config.yaml
-# expect: a single addition under
-#         identifiers[name="services"].config.keys."svc-2026-04"
+# expect (diff is at the identifier level — "services" itself doesn't
+# change name, so this shows as a config change, not an addition):
+#   ~ identifiers/services config: {"keys":{"abc":{...}}} -> {"keys":{"abc":{...},"svc-2026-04":{...}}}
 ```
 
 The `diff` output is the audit trail for this phase — capture it and
@@ -175,26 +186,34 @@ the change depends on your signer SDK; the
 [`hmac` reference](../modules/hmac.md) shows the canonical-string
 format you need to keep stable.
 
-While phase 2 runs, watch the audit log to see which keys are
-actually being used. The `audit` subcommand filters lwauth's
-JSONL audit stream:
+While phase 2 runs, you need visibility into which `keyId` is
+actually being used by live traffic. This is a real gap today: the
+audit event schema (`pkg/observability/audit.Event`) records
+`subject` and `identity_source` (the identifier's *name*, e.g.
+`services`) but does not carry per-request `keyId` — even though the
+`hmac` identifier does put `keyId` on `Identity.Claims`, nothing
+downstream logs it. Two ways to work around that:
+
+- **Split into two named identifiers under `firstMatch`, one per
+  `keyId`, for the duration of the rotation.** Each has a `keys` map
+  with a single entry, so `identity_source` in the audit log
+  (`identity_source=old-key` vs `identity_source=new-key`) tells you
+  which one is in use — at the cost of editing the config an extra
+  time on either side of the rotation.
+- **Watch application-level metrics/logs on the signer side instead**
+  (e.g. which secret each caller was deployed with) if you control
+  every signer — often simpler than instrumenting lwauth for a
+  one-off rotation.
+
+Either way, `lwauthctl audit` (flags: `--file`, `--tenant`,
+`--decision`, `--subject`, `--follow`) is useful for confirming
+`decision=deny` volume drops to zero once cutover completes, even
+without per-`keyId` attribution:
 
 ```bash
-# Tail the audit log on the lwauth Pod, keep only hmac decisions,
-# and group by keyId. Run this for a representative window
-# (often 24h) before declaring phase 2 complete.
-kubectl -n lwauth-system exec deploy/lwauth -c lwauth -- \
-  cat /var/log/lwauth/audit.jsonl \
-  | lwauthctl audit --identifier services \
-  | jq -r '.identifier_attrs.keyId' | sort | uniq -c | sort -nr
-# expect during early phase 2:
-#    14823 abc
-#       42 svc-2026-04
-# expect at end of phase 2:
-#       11 abc
-#    14854 svc-2026-04
-# (a long tail on `abc` is normal; it is a signal that some signer
-#  has not redeployed yet, not that rotation is broken.)
+kubectl -n lwauth-system logs deploy/lwauth -c lwauth \
+  | lwauthctl audit --subject service-a --decision deny --follow
+# expect: zero lines once every signer has cut over
 ```
 
 When the count under `abc` reaches zero **and stays at zero for an
@@ -236,8 +255,7 @@ identifiers:
 lwauthctl validate --config decommissioned-config.yaml
 lwauthctl diff --from config-baseline.yaml --to decommissioned-config.yaml
 # expect, end-to-end against the original baseline:
-#   - removed:  identifiers[name="services"].config.keys."abc"
-#   - added:    identifiers[name="services"].config.keys."svc-2026-04"
+#   ~ identifiers/services config: {"keys":{"abc":{...}}} -> {"keys":{"svc-2026-04":{...}}}
 
 # Strip the old key from the Secret too.
 kubectl -n lwauth-system get secret lwauth-hmac-secrets \

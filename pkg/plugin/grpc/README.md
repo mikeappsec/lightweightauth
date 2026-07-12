@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-authorizer, err := module.BuildAuthorizer("external-policy", "grpc-plugin", map[string]any{
+authorizer, err := module.BuildAuthorizer("grpc-plugin", "external-policy", map[string]any{
     "address": "unix:///run/lwauth/plugins/policy.sock",
     "timeout": "1s",
 })
@@ -35,7 +35,7 @@ authorizers:
         mode: "verify"
         keys:
           - id: "key-1"
-            secret: "hex:0123456789abcdef..."
+            hmacSecret: "0123456789abcdef0123456789abcdef"
       lifecycle:
         command: "/usr/local/bin/my-plugin"
         args: ["--port", "50051"]
@@ -44,7 +44,9 @@ authorizers:
           timeout: "2s"
           failureThreshold: 3
         restart:
-          backoff: "1s"
+          initialBackoff: "1s"
+          maxBackoff: "30s"
+          jitter: "0.2"
           maxRestarts: 5
         startTimeout: "30s"
 ```
@@ -57,10 +59,18 @@ authorizers:
 | `tls.caFile` | string | — | CA for server verification |
 | `tls.certFile` | string | — | mTLS client cert |
 | `tls.keyFile` | string | — | mTLS client key |
-| `signing.mode` | string | `"disabled"` | `disabled`, `verify`, or `require` |
-| `signing.keys` | []key | — | HMAC-SHA256 keys (≥16 bytes, hex-encoded) |
+| `signing.mode` | string | `"disabled"`, but see note below | `disabled`, `verify`, or `require` |
+| `signing.keys[].hmacSecret` | string | — | HMAC-SHA256 key, bare hex string — **not** `secret`, and **no** `"hex:"` prefix (`hex.DecodeString` is called directly on the value) |
 | `lifecycle.command` | string | — | Plugin binary path (optional supervisor) |
+| `lifecycle.restart.initialBackoff` / `.maxBackoff` / `.jitter` / `.maxRestarts` | — | — | Restart backoff — there is no `backoff` field |
 | `lifecycle.startTimeout` | duration | `"30s"` | Max wait for first health probe |
+
+**`signing.mode` default nuance:** for any TCP `host:port` address
+(not a Unix socket) configured without `insecure: true` and with no
+`signing:` block at all, `client.go` silently bumps the effective
+default to `verify` instead of `disabled` — a security-hardening
+override for the higher-risk TCP case. Only Unix-socket addresses or
+explicit `insecure: true` TCP addresses actually default to `disabled`.
 
 ## Features
 

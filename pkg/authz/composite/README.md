@@ -11,7 +11,7 @@ import (
     "github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
-authorizer, err := module.BuildAuthorizer("multi", "composite", map[string]any{
+authorizer, err := module.BuildAuthorizer("composite", "multi", map[string]any{
     "anyOf": []any{
         map[string]any{"name": "rbac", "type": "rbac", "config": map[string]any{"allow": []string{"admin"}}},
         map[string]any{"name": "cel", "type": "cel", "config": map[string]any{"expression": `request.method == "GET"`}},
