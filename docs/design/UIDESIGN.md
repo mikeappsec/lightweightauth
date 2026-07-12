@@ -3,6 +3,19 @@
 > Management UI and multi-instance control plane.
 > Parent design: [DESIGN.md § G10](../DESIGN.md)
 
+> **Status: shipped.** This was written as a phased delivery plan and
+> reads that way throughout, but the feature is built and running in
+> production (see the status note at [DESIGN.md § G10](../DESIGN.md)).
+> Some file paths below reflect the original plan rather than where
+> things actually landed — e.g. the reconciler is
+> `internal/controlplane/instance_reconciler.go` and
+> `internal/controlplane/proxyroute_reconciler.go`, not
+> `internal/controller/lwauthinstance.go` (task 1.2); there's no
+> separate `internal/controlplane/health/checker.go` (task 1.5) or
+> `tests/e2e/` directory (task 1.14). Treat every path below as
+> "roughly where this landed, not necessarily exact" unless verified
+> against current source — this document wasn't re-audited path-by-path.
+
 ---
 
 ## Overview

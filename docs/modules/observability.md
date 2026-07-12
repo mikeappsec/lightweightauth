@@ -20,31 +20,38 @@ port to expose.
 | `lwauth_decisions_total`              | counter         | `outcome`, `authorizer`, `tenant`   |
 | `lwauth_decision_latency_seconds`     | histogram (16 buckets, 100µs…3.3s) | same                |
 | `lwauth_identifier_total`             | counter         | `identifier`, `outcome` (`match`/`no_match`/`error`) |
+| `lwauth_authorizer_total`             | counter         | `authorizer`, `outcome` (`allow`/`deny`/`error`) |
 | `lwauth_shadow_disagreement_total`    | counter         | `policy_version`, `tenant`          |
 | `lwauth_canary_agreement_total`       | counter         | `policy_version`, `tenant`, `agreement` |
-| `lwauth_revocation_checks_total`      | counter         | `result` (`hit`/`miss`)             |
-| `lwauth_revocation_duration_seconds`  | histogram       | `result`                            |
+| `lwauth_revocation_checks_total`      | counter         | `tenant`, `result` (`revoked`/`not_revoked`/`error`) |
 | `lwauth_ratelimit_denied_total`       | counter         | `tenant`                            |
 | `lwauth_cache_hits_total`             | CounterFunc     | `cache`                             |
 | `lwauth_cache_misses_total`           | CounterFunc     | `cache`                             |
 | `lwauth_cache_evictions_total`        | CounterFunc     | `cache`                             |
-| `lwauth_cache_stale_served_total`     | counter         | `cache`                             |
-| `lwauth_key_verify_total`             | counter         | `kid`, `result`                     |
-| `lwauth_key_state`                    | gauge           | `kid`, `state`                      |
-| `lwauth_config_reloads_total`         | counter         | `result` (`success`/`error`)        |
+| `lwauth_cache_layer_hits_total`       | CounterFunc     | `cache`, `layer` (`l1`/`l2`)        |
+| `lwauth_cache_layer_misses_total`     | CounterFunc     | `cache`, `layer` (`l1`/`l2`)        |
+| `lwauth_cache_stale_served_total`     | counter         | `tenant`, `decision`                |
+| `lwauth_cache_distsf_total`           | counter         | `outcome`                           |
+| `lwauth_fips_enabled`                 | gauge           | none (constant 0/1)                 |
+| `lwauth_build_info`                   | gauge           | `version`, `commit`, `go_version`, `fips` (constant 1) |
+
+There's no per-`kid` key-verification metric or key-state gauge today
+— `lwauth_key_verify_total`/`lwauth_key_state` don't exist. See
+[key-rotation.md](../operations/key-rotation.md#observability) for
+what's actually observable during key rotation (mostly: not much,
+per-`kid`).
 
 Cache stats use `prometheus.CounterFunc` — the registry pulls live
 `atomic.Uint64` values from `cache.Stats` at scrape time, so a
 hot-reload that builds a new `*cache.Decision` just changes what the
 registered closure dereferences.
 
-```yaml
-# Optional values — enabled by default. Override only to turn off.
-observability:
-  metrics:
-    enabled: true
-    namespace: lwauth      # default; emits lwauth_*
-```
+There's no `observability:`/`metrics:` block on `AuthConfig` — metrics
+are unconditional, mounted at `/metrics` on the same listener as Door
+A (`internal/server/http.go`). The only toggle is
+`server.Options.DisableMetrics` (a Go-level option for library
+embedders); the standalone `lwauth`/`lwauth-controlplane` binaries
+don't expose a flag to disable it.
 
 ```promql
 # Sample queries

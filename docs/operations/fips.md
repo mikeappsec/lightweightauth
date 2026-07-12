@@ -99,10 +99,15 @@ $ docker run --rm ghcr.io/acme/lwauth:v1.1.0-fips --print-build-info
 version=v1.1.0 commit=abc1234 go_version=go1.26.2 fips_enabled=true
 ```
 
-The Dockerfile's build stage runs the same probe and **fails the
-image build** if the produced binary doesn't self-report
-`fips_enabled=true` — so a toolchain regression that silently strips
-FIPS support never reaches the registry.
+`Dockerfile.fips` runs this probe in a dedicated `verify` stage
+(separate from the `build` stage, which is pinned to
+`--platform=$BUILDPLATFORM` for native cross-compilation and can't
+execute the target-arch binary itself) and **fails the image build**
+if the produced binary doesn't self-report `fips_enabled=true` — so a
+toolchain regression that silently strips FIPS support never reaches
+the registry. The runtime stage copies the final `lwauth` binary
+`--from=verify`, not `--from=build`, so the verify stage can't be a
+dead/skipped no-op.
 
 ## What "FIPS-validated" means in practice
 

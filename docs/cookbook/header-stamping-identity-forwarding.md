@@ -41,7 +41,7 @@ spec:
         rolesFrom: claim:roles
         allow: [user, admin]
 
-  mutators:
+  response:
     # Step 1: Strip the raw credential
     - name: strip-auth
       type: header-remove
@@ -56,7 +56,7 @@ spec:
 Add structured identity information for upstream consumption:
 
 ```yaml
-  mutators:
+  response:
     - name: strip-auth
       type: header-remove
       config:
@@ -168,7 +168,7 @@ spec:
         rolesFrom: claim:roles
         allow: [user, admin]
 
-  mutators:
+  response:
     - name: strip-auth
       type: header-remove
       config:
@@ -219,7 +219,7 @@ config:
         config:
           rolesFrom: claim:roles
           allow: [user, admin]
-    mutators:
+    response:
       - name: strip-auth
         type: header-remove
         config:
@@ -264,11 +264,14 @@ curl -v -H "Authorization: Bearer ${TOKEN}" https://gateway/api/whoami
 # Dry-run
 lwauthctl explain --config api-gateway.yaml \
     --request '{"method":"GET","path":"/api/whoami","headers":{"authorization":"Bearer '${TOKEN}'"}}'
-# identify   ✓  jwt      subject=alice
-# authorize  ✓  rbac
-# mutate     ✓  strip-auth        removed: [Authorization]
-# mutate     ✓  identity-headers  added: X-User-ID=alice
-# mutate     ✓  internal-jwt      issued: X-Internal-Auth (exp=60s)
+# identify:
+#   ✓ bearer (jwt) → subject="alice" claims=4
+# authorize: ✓ rbac (rbac) allow: ...
+# mutate:
+#   ✓ strip-auth (header-remove)
+#   ✓ identity-headers (header-add)
+#   ✓ internal-jwt (jwt-issue)
+# decision: allow identifier="bearer" authorizer="rbac" upstreamHeaders=4 responseHeaders=1
 ```
 
 ## Security notes

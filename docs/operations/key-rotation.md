@@ -9,13 +9,22 @@ window.
 
 | Type | Rotation Mechanism | Config Field |
 |------|-------------------|--------------|
-| **JWT (JWKS)** | Automatic kid-miss refresh from JWKS endpoint | `minRefreshInterval` on IdentityProvider |
-| **HMAC** | `secrets` array with `notBefore`/`notAfter` per kid | `secrets:` on hmac identifier |
-| **mTLS** | CA bundle file hot-reload via fsnotify | `caBundlePath` on mtls identifier |
+| **JWT (JWKS)** | Automatic kid-miss refresh from JWKS endpoint | `minRefreshInterval` on the `jwt` identifier |
+| **DPoP (pinned keys)** | `pinnedKeys` array with `notBefore`/`notAfter`/`gracePeriod` per kid | `pinnedKeys:` on the `dpop` identifier — see [dpop.md](../modules/dpop.md#proof-key-pinning-optional) |
+| **HMAC** | Manual multi-key overlap — add the new key, keep the old one, remove it later | `keys:` on the `hmac` identifier |
+| **mTLS** | CA bundle re-read on the identifier's next rebuild (AuthConfig reload) | `trustedCAFiles:`/`trustedCAs:` on the `mtls` identifier |
 
 ## HMAC Key Rotation
 
-### Legacy format (still supported)
+The `hmac` identifier's config only recognizes `keys:` (a flat map,
+no per-key expiry) — a `secrets:` field, or `notBefore`/`notAfter`/
+`gracePeriod` on an HMAC key entry, doesn't exist and fails config
+validation with `unknown config key(s): secrets`
+(`pkg/identity/hmac/hmac.go`'s `KeyEntry` struct only has `Secret`,
+`Subject`, `Roles` — no timing fields). There's no automatic
+time-bounded expiry for HMAC keys; rotation is the manual
+add-then-remove procedure in
+[rotate-hmac.md](../cookbook/rotate-hmac.md):
 
 ```yaml
 identifiers:
@@ -23,73 +32,85 @@ identifiers:
     type: hmac
     config:
       keys:
-        svc-a: { secret: "base64...", subject: "service-a" }
+        v2: { secret: "base64...", subject: "service-a", roles: [machine] }
+        v1: { secret: "base64...", subject: "service-a", roles: [machine] }
 ```
 
-### Rotatable format (D1)
+If you need `notBefore`/`notAfter`/`gracePeriod`-style automatic
+rotation, use the `dpop` identifier's `pinnedKeys` (below) or
+`jwt`'s JWKS-based rotation — HMAC doesn't have an equivalent today.
 
-```yaml
-identifiers:
-  - name: service-auth
-    type: hmac
-    config:
-      secrets:
-        - kid: "v2"
-          secret: "base64..."
-          subject: "service-a"
-          roles: [machine]
-          notBefore: "2026-05-01T00:00:00Z"
-        - kid: "v1"
-          secret: "base64..."
-          subject: "service-a"
-          roles: [machine]
-          notAfter: "2026-05-02T00:00:00Z"
-          gracePeriod: "10m"
-```
+## DPoP Pinned-Key Rotation
 
-**Key lifecycle:**
-
-1. **Pending** — `notBefore` is in the future; key is registered but not used for verification.
-2. **Active** — within the `notBefore`..`notAfter` window (or no bounds set).
-3. **Retiring** — past `notAfter` but within `gracePeriod` (default 5m); still valid for in-flight tokens.
-4. **Retired** — past `notAfter + gracePeriod`; removed from verification set.
+The `dpop` identifier's `pinnedKeys` list is the one credential type
+that actually has `notBefore`/`notAfter`/`gracePeriod` semantics
+(`pkg/identity/dpop/dpop.go`, backed by `pkg/keyrotation.KeySet`). See
+[dpop.md](../modules/dpop.md#proof-key-pinning-optional) for the
+config shape and the
+[DPoP key rotation runbook](dpop-key-rotation-runbook.md)
+for the operational procedure — including the current gap that there's
+no admin endpoint or metric to introspect key state; it must be
+derived from the config's timestamps or tested with a live proof.
 
 ## JWKS Force-Refresh on Kid Miss
 
-When a JWT arrives with a `kid` not in the cached JWKS, the module
-triggers a force-refresh (subject to `minRefreshInterval` throttling).
+When a JWT arrives with a `kid` not in the cached JWKS, the `jwt`
+identifier's underlying `jwx` JWK cache triggers a force-refresh
+(subject to `minRefreshInterval` throttling, default 15 minutes).
 This handles IdP-side key rotation without manual intervention.
+`pkg/identity/jwt/jwt.go` doesn't emit any metric or log line for
+this — it's opaque from lwauth's own observability surface; if you
+need to confirm a refresh happened, test with a token signed under
+the new `kid` and confirm it verifies.
 
-Metrics emitted:
-- `lwauth_key_refresh_total{module="jwt-idp", outcome="kid_miss_trigger"}`
-- `lwauth_key_refresh_total{module="jwt-idp", outcome="success"}`
-- `lwauth_key_refresh_total{module="jwt-idp", outcome="error"}`
+## mTLS CA Bundle Reload
 
-## mTLS CA Bundle Hot-Reload
-
-Configure the mTLS identifier with a `caBundlePath`. The file is
-watched via `fsnotify`; changes are picked up within seconds without a
-pod restart.
+Configure the mTLS identifier with `trustedCAFiles` (a list of PEM
+file paths) or `trustedCAs` (an inline PEM string), plus
+`trustForwardedClientCert: true`:
 
 ```yaml
 identifiers:
   - name: client-cert
     type: mtls
     config:
-      caBundlePath: /etc/lwauth/ca-bundle.pem
+      trustForwardedClientCert: true
+      trustedCAFiles:
+        - /etc/lwauth/ca-bundle.pem
 ```
+
+There's no dedicated `fsnotify` watch on the CA bundle file itself
+(`pkg/identity/mtls/mtls.go` has no watch logic) — the file is read
+fresh each time the `mtls` identifier is rebuilt, which happens on
+every full `AuthConfig` reload (`--watch-config-file`). If the CA
+bundle is mounted from a separate Secret/ConfigMap that changes
+without the `AuthConfig` YAML itself changing, lwauth will **not**
+pick up the new bundle automatically — touch the `AuthConfig`
+(even a no-op annotation bump) to force a rebuild after rotating the
+CA file.
 
 ## Observability
 
 ### Prometheus Metrics
 
-| Metric | Labels | Description |
-|--------|--------|-------------|
-| `lwauth_key_verify_total` | `module`, `kid`, `result` | Verification attempts (ok / expired_key / unknown_kid / invalid_sig) |
-| `lwauth_key_refresh_total` | `module`, `outcome` | Key material refresh events (success / error / kid_miss_trigger) |
-| `lwauth_key_state` | `module`, `state` | Gauge of keys in each lifecycle state |
+There's no per-`kid` metric for any of the identifiers above —
+`lwauth_key_verify_total`/`lwauth_key_refresh_total`/`lwauth_key_state`
+don't exist (the full metric set is in
+[`pkg/observability/metrics/metrics.go`](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/observability/metrics/metrics.go)).
+The closest real signal is the coarse, non-`kid`-specific
+`lwauth_identifier_total{identifier, outcome}` counter.
 
-### IdentityProvider Status Conditions
+### IdentityProvider Status Conditions — not currently wired in
+
+`internal/controller/rotation_conditions.go` defines exactly this
+shape (`RotationCondition[T]`/`HealthCondition[T]`, backed by
+`pkg/keyrotation.KeySet`, with the `KeyRotation`/`KeysHealthy`
+condition types and `RotationInProgress`/`RotationComplete`/
+`KeyExpired`/`AllKeysValid`/`KeyPending` reasons shown below), but
+nothing calls either function — no controller reconciler in this
+repo invokes them. They won't appear on a real `IdentityProvider`
+resource today; treat this as the intended future shape once wired
+in, not a currently observable status:
 
 ```yaml
 status:
@@ -102,14 +123,6 @@ status:
       status: "True"
       reason: AllKeysValid
       message: "2 key(s) healthy"
-```
-
-Use `kubectl wait` for rotation completion:
-
-```bash
-kubectl wait identityprovider/my-idp \
-  --for=condition=KeyRotation=False \
-  --timeout=300s
 ```
 
 ## Rotation Runbook

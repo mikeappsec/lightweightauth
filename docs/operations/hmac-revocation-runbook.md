@@ -179,42 +179,19 @@ Apply → old key immediately rejected (unknown keyId).
 
 ---
 
-## Method 3: Key Rotation with Lifecycle (keyrotation.KeySet)
+## Method 3: Key Rotation with Lifecycle — not currently wired in
 
-Best for: automated rotation with time-based transitions.
-
-### Config (secrets format)
-
-```yaml
-identifiers:
-  - name: hmac-auth
-    type: hmac
-    config:
-      clockSkew: "5m"
-      secrets:
-        - kid: "svc-a-v1"
-          secret: "b2xkLXNlY3JldA=="
-          subject: "service-a"
-          roles: [writer]
-          notAfter: "2026-06-01T00:00:00Z"
-          gracePeriod: "24h"
-        - kid: "svc-a-v2"
-          secret: "bmV3LXNlY3JldA=="
-          subject: "service-a"
-          roles: [writer]
-          notBefore: "2026-05-25T00:00:00Z"
-```
-
-### Lifecycle
-
-| Date     | svc-a-v1 | svc-a-v2 | Effect |
-|----------|----------|----------|--------|
-| May 20   | active   | pending  | Only v1 works |
-| May 25   | active   | active   | Both work |
-| Jun 1    | retiring | active   | Both work (grace) |
-| Jun 2    | retired  | active   | Only v2 works |
-
-No restarts or config changes needed after deployment.
+`pkg/identity/hmac/rotatable.go` implements exactly this
+(`rotatableIdentifier`/`buildRotatableIdentifier`, backed by
+`pkg/keyrotation.KeySet`, with `notBefore`/`notAfter`/`gracePeriod`
+per key), but `factory()` in `hmac.go` never calls it — a `secrets:`
+field isn't even in the module's known-keys set and fails config
+validation with `unknown config key(s): secrets`. There is no
+automatic time-bounded rotation for HMAC keys today; use the
+add-then-remove `keys:` overlap procedure in
+[rotate-hmac.md](../cookbook/rotate-hmac.md) instead (Method 2,
+above, is the same mechanism this runbook already documents
+correctly).
 
 ---
 
@@ -224,14 +201,17 @@ Best for: emergency revocation without waiting for config reload.
 
 > **Requires**: `revocation.enabled: true` and admin endpoints configured.
 
-### Revoke by Key ID
+### Revoke by Key ID — not directly possible
 
-```bash
-curl -X POST http://lwauth:8080/v1/admin/revoke \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jti": "kid:svc-a-v1", "reason": "compromised", "ttl": "720h"}'
-```
+The `hmac` identifier derives a `kid:<keyId>` revocation key
+internally (`RevocationKeys()` in `pkg/identity/hmac/hmac.go`), but
+`POST /v1/admin/revoke` has no field to submit a `kid:` value
+directly — only `jti`, `token_hash`, and `subject` are accepted, each
+prefixed with its own fixed kind (`jti:`/`hash:`/`sub:`).
+`{"jti": "kid:svc-a-v1"}` writes `jti:kid:svc-a-v1`, which never
+matches the `kid:svc-a-v1` key the `hmac` identifier actually looks
+up — it silently does nothing. Use subject-based revocation instead
+(below), which revokes every key for that subject.
 
 ### Revoke by Subject (All Keys for a Service)
 

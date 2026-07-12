@@ -16,7 +16,7 @@ a uniform signed assertion.
 ## Configuration
 
 ```yaml
-mutators:
+response:
   - name: internal-jwt
     type: jwt-issue
     config:
@@ -65,7 +65,7 @@ Sibling services verify with `pkg/identity/jwt` pointed at lwauth's
 # values.yaml
 config:
   inline: |
-    mutators:
+    response:
       - name: strip
         type: header-remove
         config: { upstream: [Authorization, Cookie, X-Api-Key] }

@@ -90,24 +90,25 @@ kubectl apply -f configmap-lwauth.yaml
 
 ## Step 3 — Verify Key States
 
-Check that lwauth recognizes both keys:
+There's no admin endpoint or metric for this today — `/admin/key-states`
+doesn't exist (no such handler in `internal/admin`), and there's no
+`lwauth_key_state` or `lwauth_key_verify_total` metric (the full
+metric set is documented in
+[`pkg/observability/metrics`](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/observability/metrics/metrics.go)
+and neither exists there). Key state is derived purely from the
+config's `notBefore`/`notAfter`/`gracePeriod` fields against wall
+clock — verify by computing it yourself, or by testing a live proof
+against each `kid`:
 
 ```bash
-# Via admin API (if enabled):
-curl -s http://localhost:9090/admin/key-states | jq .
+# Confirm the config applied (fsnotify picked up the ConfigMap change).
+kubectl -n lwauth-system logs deploy/lwauth -c lwauth | \
+  grep -E 'config: compiled|engine: hot-swap' | tail -1
 
-# Expected output:
-# [
-#   { "kid": "dpop-v2", "state": "active" },
-#   { "kid": "dpop-v1", "state": "active" }    ← still in overlap window
-# ]
-```
-
-Or via Prometheus metrics:
-
-```promql
-lwauth_key_state{module="dpop-bearer"}
-# dpop-bearer{state="active"} 2
+# Confirm a proof signed with the new key is accepted end-to-end.
+curl -H "Authorization: DPoP ${ACCESS_TOKEN}" -H "DPoP: ${NEW_PROOF}" \
+  https://gateway/api/whoami
+# expect: 200
 ```
 
 ## Step 4 — Roll Clients to New Key
@@ -130,23 +131,23 @@ req.Header.Set("DPoP", proof)
 
 ## Step 5 — Monitor the Transition
 
-Watch for verification failures during rollout:
+Same gap as Step 3 — there's no per-`kid` metric or log line to watch
+(`dpop.go` doesn't log anything on proof verification, and
+`lwauth_identifier_total{identifier, outcome}` only tracks the
+`dpop-bearer` identifier's overall allow/deny, not which pinned key a
+given proof used). Practically:
 
 ```promql
-# Alert if old key is still being used after expected migration window:
-rate(lwauth_key_verify_total{module="dpop-bearer", kid="dpop-v1"}[5m]) > 0
-
-# Check for unexpected rejections:
-rate(lwauth_key_verify_total{module="dpop-bearer", result="expired_key"}[5m])
+# Coarse signal only — total deny rate on this identifier. A drop to
+# near-zero denies is consistent with (but doesn't prove) migration
+# being complete.
+rate(lwauth_identifier_total{identifier="dpop-bearer", outcome="deny"}[5m])
 ```
 
-Wait until no traffic uses the old key:
-
-```bash
-# Check if any requests still use dpop-v1
-kubectl logs -l app=lwauth --since=1h | grep 'kid=dpop-v1' | wc -l
-# Should be 0 before proceeding to step 6.
-```
+Track client-side rollout progress in your own deployment tooling
+(e.g. which services have shipped the new key) rather than trying to
+observe it from the lwauth side. Wait out the full `notAfter` +
+`gracePeriod` window before assuming the old key is safe to remove.
 
 ## Step 6 — Retire Old Key
 
@@ -177,11 +178,13 @@ Remove the retired key entry from config entirely:
               # sole active key
 ```
 
-Verify:
+Verify by confirming the config reload log line again (Step 3) and
+testing a proof against the removed key — it should now be rejected:
 
 ```bash
-curl -s http://localhost:9090/admin/key-states | jq .
-# [ { "kid": "dpop-v2", "state": "active" } ]
+curl -H "Authorization: DPoP ${ACCESS_TOKEN}" -H "DPoP: ${OLD_PROOF}" \
+  https://gateway/api/whoami
+# expect: 401
 ```
 
 ## Emergency: Immediate Revocation

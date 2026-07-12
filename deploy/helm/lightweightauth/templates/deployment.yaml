@@ -51,6 +51,13 @@ spec:
             - --watch-config-file
             {{- end }}
             {{- end }}
+          {{- with .Values.env }}
+          env:
+            {{- range $key, $value := . }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.httpPort }}
@@ -70,6 +77,9 @@ spec:
             - name: config
               mountPath: /etc/lwauth
             {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -77,6 +87,9 @@ spec:
         - name: config
           configMap:
             name: {{ include "lwauth.fullname" . }}-config
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
 ---
 {{- if not .Values.controller.enabled }}

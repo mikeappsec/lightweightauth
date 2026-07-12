@@ -1,7 +1,9 @@
 # Contributing to LightweightAuth
 
-Thanks for your interest! LightweightAuth is in **early M0** state — the public surface is
-still moving. Please open an issue to discuss substantive changes before sending a PR.
+Thanks for your interest! LightweightAuth is at **v1.2 (Tier F)** — see
+[docs/MILESTONES.md](docs/MILESTONES.md) for what's shipped. The public
+surface still moves between minor versions. Please open an issue to
+discuss substantive changes before sending a PR.
 
 ## Dev loop
 

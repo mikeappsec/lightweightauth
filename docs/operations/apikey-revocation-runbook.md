@@ -50,18 +50,30 @@ Best for: planned rotation, key expiry, permanent removal.
 NEW_KEY=$(openssl rand -base64 32)
 echo "New key: $NEW_KEY"
 
-# Hash it for storage (use lwauthctl or the Go API)
-NEW_HASH=$(lwauthctl hash-apikey "$NEW_KEY")
+# Hash it for storage — there's no CLI subcommand for this yet;
+# apikey.HashKey is a plain Go function, call it with `go run`.
+cat > /tmp/hash-apikey.go <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/mikeappsec/lightweightauth/pkg/identity/apikey"
+)
+
+func main() {
+	hash, err := apikey.HashKey(os.Args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println(hash)
+}
+EOF
+
+NEW_HASH=$(go run /tmp/hash-apikey.go "$NEW_KEY")
 echo "Hash: $NEW_HASH"
-```
-
-Or with Go:
-
-```go
-import "github.com/mikeappsec/lightweightauth/pkg/identity/apikey"
-
-hash, _ := apikey.HashKey(newKey)
-// hash = "$argon2id$v=19$m=65536,t=2,p=1$<salt>$<digest>"
 ```
 
 ### Step 2: Update the API Key File
@@ -162,45 +174,21 @@ Apply ConfigMap → lwauth reloads → old key immediately rejected.
 
 ---
 
-## Method 3: Key Rotation with Lifecycle (keyrotation.KeySet)
+## Method 3: Key Rotation with Lifecycle — not currently wired in
 
-Best for: automated rotation with time-based transitions using the
-`secrets` config format (rotatable API keys).
+`pkg/identity/apikey/rotatable.go` implements exactly this
+(`rotatableStore`/`buildRotatableStore`, backed by
+`pkg/keyrotation.KeySet`, with `notBefore`/`notAfter`/`gracePeriod`
+per key), but nothing calls it — `factory()`/`buildStore()` in
+`apikey.go` only ever construct a `static` or `hashed` store; there's
+no code path that reaches `buildRotatableStore`. A `secrets:` field
+on the `apikey` config isn't recognized either (`buildStore` requires
+exactly one of `static`/`hashed`) — using it fails config validation
+with `one of static / hashed is required`, not a working rotation.
 
-### Config
-
-```yaml
-identifiers:
-  - name: svc-apikey
-    type: apikey
-    config:
-      headerName: "X-Api-Key"
-      secrets:
-        - kid: "key-v1"
-          secret: "base64-encoded-key-v1"
-          subject: "svc-a"
-          roles: ["api", "reader"]
-          notAfter: "2026-06-01T00:00:00Z"
-          gracePeriod: "24h"
-        - kid: "key-v2"
-          secret: "base64-encoded-key-v2"
-          subject: "svc-a"
-          roles: ["api", "reader"]
-          notBefore: "2026-05-25T00:00:00Z"
-```
-
-### Lifecycle
-
-| Date     | key-v1 State | key-v2 State | Effect |
-|----------|-------------|-------------|--------|
-| May 20   | active      | pending     | Only v1 works |
-| May 25   | active      | active      | Both work |
-| Jun 1    | retiring    | active      | Both work (grace period) |
-| Jun 2    | retired     | active      | Only v2 works |
-
-No config changes or restarts needed after initial deployment — the
-`rotatableStore` checks `time.Now()` against `notAfter + gracePeriod`
-on every request.
+For time-bounded key rotation today, use
+[`hashed.entries` with two overlapping entries](../cookbook/apikey-static-backend.md#4-zero-downtime-key-rotation)
+(manual add-then-remove, no automatic expiry) instead.
 
 ---
 
@@ -222,15 +210,19 @@ revocation:
   onStoreError: deny   # fail-closed
 ```
 
-### Revoke by Key ID
+### Revoke by Key ID — not directly possible
 
-```bash
-# The key ID is derived from the API key's identity (shown in audit logs)
-curl -X POST http://lwauth:8080/v1/admin/revoke \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jti": "kid:old-key-2025", "reason": "compromised", "ttl": "720h"}'
-```
+The `apikey` identifier derives a `kid:<keyId>` revocation key
+internally (`pkg/identity/apikey/apikey.go`'s `RevocationKeys()`),
+but `POST /v1/admin/revoke` has no body field to submit a `kid:`
+value directly — only `jti`, `token_hash`, and `subject` are
+accepted, and each is prefixed with its own fixed key kind
+(`jti:`/`hash:`/`sub:`) by the handler. Submitting
+`{"jti": "kid:old-key-2025"}` writes a `jti:kid:old-key-2025`
+revocation entry, which will never match the `kid:old-key-2025` key
+the `apikey` identifier actually looks up — it's a no-op that looks
+like it worked. Use subject-based revocation instead (below), which
+revokes every key for that subject rather than just one.
 
 ### Revoke by Subject (All Keys for a Service)
 

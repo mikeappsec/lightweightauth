@@ -147,7 +147,10 @@ kubectl rollout restart deployment/lwauth -n lwauth
 **Impact**: Audit events dropped (AsyncSink back-pressure). Auth decisions continue unaffected.
 
 **Steps**:
-1. Check metrics: `lwauth_audit_events_dropped_total`
+1. There's no Prometheus metric for this — the async sink only logs
+   a warning on drop (`pkg/observability/audit/async.go`):
+   `kubectl logs ... | grep 'audit: async buffer full, dropping events'`
+   (fields: `dropped`, `bufSize`).
 2. Restore Loki/Kafka connectivity
 3. Dropped events are unrecoverable — review auth decision metrics for the gap window
 4. If compliance-critical: replay traffic using `lwauthctl replay` against restored audit sink

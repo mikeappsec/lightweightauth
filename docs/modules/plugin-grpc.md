@@ -76,7 +76,7 @@ authorizers:
       address: lwauth-policy-plugin:9000
       timeout: 50ms
 
-mutators:
+response:
   - name: enrich-headers
     type: grpc-plugin
     config:

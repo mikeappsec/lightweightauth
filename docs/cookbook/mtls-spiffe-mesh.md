@@ -128,20 +128,33 @@ authorizers:
 
 ## 4. Certificate revocation
 
-Revoke a compromised workload certificate by its serial number:
+The `mtls` identifier does derive a per-certificate revocation key
+(`serial:<hex_serial>`, from the cert's `serialNumber` claim), but
+`POST /v1/admin/revoke` has no body field to submit a serial directly
+today — it only accepts `jti`, `token_hash`, and `subject` (plus
+`tenant`/`reason`/`ttl`). Revoke by SPIFFE ID instead, which maps to
+`Identity.Subject` and revokes every certificate issued for that
+workload identity — blunter than a single-serial revocation, but it's
+what the endpoint actually supports:
 
 ```bash
-# Get the serial from the certificate
-SERIAL=$(openssl x509 -in compromised-cert.pem -serial -noout | cut -d= -f2)
-
-# Revoke it
 curl -X POST https://lwauth:9000/v1/admin/revoke \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -d "{\"key\": \"serial:${SERIAL}\", \"reason\": \"compromised-workload\", \"ttl\": \"24h\"}"
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject": "spiffe://cluster.local/ns/payments/sa/billing",
+    "reason": "compromised-workload",
+    "ttl": "24h"
+  }'
+# Response (202 Accepted): {"accepted":true,"keys":["sub:spiffe://cluster.local/ns/payments/sa/billing"],"admin":"..."}
 ```
 
 The revocation check runs before identification, so the certificate
-is rejected before any policy evaluation.
+is rejected before any policy evaluation. If you need to revoke one
+compromised certificate without also blocking every other workload
+instance sharing the same SPIFFE ID, that's not currently possible
+through this endpoint — see
+[revocation-immediate-logout.md](revocation-immediate-logout.md#3-revoking-credentials-via-the-admin-api).
 
 ## 5. Hot-reloading the CA bundle
 

@@ -370,7 +370,7 @@ spec:
         expression: >
           identity.claims.scope.split(" ").exists(s,
             s in ["mcp:read", "mcp:write", "mcp:admin"])
-  mutators:
+  response:
     - name: issue-token
       type: jwt-issue
       config:
@@ -440,7 +440,7 @@ spec:
       config:
         rolesFrom: "claim:role"
         allow: ["*"]
-  mutators:
+  response:
     - name: inject
       type: header-add
       config:

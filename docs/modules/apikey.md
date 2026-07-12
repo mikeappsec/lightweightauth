@@ -45,11 +45,31 @@ identifiers:
 
 Each accepted key produces `Identity{Subject: <subject>, Claims: {keyId, roles, ...}}`. The `keyId` lands in `Identity.Claims["keyId"]` for audit attribution.
 
-Generate a digest:
+Generate a digest — there's no CLI subcommand for this yet;
+`apikey.HashKey` is a plain Go function, call it with `go run`:
 
 ```bash
-lwauthctl apikey hash --subject alice --roles admin
-# → ak_alice_2026: $argon2id$v=19$m=65536,t=3,p=2$...
+cat > /tmp/hash-apikey.go <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/mikeappsec/lightweightauth/pkg/identity/apikey"
+)
+
+func main() {
+	hash, err := apikey.HashKey(os.Args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println(hash)
+}
+EOF
+go run /tmp/hash-apikey.go "${API_KEY}"
+# → $argon2id$v=19$m=65536,t=2,p=1$...
 ```
 
 ## Helm wiring
@@ -91,7 +111,7 @@ X-Api-Key: ak_alice_2026
 
 - `firstMatch` with [`jwt`](jwt.md) so service callers can present Bearer
   *or* X-Api-Key.
-- `Mutators: [jwt-issue]` to mint an internal JWT downstream — keeps the
+- `response: [jwt-issue]` to mint an internal JWT downstream — keeps the
   raw API key out of east-west traffic.
 
 ## References
