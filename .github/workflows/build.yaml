@@ -119,8 +119,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
+          # cache-to is gated to trusted (non-PR) events only: an untrusted
+          # PR build must never be able to write into a cache scope a later
+          # privileged push/sign job reads from (CWE-829, cache poisoning
+          # across the trust boundary). Reading (cache-from) stays
+          # unconditional -- an untrusted job only consuming a trusted
+          # cache is safe, since nothing flows back from it.
           cache-from: type=gha,scope=build
-          cache-to:   type=gha,mode=max,scope=build
+          cache-to:   ${{ github.event_name != 'pull_request' && 'type=gha,mode=max,scope=build' || '' }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
@@ -184,8 +190,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
+          # This job already never runs on pull_request (job-level `if:`
+          # above), so cache-to is not currently reachable from an untrusted
+          # context -- gated anyway so the cache config doesn't become a
+          # silent landmine if that job-level guard is ever loosened later.
           cache-from: type=gha,scope=build-fips
-          cache-to:   type=gha,mode=max,scope=build-fips
+          cache-to:   ${{ github.event_name != 'pull_request' && 'type=gha,mode=max,scope=build-fips' || '' }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
@@ -215,11 +225,17 @@ jobs:
           load: true
           tags: lwauth-controlplane:ci
           # Shares a cache scope with build-controlplane below (same
-          # Dockerfile) -- whichever job runs first primes the cache for
-          # the other, since this job runs on every push/PR while
-          # build-controlplane only runs on push to main/tags.
+          # Dockerfile). This job runs on every push AND every PR (including
+          # forks) with no job-level trust gate, so cache-to is conditional:
+          # a trusted push-to-main run may safely prime the shared cache
+          # (same trust level as build-controlplane itself), but an
+          # untrusted PR run must never be able to write into a scope the
+          # trusted build-controlplane job (push+cosign-sign) later reads
+          # from (CWE-829, cache poisoning across the trust boundary).
+          # cache-from stays unconditional -- reading a trusted cache into
+          # an untrusted PR build is safe, nothing flows back from it.
           cache-from: type=gha,scope=build-controlplane
-          cache-to:   type=gha,mode=max,scope=build-controlplane
+          cache-to:   ${{ github.event_name != 'pull_request' && 'type=gha,mode=max,scope=build-controlplane' || '' }}
           build-args: |
             VERSION=ci
             COMMIT=${{ github.sha }}
@@ -304,8 +320,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
+          # cache-to gated to trusted (non-PR) events only -- see the
+          # cache-from-only comment on smoke-controlplane above for why:
+          # this job (push+cosign-sign) must never consume a cache entry an
+          # untrusted PR build could have written into this same scope.
           cache-from: type=gha,scope=build-controlplane
-          cache-to:   type=gha,mode=max,scope=build-controlplane
+          cache-to:   ${{ github.event_name != 'pull_request' && 'type=gha,mode=max,scope=build-controlplane' || '' }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
