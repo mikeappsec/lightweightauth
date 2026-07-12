@@ -22,15 +22,31 @@ run in a one-shot sandbox with no persistent state between invocations.
 
 ## Configuration
 
+`.wasm` files must live under a plugin base directory — default
+`/etc/lwauth/plugins/wasm`, overridable only via the
+`LWAUTH_WASM_PLUGIN_DIR` environment variable (`pkg/plugin/wasm/register.go`;
+there's no per-module config field for this). A `path` outside that
+directory fails at load time.
+
+`maxFuel` and `maxMemoryMB` are parsed into config but **not
+enforced** — this is a real gap, not just a doc issue. There's no
+`WithFuel`/experimental-fuel wiring anywhere in `pkg/plugin/wasm`, so
+fuel metering doesn't run at all; a guest can spin the CPU for the
+full `timeout` regardless of `maxFuel`. Memory is capped at a single
+**engine-wide, hardcoded** 16 MiB (`WithMemoryLimitPages(256)`) for
+every module — `maxMemoryMB` is read but never applied to configure a
+per-instance limit, so setting it to `64` still leaves the guest
+capped at 16 MiB. Only `timeout` is actually honored.
+
 ```yaml
 identifiers:
   - name: custom-header-check
     type: wasm
     config:
-      path: /opt/plugins/header-check.wasm
-      maxMemoryMB: 32        # guest memory cap (MiB)
-      maxFuel: 2000000       # CPU fuel budget per invocation
-      timeout: 200ms         # wall-clock deadline
+      path: /etc/lwauth/plugins/wasm/header-check.wasm
+      maxMemoryMB: 32        # parsed but NOT enforced — see above
+      maxFuel: 2000000       # parsed but NOT enforced — see above
+      timeout: 200ms         # the only real budget — wall-clock deadline
 ```
 
 ```yaml
@@ -38,7 +54,7 @@ authorizers:
   - name: policy-wasm
     type: wasm
     config:
-      path: /opt/plugins/policy.wasm
+      path: /etc/lwauth/plugins/wasm/policy.wasm
       maxMemoryMB: 64
       maxFuel: 5000000
       timeout: 500ms
@@ -46,10 +62,10 @@ authorizers:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `path` | string | *required* | Filesystem path to `.wasm` module |
-| `maxMemoryMB` | uint32 | `16` | Maximum guest memory (MiB) |
-| `maxFuel` | uint64 | `1000000` | CPU fuel budget (instructions) |
-| `timeout` | duration | `100ms` | Wall-clock deadline per invocation |
+| `path` | string | *required* | Filesystem path to `.wasm` module — must resolve under the plugin base directory |
+| `maxMemoryMB` | uint32 | `16` | Accepted but not enforced (see above) |
+| `maxFuel` | uint64 | `1000000` | Accepted but not enforced (see above) |
+| `timeout` | duration | `100ms` | Wall-clock deadline per invocation — the one real limit |
 
 ## Guest ABI
 
@@ -110,6 +126,10 @@ JSON response. Maximum response size is **1 MiB**.
 
 ## Helm wiring
 
+Mount plugins under the default base directory, or set
+`LWAUTH_WASM_PLUGIN_DIR` to match wherever you mount them — a `path`
+outside the base directory fails at load time:
+
 ```yaml
 # values.yaml
 config:
@@ -118,7 +138,7 @@ config:
       - name: policy-wasm
         type: wasm
         config:
-          path: /opt/plugins/policy.wasm
+          path: /etc/lwauth/plugins/wasm/policy.wasm
           maxMemoryMB: 64
           maxFuel: 5000000
           timeout: 500ms
@@ -127,7 +147,7 @@ extraVolumes:
     configMap: { name: lwauth-wasm-plugins }
 extraVolumeMounts:
   - name: wasm-plugins
-    mountPath: /opt/plugins
+    mountPath: /etc/lwauth/plugins/wasm
     readOnly: true
 ```
 
@@ -139,8 +159,9 @@ extraVolumeMounts:
 - **Isolation.** Each invocation is a fresh instance. No memory leaks
   or state carries between requests. The instance is closed after each
   call.
-- **Fuel.** Each WASM instruction consumes one unit of fuel. When fuel
-  runs out, the guest traps and the host returns an error (deny).
+- **Fuel.** Not currently implemented — `maxFuel` is parsed but never
+  passed to the wazero runtime, so there's no instruction-level
+  budget. `timeout` is the only thing that bounds a runaway guest.
 - **WASI.** WASI preview1 is available for stdlib needs (clocks,
   random). Filesystem and network access are **not** provided.
 - **Pure Go.** wazero requires no CGO, no system libraries — builds

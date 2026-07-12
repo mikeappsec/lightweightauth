@@ -1,7 +1,7 @@
 # `opa` — Open Policy Agent / Rego authorizer
 
-Evaluates a Rego policy via embedded OPA. Bundles can be loaded from
-disk or pulled from an OPA bundle service.
+Evaluates a Rego policy via embedded OPA. Policy is inline Rego source
+only — there is no bundle-loading support (disk or HTTP) today.
 
 **Source:** [pkg/authz/opa](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/opa/opa.go) — registered as `opa`.
 
@@ -16,13 +16,16 @@ graphs ([`openfga`](openfga.md)).
 
 ## Configuration
 
+Config accepts exactly two keys, `rego` and `query`
+(`pkg/authz/opa/opa.go`'s `knownKeys`) — any other key, including a
+bundle-related one, fails with `unknown config key(s)`.
+
 ```yaml
 authorizers:
   - name: policy
     type: opa
     config:
-      # Inline policy (great for tests / small rules):
-      module: |
+      rego: |
         package lwauth
 
         default allow := false
@@ -33,21 +36,24 @@ authorizers:
 
         allow if {
           input.request.method == "GET"
-          startswith(input.request.path, sprintf("/tenants/%s/", [input.identity.claims.tenant]))
+          startswith(input.request.path, sprintf("/tenants/%s/", [input.request.tenantId]))
         }
-      query: data.lwauth.allow
-
-      # Or load a bundle:
-      # bundleDir: /etc/lwauth/bundles
-      # bundleUrl: https://opa-bundles.example.com/lwauth.tar.gz
-      # bundlePollInterval: 30s
+      query: data.lwauth.allow   # default if omitted
 ```
 
-`input` shape: `{identity: {subject, source, claims}, request: {method, path, host, headers, query}}`.
+`rego` is required (compiled once at config-load time via
+`rego.PrepareForEval` — a syntax error fails config compilation, not
+a request). `query` defaults to `data.lwauth.allow` if omitted.
+
+`input` shape (`buildInput` in `opa.go`):
+`{identity: {subject, source, claims}, request: {method, host, path, tenantId, headers}, context: {...}}`.
+`request.headers` is flattened to first-value-only
+(`map[string]string`, not `map[string][]string]`) — repeated headers
+lose everything past the first value. There is no `request.query`
+field (`module.Request` has no query-string field at all in this
+codebase).
 
 ## Helm wiring
-
-Bundle from a ConfigMap:
 
 ```yaml
 # values.yaml
@@ -57,30 +63,17 @@ config:
       - name: policy
         type: opa
         config:
-          bundleDir: /etc/lwauth/opa
-          query: data.lwauth.allow
-extraVolumes:
-  - name: opa-bundle
-    configMap: { name: lwauth-opa-bundle }
-extraVolumeMounts:
-  - name: opa-bundle
-    mountPath: /etc/lwauth/opa
-    readOnly: true
-```
-
-For a bundle service:
-
-```yaml
-config:
-  inline: |
-    authorizers:
-      - name: policy
-        type: opa
-        config:
-          bundleUrl: https://opa-bundles.svc.cluster.local/lwauth.tar.gz
-          bundlePollInterval: 30s
+          rego: |
+            package lwauth
+            default allow := false
+            allow if input.identity.claims.roles[_] == "admin"
           query: data.lwauth.allow
 ```
+
+If you want to manage the Rego source as its own file rather than
+inline in `values.yaml`, use Helm's `.Files.Get` to read it at chart
+render time and interpolate it into `config.inline` — there's no
+runtime bundle-loading to mount a file into instead.
 
 ## Worked example
 

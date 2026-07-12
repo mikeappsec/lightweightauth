@@ -1,8 +1,10 @@
 # `openfga` — ReBAC via OpenFGA
 
 Asks an OpenFGA / Auth0 FGA store whether `(user, relation, object)`
-holds. Decisions are cached per `(authorizationModelId, user, relation,
-object)` against the shared `cache.Backend`.
+holds. There is no decision caching in this authorizer today — every
+request issues a fresh `POST /check` call (subject to the circuit
+breaker below); this module doesn't read the shared decision cache at
+all.
 
 **Source:** [pkg/authz/openfga](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/authz/openfga/openfga.go) — registered as `openfga`.
 
@@ -24,21 +26,28 @@ authorizers:
     config:
       apiUrl:                https://openfga.svc.cluster.local:8080
       storeId:               01HQ...
-      authorizationModelId:  01HQ...   # pin the model for stable decisions
+      authorizationModelId:  01HQ...   # optional, latest if empty
       apiToken:              ${FGA_TOKEN}
-      timeout:               150ms     # per-call deadline; enforced via context
+      timeout:               150ms     # per-call deadline; default 2s
 
-      # CEL-driven check inputs. Same bindings as the cel authorizer.
+      # user/relation/object are Go text/template strings, NOT CEL —
+      # a different templating mechanism than the cel authorizer.
+      # Available fields: .Identity.{Subject,Source,Claims} and
+      # .Request.{Method,Host,Path,PathParts,TenantID,Headers}.
+      # Only two helper functions: lower, upper.
       check:
-        user:     "user:" + identity.subject
-        relation: "viewer"
-        object: |
-          "document:" + request.path.split("/")[2]
+        user:     "user:{{ .Identity.Subject }}"
+        relation: "{{ .Request.Method | lower }}"
+        object:   "document:{{ index .Request.PathParts 1 }}"
+
+      # Optional upstream.Guard circuit-breaker config — see
+      # pkg/upstream for the resilience: block's fields.
+      # resilience: { ... }
 ```
 
-Per-request flow: evaluate the three CEL expressions → cache lookup → on
-miss call FGA `/check` → `Permit{}` on `allowed=true`. Cache TTL is
-governed by `AuthConfig.cache.decisionTtl` (default 30s).
+Per-request flow: render the three templates → `POST /stores/{id}/check`
+(through the `resilience:` circuit breaker if configured) → `Permit{}`
+on `allowed=true`.
 
 ## Helm wiring
 
@@ -55,24 +64,17 @@ config:
           authorizationModelId: 01HQ...
           apiToken: ${FGA_TOKEN}
           check:
-            user: "user:" + identity.subject
+            user: "user:{{ .Identity.Subject }}"
             relation: viewer
-            object: "document:" + request.path.split("/")[2]
-    cache:
-      backend: valkey
-      addr: valkey-master.cache.svc:6379
-      decisionTtl: 30s
-extraEnv:
+            object: "document:{{ index .Request.PathParts 1 }}"
+env:
   - name: FGA_TOKEN
     valueFrom: { secretKeyRef: { name: lwauth-secrets, key: fga } }
 ```
 
-The shared `valkey` cache lets all replicas reuse one another's
-positive/negative answers — drops FGA QPS dramatically under fan-out.
-
 ## Worked example
 
-Request `GET /documents/42`, identity `subject=alice`:
+Request `GET /documents/42`, identity `subject=alice`, `PathParts=["documents","42"]`:
 
 ```
 user     = "user:alice"
@@ -80,11 +82,11 @@ relation = "viewer"
 object   = "document:42"
 ```
 
-cache MISS → `POST /stores/{id}/check` → `{"allowed": true}` → permit; cached for 30s.
+`POST /stores/{id}/check` → `{"allowed": true}` → permit.
 
 ## Composition
 
-- `composite` `firstAllow: [rbac, openfga]` — admins bypass FGA entirely.
+- `composite` `anyOf: [rbac, openfga]` — admins bypass FGA entirely.
 - Use [`opa`](opa.md) for the *macro* policy and `openfga` for the
   *per-resource* check; combine via `composite` `allOf`.
 

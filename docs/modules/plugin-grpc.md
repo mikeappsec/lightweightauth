@@ -177,9 +177,17 @@ authorizers:
 | `verify`   | accepted                                 | accepted                            | **rejected** (`ErrUpstream`)           |
 | `require`  | accepted                                 | **rejected** (`ErrUpstream`)        | **rejected** (`ErrUpstream`)           |
 
-`disabled` is the v1.0 default — existing configs are unaffected by
-the v1.1 upgrade. Use `verify` while rolling signed plugins out across
-a fleet, then flip to `require` once every plugin has the SDK update.
+`disabled` is the nominal default, but it's silently overridden for
+most real deployments: for any TCP `host:port` address (not a Unix
+socket) configured without `insecure: true` and with no `signing:`
+block at all, `pkg/plugin/grpc/client.go` bumps the effective default
+to `verify` instead — a security-hardening override, since an
+unauthenticated TCP plugin connection is a bigger risk than a local
+Unix socket. Only Unix-socket addresses or explicit `insecure: true`
+TCP addresses actually get the `disabled` default. If your plugin
+config uses a `host:port` address (as most examples on this page do)
+and you haven't set `signing:` explicitly, you're already on
+`verify`, not `disabled`.
 
 The signature, key id, and algorithm travel as gRPC trailing metadata
 (`lwauth-sig`, `lwauth-kid`, `lwauth-alg`). The signed payload is a

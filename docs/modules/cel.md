@@ -17,6 +17,12 @@ require hundreds of LOC (use [`opa`](opa.md)).
 
 ## Configuration
 
+`expression` is the only config field (`CelConfig` in `cel.go` has
+exactly one field). There's no `variables:` block — config is decoded
+via `module.DecodeConfig`, which derives known keys from the struct
+tags and rejects anything else, so `variables:` fails with
+`unknown config key(s): variables`.
+
 ```yaml
 authorizers:
   - name: scoped
@@ -25,14 +31,10 @@ authorizers:
       expression: |
         identity.claims.roles.exists(r, r == "admin") ||
         (request.method == "GET" &&
-         request.path.startsWith("/tenants/" + identity.claims.tenant))
-
-      # Optional declared variables (allowed types: string,int,bool,list,map).
-      variables:
-        env: prod
+         request.path.startsWith("/tenants/" + identity.tenantId))
 ```
 
-Available bindings:
+Available bindings (`identityVars`/`requestVars`/`contextVars` in `cel.go`):
 
 | Binding | Type |
 |---|---|
@@ -42,10 +44,20 @@ Available bindings:
 | `request.method` | `string` |
 | `request.path` | `string` |
 | `request.host` | `string` |
-| `request.headers` | `map<string, list<string>>` |
-| `request.query` | `map<string, list<string>>` |
+| `request.tenantId` | `string` |
+| `request.headers` | `map<string, string>` — flattened to first-value-only, **not** `list<string>`; a repeated header loses everything past the first value |
+| `context` | `map<string, dyn>` — pipeline scratch (`Request.Context`) |
 
-Compile errors fail-fast at config load. Runtime errors deny.
+There is no `request.query` binding — `module.Request` has no
+query-string field anywhere in this codebase.
+
+Compile errors fail-fast at config load (a syntax error in
+`expression` fails config compilation, not a request). At runtime, an
+evaluation error (not a `false` result — an actual CEL error, or the
+expression not yielding a bool) returns `module.ErrUpstream`, which
+maps to a 503 and is never cached — it does **not** deny. Only an
+expression that successfully evaluates to `false` produces an actual
+`Deny{Status: 403, Reason: "cel: denied"}`.
 
 ## Helm wiring
 

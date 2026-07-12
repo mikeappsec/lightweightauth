@@ -20,18 +20,22 @@ a full-fan-out outage:
 |-------------------------|-------------------------------------------|
 | Naive 2-retry × 100 RPS = 300 RPS hitting a 500-ing IdP | Breaker opens after 5 failures; the rest fast-fail with `ErrCircuitOpen` (~µs).  |
 | Slow IdP eats every worker goroutine | `MaxRetries=0` + breaker = deterministic 503s. |
-| 64-worker fan-out under outage | M12 chaos test: 2.15M calls handled, **only 5 reached the broken upstream**, 100% fast-fail rate. |
+| 64-worker fan-out under outage | `tests/chaos/chaos_test.go` asserts a bound of ≤69 upstream calls reaching the broken dependency and ≥95% fast-fail rate — not a fixed "2.15M calls / only 5 reached / 100%" figure; those exact numbers aren't an asserted invariant. |
 
 ## Configuration
 
-Every upstream-using module accepts the same block:
+Every upstream-using module accepts the same block. The retry budget
+(`budgetCapacity`/`budgetRefillPerSec`) is nested **inside** `retries:`
+— there is no separate top-level `budget:` block, and the retry-count
+field is `max`, not `maxRetries` (`pkg/upstream/config.go`'s
+`FromMap`):
 
 ```yaml
 authorizers:
   - name: rebac
     type: openfga
     config:
-      address: openfga.svc:8081
+      apiUrl: http://openfga.svc:8081
       storeId: 01HX...
       resilience:
         breaker:
@@ -39,12 +43,11 @@ authorizers:
           coolDown: 30s                  # how long open before half-open trial
           halfOpenSuccesses: 1           # successes in half-open to fully close
         retries:
-          maxRetries:  2                 # additional attempts after the first
-          backoffBase: 50ms              # first-retry sleep; doubles each retry
-          backoffMax:  1s                # cap on backoff
-        budget:
-          capacity:     100              # max concurrent retries in flight
-          refillPerSec: 10               # token regen rate
+          max:                2          # additional attempts after the first
+          backoffBase:        50ms       # first-retry sleep; doubles each retry
+          backoffMax:         1s         # cap on backoff
+          budgetCapacity:     100        # max concurrent retries in flight
+          budgetRefillPerSec: 10         # token regen rate
 ```
 
 | Block       | Field                | Default | Notes |
@@ -52,11 +55,11 @@ authorizers:
 | `breaker`   | `failureThreshold`   | 5       | Consecutive failures to trip closed → open. |
 | `breaker`   | `coolDown`           | 30s     | Time in open before admitting a trial call. |
 | `breaker`   | `halfOpenSuccesses`  | 1       | Successes in half-open to fully close. |
-| `retries`   | `maxRetries`         | 0       | 0 = pure breaker, no retries. |
-| `retries`   | `backoffBase`        | 0       | 0 = no backoff (tests / fast-failover). |
+| `retries`   | `max`                | 0       | 0 = pure breaker, no retries. |
+| `retries`   | `backoffBase`        | 0       | 0 = no backoff (tests / fast-failover). Purely deterministic exponential — **no jitter**. |
 | `retries`   | `backoffMax`         | 0       | Cap; ignored when `backoffBase == 0`. |
-| `budget`    | `capacity`           | 0       | 0 = retries unlimited (use `maxRetries` to cap). |
-| `budget`    | `refillPerSec`       | 0       | Token regen for the budget bucket. |
+| `retries`   | `budgetCapacity`     | 0       | 0 = retries unlimited (use `max` to cap). |
+| `retries`   | `budgetRefillPerSec` | 0       | Token regen for the budget bucket. |
 
 ## Behavior contract
 

@@ -1,10 +1,12 @@
 # `cache.backend: memory` — In-process LRU
 
-Default cache backend. A bounded in-process LRU shared across all
-modules that consult `cache.Backend` (introspection, JWKS metadata,
-DPoP replay, decision cache, ...).
+Default cache backend for the pipeline's decision cache
+(`AuthConfig.cache:`, one cache, not a shared multi-namespace pool).
+`pkg/cache/memory.go` is a *different*, unrelated pool-cache
+subsystem used by the separate `caches:` block (`CachePoolSpec`) —
+don't confuse the two when reading source.
 
-**Source:** [pkg/cache](https://github.com/mikeappsec/lightweightauth/tree/main/pkg/cache) — registered as `memory`.
+**Source:** [internal/cache](https://github.com/mikeappsec/lightweightauth/tree/main/internal/cache) (`decision.go`, `lru.go`), wired via `internal/config/loader.go`'s `buildDecisionCache`.
 
 ## When to use
 
@@ -20,21 +22,28 @@ DPoP replay, decision cache, ...).
 
 ## Configuration
 
+`maxEntries`, `defaultTtl`, `decisionTtl`, and `introspectionTtl` in
+the old example below don't exist on `CacheSpec`
+(`internal/config/config.go`) — the whole `AuthConfig` decodes via
+plain `yaml.Unmarshal` with no unknown-field rejection, so these keys
+are silently dropped rather than erroring; an operator following the
+old example gets none of the described caps. There's also no
+per-namespace TTL split — one `cache:` block backs the single
+decision cache, with one `ttl`/`negativeTtl` pair, not separate knobs
+per consumer:
+
 ```yaml
 cache:
   backend: memory          # default; can be omitted
-
-  # Optional sizing. Defaults are conservative.
-  maxEntries: 50000        # global LRU cap across all keys
-  defaultTtl: 5m           # used when a caller doesn't pass an explicit TTL
-
-  # Per-namespace TTL overrides (M5 decision cache, M6 sessions, etc.).
-  decisionTtl: 30s
-  introspectionTtl: 5m
+  key: [sub, method, path] # fields hashed into the cache key
+  ttl: 30s                 # entry lifetime; 0/omitted disables caching
+  negativeTtl: 5s          # how long deny decisions are cached
 ```
 
-Eviction: simple LRU at `maxEntries`; entries past their TTL are skipped
-on read and pruned opportunistically.
+Eviction: simple LRU. The default size when unset is **10,000**
+entries (`internal/cache/decision.go`) — there's no config field to
+change it for the plain `memory` backend (only `l1Size`, which only
+applies when `backend: tiered`).
 
 ## Helm wiring
 
@@ -46,7 +55,8 @@ config:
   inline: |
     cache:
       backend: memory
-      maxEntries: 100000
+      key: [sub, method, path]
+      ttl: 30s
 ```
 
 ## Worked example

@@ -1,11 +1,26 @@
 # Federation — multi-cluster config and revocation sync
 
+> **Status: implemented but not wired in.** `pkg/federation` is a
+> real, tested package (HMAC-signed snapshot/revocation replication),
+> but there is no `federation:` key on `AuthConfig`
+> (`internal/config/config.go` has no such field) and nothing in
+> `cmd/lwauth` or `cmd/lwauth-controlplane` ever constructs a
+> `federation.Server`/`Peer`/`PeerSet` — `grep -rn
+> "federation.NewServer\|federation.NewPeer\|federation.NewPeerSet"`
+> outside `pkg/federation` itself returns nothing.
+> `internal/controller/clusterpeer.go` defines a
+> `ClusterPeerReconciler` that references the federation types, but it
+> is never instantiated or registered anywhere either. No Helm chart
+> references "federation" at all. Everything below describes the
+> package's design/intended shape, not something you can turn on today
+> via `AuthConfig` or Helm values.
+
 Replicates AuthConfig snapshots and revocation entries across clusters
 via HMAC-signed gRPC streams. Each cluster independently evaluates
 requests using its local engine, but receives config updates and
 revocation broadcasts from its configured peers.
 
-**Source:** [pkg/federation](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/federation/) — wired via the `federation:` top-level config block.
+**Source:** [pkg/federation](https://github.com/mikeappsec/lightweightauth/blob/main/pkg/federation/) — a standalone library today, not reachable from `AuthConfig`.
 
 ## When to use
 
@@ -20,7 +35,18 @@ revocation broadcasts from its configured peers.
 complexity (pre-shared keys, peer TLS, network connectivity) for no
 benefit.
 
-## Configuration
+## Configuration (Go API shape — see status note above)
+
+This is `federation.Config`'s field shape as used from Go, not a YAML
+schema anything in this repo actually loads. Note also that
+`federation.Config.FederationKey` is tagged `json:"-" yaml:"-"`
+(`pkg/federation/federation.go`) — even if `federation:` were wired
+into `AuthConfig` tomorrow, that field is architecturally excluded
+from (de)serialization, so a plain YAML `federationKey: "..."` could
+never populate it as shown below without further code changes.
+`PeerConfig.ClusterID` is also required (`Config.Validate()` rejects a
+peer with an empty `ClusterID`) but easy to omit by accident since
+it's easy to conflate with the top-level `clusterID`.
 
 ```yaml
 federation:
@@ -30,12 +56,14 @@ federation:
   syncInterval: "30s"                   # heartbeat re-push interval
   revocationTTL: "24h"                  # federated revocation lifetime
   peers:
-    - endpoint: "eu-west-1.lwauth.internal:9443"
+    - clusterId: "eu-west-1"            # required — the peer's own cluster identity
+      endpoint: "eu-west-1.lwauth.internal:9443"
       tlsCertFile: /etc/lwauth/federation-client.pem
       tlsKeyFile: /etc/lwauth/federation-client-key.pem
       tlsCAFile: /etc/lwauth/federation-ca.pem
       namespaces: ["production"]
-    - endpoint: "ap-south-1.lwauth.internal:9443"
+    - clusterId: "ap-south-1"
+      endpoint: "ap-south-1.lwauth.internal:9443"
       tlsCertFile: /etc/lwauth/federation-client.pem
       tlsKeyFile: /etc/lwauth/federation-client-key.pem
       tlsCAFile: /etc/lwauth/federation-ca.pem
@@ -45,9 +73,10 @@ federation:
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable federation |
 | `clusterID` | string | *required* | This cluster's identity (max 253 chars, DNS-safe) |
-| `federationKey` | string | *required* | HMAC-SHA256 pre-shared key (32–256 bytes) |
+| `federationKey` | string | *required* | HMAC-SHA256 pre-shared key (32–256 bytes) — `yaml:"-"`, see note above |
 | `syncInterval` | duration | `30s` | How often to re-push current snapshot |
 | `revocationTTL` | duration | `24h` | How long federated revocations live |
+| `peers[].clusterId` | string | *required* | The peer's cluster identity |
 | `peers[].endpoint` | string | *required* | Remote cluster gRPC address |
 | `peers[].tlsCertFile` | string | — | mTLS client certificate |
 | `peers[].tlsKeyFile` | string | — | mTLS client key |
@@ -84,45 +113,22 @@ federation:
 Any cluster can push to any other (mesh topology), or you can designate
 one cluster as the control plane that pushes to all edges (hub-spoke).
 
-## Revocation broadcast
+## Revocation broadcast (design intent)
 
-When a token is revoked in one cluster:
+The admin revoke body shape shown here is also wrong independent of
+the wiring gap — `POST /v1/admin/revoke` has no generic `key` field;
+it accepts `jti`/`token_hash`/`subject`/`tenant`/`reason`/`ttl` (see
+[revocation-immediate-logout.md](../cookbook/revocation-immediate-logout.md#3-revoking-credentials-via-the-admin-api)).
+If federation were wired in, the intent would be that a revocation in
+one cluster is automatically broadcast to all configured peers, each
+inserting it into its local revocation store with the configured
+`revocationTTL` — but this doesn't happen today regardless of body
+shape, since nothing calls the federation broadcast path.
 
-```yaml
-# POST /v1/admin/revoke in us-east-1
-{
-  "key": "jti:compromised-token-abc",
-  "reason": "credential-leak",
-  "ttl": "1h"
-}
-```
+## Helm wiring — not currently supported
 
-The revocation is automatically broadcast to all configured peers.
-Each peer inserts it into its local revocation store with the
-configured `revocationTTL`.
-
-## Helm wiring
-
-```yaml
-# values.yaml
-config:
-  inline: |
-    federation:
-      enabled: true
-      clusterID: "us-east-1"
-      federationKey: "${FEDERATION_PSK}"
-      syncInterval: 30s
-      revocationTTL: 24h
-      peers:
-        - endpoint: "eu-west-1.lwauth.internal:9443"
-          namespaces: ["production"]
-env:
-  - name: FEDERATION_PSK
-    valueFrom:
-      secretKeyRef:
-        name: lwauth-federation
-        key: psk
-```
+No chart references `federation:`/`FEDERATION_PSK` today; the
+snippet below is aspirational, matching the config shape above.
 
 ## Failure modes
 

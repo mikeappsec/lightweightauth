@@ -22,6 +22,14 @@ rules ([`cel`](cel.md)), or graph models hosted on OpenFGA
 
 ## Configuration
 
+All five `check.*` fields are Go `text/template` strings, not plain
+values — `resourceType`/`permission`/`subjectType` included, not just
+`resourceId`/`subjectId`. Field names use lowercase-`d` `Id`
+(`resourceId`, `subjectId`), not `resourceID`/`subjectID`. There is
+no `tls:` block — TLS uses the system CA pool unconditionally
+(`grpcutil.WithSystemCerts`); there's no way to pin a custom CA file
+today.
+
 ```yaml
 authorizers:
   - name: spicedb-check
@@ -31,15 +39,13 @@ authorizers:
       token: "${SPICEDB_PRESHARED_KEY}"
       insecure: false              # set true only for local dev
       timeout: "200ms"
-      consistency: "minimize_latency"   # or "fully_consistent"
-      tls:
-        caFile: /etc/lwauth/spicedb-ca.pem  # optional
+      consistency: "minimize_latency"   # or "fully_consistent" — no third option
       check:
         resourceType: "document"
-        resourceID: "{{ .Request.PathSegment 2 }}"   # Go template
-        permission: "view"
+        resourceId: "{{ index .Request.PathParts 1 }}"
+        permission: "{{ .Request.Method | lower }}"
         subjectType: "user"
-        subjectID: "{{ .Identity.Subject }}"
+        subjectId: "{{ .Identity.Subject }}"
 ```
 
 | Field | Type | Default | Description |
@@ -47,30 +53,33 @@ authorizers:
 | `endpoint` | string | *required* | SpiceDB gRPC address (host:port) |
 | `token` | string | *required* | Pre-shared key or bearer token |
 | `insecure` | bool | `false` | Allow plaintext (non-TLS) connection |
-| `timeout` | duration | `200ms` | Per-RPC deadline |
-| `consistency` | string | `"minimize_latency"` | SpiceDB consistency level |
-| `tls.caFile` | string | — | Custom CA for server verification |
-| `check.resourceType` | string | *required* | Object type in the schema |
-| `check.resourceID` | template | *required* | Go template resolving to resource ID |
-| `check.permission` | string | *required* | Relation/permission to check |
-| `check.subjectType` | string | *required* | Subject object type |
-| `check.subjectID` | template | *required* | Go template resolving to subject ID |
+| `timeout` | duration | `200ms` (default 2s if omitted) | Per-RPC deadline |
+| `consistency` | string | `"minimize_latency"` | `minimize_latency` or `fully_consistent` — any other value fails config validation |
+| `check.resourceType` | template | *required* | Object type in the schema |
+| `check.resourceId` | template | *required* | Resolves to the resource's object ID |
+| `check.permission` | template | *required* | Relation/permission to check |
+| `check.subjectType` | template | *required* | Subject object type |
+| `check.subjectId` | template | *required* | Resolves to the subject's object ID |
 
 ## Template functions
 
-Templates in the `check` block have access to:
+Templates in the `check` block receive `{Identity, Request}`
+(`templateInput` in `spicedb.go`) — there is no `.Request.PathSegment
+N`, `.Request.Header "..."`, or `.Request.Query "..."` method; use
+indexing/field access instead:
 
-| Variable | Description |
+| Field/function | Description |
 |----------|-------------|
 | `.Request.Method` | HTTP method |
 | `.Request.Host` | Host header |
 | `.Request.Path` | Full path |
-| `.Request.PathSegment N` | Nth path segment (0-indexed) |
-| `.Request.Header "X-Foo"` | Request header value |
-| `.Request.Query "key"` | Query parameter |
+| `.Request.PathParts` | `[]string`, path split on `/` with leading empty segment stripped — index into it, e.g. `index .Request.PathParts 1` |
+| `.Request.TenantID` | Tenant ID |
+| `.Request.Headers` | `map[string]string`, lowercased keys, first value only |
 | `.Identity.Subject` | Authenticated subject |
 | `.Identity.Claims` | Map of identity claims |
 | `.Identity.Source` | Identifier that matched |
+| `lower` / `upper` | Only two helper functions available, e.g. `{{ .Request.Method \| lower }}` |
 
 ## Helm wiring
 
@@ -86,10 +95,10 @@ config:
           token: "${SPICEDB_PRESHARED_KEY}"
           check:
             resourceType: document
-            resourceID: "{{ .Request.PathSegment 2 }}"
+            resourceId: "{{ index .Request.PathParts 1 }}"
             permission: view
             subjectType: user
-            subjectID: "{{ .Identity.Subject }}"
+            subjectId: "{{ .Identity.Subject }}"
 env:
   - name: SPICEDB_PRESHARED_KEY
     valueFrom:
