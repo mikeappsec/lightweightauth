@@ -13,7 +13,8 @@ Actions:
 | Go binaries (linux/amd64, linux/arm64, darwin/arm64) | GitHub Release assets | SHA-256 in `checksums.txt` |
 | `checksums.txt` signature | `checksums.txt.sig` + `checksums.txt.pem` | Cosign keyless (Sigstore OIDC) |
 | SLSA provenance | `multiple.intoto.jsonl` (attached to Release) | SLSA level 3 via `slsa-github-generator` |
-| Container images (stock + FIPS) | `ghcr.io/mikeappsec/lightweightauth` | Docker provenance + SBOM embedded |
+| Container images (stock + FIPS) | `ghcr.io/mikeappsec/lightweightauth` | Docker provenance + SBOM embedded + Cosign keyless signature |
+| Control-plane image | `ghcr.io/mikeappsec/lwauth-controlplane` | Docker provenance + SBOM embedded + Cosign keyless signature |
 | FIPS image base (hardened) | `dhi.io/golang:1.26.2`, `dhi.io/alpine:3.22.4` | Authenticated pull; minimal-CVE hardened images |
 | Helm chart (OCI) | `ghcr.io/mikeappsec/charts/lightweightauth` | Cosign keyless signature |
 | Per-binary SBOM | `lightweightauth_<ver>.sbom.json` (SPDX) | Attached to Release |
@@ -51,8 +52,13 @@ slsa-verifier verify-artifact lightweightauth_1.2.0_linux_amd64.tar.gz \
 ### Verify container image
 
 ```bash
-# Verify image signature
+# Verify data-plane image signature (stock or -fips tag)
 cosign verify ghcr.io/mikeappsec/lightweightauth:1.2.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp "^https://github.com/mikeappsec/lightweightauth/"
+
+# Verify control-plane image signature
+cosign verify ghcr.io/mikeappsec/lwauth-controlplane:1.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp "^https://github.com/mikeappsec/lightweightauth/"
 

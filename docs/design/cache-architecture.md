@@ -1,6 +1,11 @@
 # Cache Architecture & Design Trade-offs
 
 > LightWeightAuth v1.2 — ENT-CACHE-1 (E1)
+>
+> **Superseded**: the backend-selection model described here has been
+> replaced by [Cache Layer Redesign](cache-layer-redesign.md) (accepted,
+> largely implemented). This document is kept for historical context on
+> the original trade-offs; refer to the redesign doc for current behavior.
 
 ## Overview
 

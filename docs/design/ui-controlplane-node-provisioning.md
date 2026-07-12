@@ -12,9 +12,9 @@
 ## Table of Contents
 
 1. [Problem Statement](#1-problem-statement)
-2. [Goals & Non-Goals](#2-goals--non-goals)
+2. [Goals & Non-Goals](#2-goals-non-goals)
 3. [High-Level Architecture](#3-high-level-architecture)
-4. [UI: Create Node — Module-Aware Form](#4-ui-create-node--module-aware-form)
+4. [UI: Create Node — Module-Aware Form](#4-ui-create-node-module-aware-form)
 5. [Helm Values Generation](#5-helm-values-generation)
 6. [Node Provisioning Flow](#6-node-provisioning-flow)
 7. [UI: Node Endpoint Display](#7-ui-node-endpoint-display)
@@ -25,7 +25,7 @@
 12. [Delivery Phases](#12-delivery-phases)
 13. [Security Considerations](#13-security-considerations)
 14. [Lessons Learned: Local kind Deployment](#14-lessons-learned-local-kind-deployment)
-15. [Console Login & Node Lifecycle](#15-console-login--node-lifecycle)
+15. [Console Login & Node Lifecycle](#15-console-login-node-lifecycle)
 
 ---
 
@@ -1426,7 +1426,7 @@ required beyond the backend behavior.
 ### 15.3 Whole-stack verification (Phase C)
 
 After `terraform apply` and ArgoCD sync complete, run
-[`scripts/verify-phase-c.sh`](../../scripts/verify-phase-c.sh) (documented in
+[`scripts/verify-phase-c.sh`](https://github.com/mikeappsec/lightweightauth/blob/main/scripts/verify-phase-c.sh) (documented in
 [oci-phase-c-deploy.md](../operations/oci-phase-c-deploy.md) step 14). It checks,
 in order: node readiness, ArgoCD app health, cert-manager certificate readiness,
 CP `/healthz` and login enforcement, and a create→verify→delete round-trip for a

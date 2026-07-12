@@ -110,7 +110,8 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
-      - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+      - id: push
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -130,6 +131,13 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
+      # Sign the pushed image by digest (keyless, Sigstore/Rekor) --
+      # docs/operations/supply-chain.md documents verifying this signature.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v3.8.0
+        if: github.event_name != 'pull_request'
+      - name: Sign image (keyless, by digest)
+        if: github.event_name != 'pull_request'
+        run: cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
 
   # K-CRYPTO-2 (Tier A5): publish a separately-tagged FIPS image. The
   # tag suffix `-fips` and the `org.lightweightauth.fips140` label set
@@ -180,7 +188,8 @@ jobs:
             type=sha
             type=ref,event=branch
             type=semver,pattern={{version}}
-      - uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+      - id: push
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
         with:
           context: .
           file: Dockerfile.fips
@@ -200,6 +209,11 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             GOFIPS140_VER=v1.0.0
+      # Sign the pushed image by digest (keyless, Sigstore/Rekor) -- same
+      # coverage as the stock image; this job already never runs on PRs.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v3.8.0
+      - name: Sign FIPS image (keyless, by digest)
+        run: cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
 
   # Boots the freshly built control-plane image in a real (ephemeral,
   # in-CI) kind cluster and hits /healthz + /version before the image is
