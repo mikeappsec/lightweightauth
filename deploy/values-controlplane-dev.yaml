@@ -1,10 +1,10 @@
-# values-controlplane-dev.yaml
+# deploy/values-controlplane-dev.yaml
 # Local kind cluster overrides for lwauth-controlplane.
-# Usage:
+# Usage (from repo root):
 #   helm upgrade --install lwauth-controlplane \
 #     deploy/helm/lightweightauth-controlplane \
 #     --namespace lwauth-system --create-namespace \
-#     --values values-controlplane-dev.yaml \
+#     --values deploy/values-controlplane-dev.yaml \
 #     --kube-context kind-lwauth
 
 replicaCount: 1
