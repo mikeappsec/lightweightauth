@@ -17,6 +17,8 @@ const Routes = lazy(() => import("./pages/Routes"));
 const MeshGraph = lazy(() => import("./pages/MeshGraph"));
 const Decisions = lazy(() => import("./pages/Decisions"));
 const Alerts = lazy(() => import("./pages/Alerts"));
+const PolicyAnalytics = lazy(() => import("./pages/PolicyAnalytics"));
+const PolicyExplain = lazy(() => import("./pages/PolicyExplain"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,6 +47,8 @@ render(
           <Route path="/mesh" component={MeshGraph} />
           <Route path="/decisions" component={Decisions} />
           <Route path="/alerts" component={Alerts} />
+          <Route path="/policies" component={PolicyAnalytics} />
+          <Route path="/policies/explain" component={PolicyExplain} />
         </Router>
       </AuthGate>
     </QueryClientProvider>

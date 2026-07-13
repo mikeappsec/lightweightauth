@@ -14,12 +14,12 @@ import (
 )
 
 // PromClient is a minimal HTTP client for the Prometheus
-// /api/v1/query endpoint. It intentionally avoids pulling in
-// github.com/prometheus/client_golang/api (kept to stdlib per
-// Simplicity First): the engine only needs instant-vector queries
-// matching the form the rule templates use (rate() / sum() / histogram_quantile
-// over a [window]). Range queries are not required because the tick
-// loop performs recurring instant measurements.
+// /api/v1/query and /api/v1/query_range endpoints. It intentionally
+// avoids pulling in github.com/prometheus/client_golang/api (kept to
+// stdlib per Simplicity First): the engine only needs instant-vector
+// queries matching the form the rule templates use (rate() / sum() /
+// histogram_quantile over a [window]). Range queries are used by the
+// analytics package for time-series chart data.
 type PromClient struct {
 	BaseURL string
 	HTTP   *http.Client
@@ -135,4 +135,70 @@ func (v PromVector) ExtractScope(scopeLabels []string, cluster string) Scope {
 		}
 	}
 	return out
+}
+
+// PromRangeValue is one sample in a range-vector matrix row. The
+// Values slice holds [unixTimestamp, stringValue] pairs in the same
+// shape as PromVector.Value but repeated per step.
+type PromRangeValue struct {
+	Metric map[string]string
+	Values [][2]any // [[timestamp, "value"], ...]
+}
+
+// QueryRange issues a range PromQL query and returns the matrix
+// result. Used by the analytics package for time-series chart data.
+// Returns ErrDegraded when the client is unconfigured.
+func (c *PromClient) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) ([]PromRangeValue, error) {
+	if c.Empty() {
+		return nil, ErrDegraded
+	}
+	q := url.Values{}
+	q.Set("query", query)
+	q.Set("start", strconv.FormatFloat(float64(start.UnixNano())/1e9, 'f', -1, 64))
+	q.Set("end", strconv.FormatFloat(float64(end.UnixNano())/1e9, 'f', -1, 64))
+	q.Set("step", strconv.FormatInt(int64(step.Seconds()), 10)+"s")
+	u := c.BaseURL + "/api/v1/query_range?" + q.Encode()
+	client := c.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("prometheus query_range: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("prometheus query_range: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Status string `json:"status"`
+		Data   struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Metric map[string]string `json:"metric"`
+				Values [][2]any          `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("prometheus decode: %w", err)
+	}
+	if body.Status != "success" {
+		if body.Error != "" {
+			return nil, fmt.Errorf("prometheus query_range: %s", body.Error)
+		}
+		return nil, fmt.Errorf("prometheus query_range: status %q", body.Status)
+	}
+	out := make([]PromRangeValue, 0, len(body.Data.Result))
+	for _, r := range body.Data.Result {
+		out = append(out, PromRangeValue{Metric: r.Metric, Values: r.Values})
+	}
+	return out, nil
 }
