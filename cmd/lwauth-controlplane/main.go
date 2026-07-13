@@ -40,7 +40,8 @@ import (
 	_ "github.com/mikeappsec/lightweightauth/pkg/builtins"
 
 	cpapi "github.com/mikeappsec/lightweightauth/internal/controlplane/api"
-	"github.com/mikeappsec/lightweightauth/internal/controlplane/alerting"
+"github.com/mikeappsec/lightweightauth/internal/controlplane/alerting"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/analytics"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/auth"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
@@ -103,6 +104,11 @@ func main() {
 	alertEngine := alerting.NewEngine(cfg.ClusterName, promClient, lokiClient, alertSink, nil)
 	rulesLoader := alerting.NewConfigMapLoader(kubeClient, cfg.AlertRulesNamespace, alertEngine)
 
+	// Analytics service (Phase 4) — shares the same Prom + Loki
+	// clients as the alerting engine so there's one connection pool
+	// per backend. Degrades to 503 when the backends are unconfigured.
+	analyticsService := analytics.NewService(promClient, lokiClient, cfg.ClusterName)
+
 	// Decision collector.
 	decisionCollector := streaming.NewDecisionCollector(registry, streamHub)
 
@@ -119,6 +125,7 @@ func main() {
 	// methods nil-check the engine).
 	apiServer := cpapi.NewServer(registry, clusterMgr, configStore, routeStore, aggregator, streamHub, kubeClient, cfg.DefaultImage)
 	apiServer = apiServer.WithAlerting(alertEngine, rulesLoader)
+	apiServer = apiServer.WithAnalytics(analyticsService)
 	apiServer.AllowedOrigin = cfg.ConsoleOrigin
 
 	// Wire the HTTP mux: API + embedded UI.

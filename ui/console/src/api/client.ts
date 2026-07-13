@@ -658,3 +658,105 @@ export function alertStreamUrl(filter?: { severity?: string; state?: string; rul
   const qs = params.toString();
   return `${proto}//${location.host}${BASE}/stream/alerts${qs ? "?" + qs : ""}`;
 }
+
+// --- Analytics (Phase 4 — Decision Inspector + Policy Analytics) ---
+
+export interface TimeSeriesPoint {
+  timestamp: number; // Unix ms
+  value: number;
+}
+
+export interface TimeSeriesRow {
+  name: string;
+  label?: Record<string, string>;
+  color?: string;
+  data: TimeSeriesPoint[];
+}
+
+export interface TimeSeriesResponse {
+  series: TimeSeriesRow[];
+}
+
+export interface HistogramBucket {
+  le: string;
+  count: number;
+}
+
+export interface HistogramResponse {
+  buckets: HistogramBucket[];
+  count: number;
+}
+
+export interface PolicyVersionStats {
+  policy_version: string;
+  allow_count: number;
+  deny_count: number;
+  error_count: number;
+  total_count: number;
+  deny_rate: number;
+  error_rate: number;
+  shadow_disagreement: number;
+  canary_disagreement: number;
+}
+
+export interface PolicyBreakdownResponse {
+  versions: PolicyVersionStats[];
+}
+
+export interface TopDimension {
+  label: string;
+  count: number;
+  share?: number;
+}
+
+export interface TopDimensionResponse {
+  dimension: string;
+  items: TopDimension[];
+}
+
+export function getDecisionTimeSeries(opts?: {
+  window?: string;
+  step?: string;
+  groupBy?: string;
+}): Promise<TimeSeriesResponse> {
+  const params = new URLSearchParams();
+  if (opts?.window) params.set("window", opts.window);
+  if (opts?.step) params.set("step", opts.step);
+  if (opts?.groupBy) params.set("groupBy", opts.groupBy);
+  const qs = params.toString();
+  return fetchJSON<TimeSeriesResponse>(`/analytics/decisions${qs ? "?" + qs : ""}`);
+}
+
+export function getLatencyHistogram(window?: string): Promise<HistogramResponse> {
+  const qs = window ? `?window=${encodeURIComponent(window)}` : "";
+  return fetchJSON<HistogramResponse>(`/analytics/latency${qs}`);
+}
+
+export function getLatencyQuantiles(opts?: {
+  window?: string;
+  step?: string;
+}): Promise<TimeSeriesResponse> {
+  const params = new URLSearchParams();
+  if (opts?.window) params.set("window", opts.window);
+  if (opts?.step) params.set("step", opts.step);
+  const qs = params.toString();
+  return fetchJSON<TimeSeriesResponse>(`/analytics/latency/quantiles${qs ? "?" + qs : ""}`);
+}
+
+export function getPolicyBreakdown(window?: string): Promise<PolicyBreakdownResponse> {
+  const qs = window ? `?window=${encodeURIComponent(window)}` : "";
+  return fetchJSON<PolicyBreakdownResponse>(`/analytics/policy${qs}`);
+}
+
+export function getTopDimension(
+  dimension: string,
+  opts?: { window?: string; limit?: number },
+): Promise<TopDimensionResponse> {
+  const params = new URLSearchParams();
+  if (opts?.window) params.set("window", opts.window);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return fetchJSON<TopDimensionResponse>(
+    `/analytics/top/${encodeURIComponent(dimension)}${qs ? "?" + qs : ""}`,
+  );
+}
