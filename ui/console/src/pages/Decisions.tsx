@@ -1,6 +1,7 @@
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { decisionStreamUrl, type Decision } from "../api/client";
 import { ShieldCheck, Pause, Play, Radio } from "lucide-solid";
+import { WSDisconnectBanner, EmptyState } from "../components/ui";
 
 const MAX_DECISIONS = 500;
 
@@ -55,6 +56,7 @@ export default function Decisions() {
 
   return (
     <div class="max-w-7xl">
+      <WSDisconnectBanner show={!connected() && decisions().length === 0} />
       {/* Header */}
       <div class="flex items-center justify-between mb-6">
         <div>
@@ -160,12 +162,12 @@ export default function Decisions() {
               </For>
             </tbody>
           </table>
-          <Show when={decisions().length === 0}>
-            <div class="py-16 text-center">
-              <ShieldCheck size={40} class="mx-auto text-gray-300 dark:text-gray-700 mb-3" />
-              <p class="text-sm font-medium text-gray-600 dark:text-gray-300">Waiting for decisions…</p>
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Decisions will appear here as they stream in</p>
-            </div>
+<Show when={decisions().length === 0}>
+            <EmptyState
+              icon={ShieldCheck}
+              title="Waiting for decisions…"
+              description="Decisions will appear here as they stream in"
+            />
           </Show>
         </div>
       </div>

@@ -11,6 +11,7 @@ import {
   type AlertEvent,
 } from "../api/client";
 import { pickTopCritical } from "../lib/alerts-merge";
+import { SkeletonCard, WSDisconnectBanner } from "../components/ui";
 import {
   Server,
   HeartPulse,
@@ -39,9 +40,12 @@ export default function Dashboard() {
 
   // Real-time metrics via WebSocket.
   const [metrics, setMetrics] = createSignal<MetricsSnapshot | null>(null);
+  const [metricsConnected, setMetricsConnected] = createSignal(false);
 
   createEffect(() => {
     const ws = new WebSocket(metricsStreamUrl());
+    ws.onopen = () => setMetricsConnected(true);
+    ws.onclose = () => setMetricsConnected(false);
     ws.onmessage = (e) => {
       try {
         setMetrics(JSON.parse(e.data));
@@ -88,6 +92,7 @@ export default function Dashboard() {
       </div>
 
       {/* Request-Health banner — surfaces top critical open alert. */}
+      <WSDisconnectBanner show={!metricsConnected() && !metrics()} />
       <Show when={topAlert() && topAlert()!.state !== "resolved"}>
         <button
           class="group w-full mb-6 flex items-center gap-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-xl px-5 py-3.5 text-left hover:bg-red-100/70 dark:hover:bg-red-500/20 transition-colors"

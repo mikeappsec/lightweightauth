@@ -14,7 +14,9 @@
   "dependencies": {
     "@solidjs/router": "^0.15.0",
     "@tanstack/solid-query": "^5.60.0",
+    "@tanstack/solid-table": "^8.21.3",
     "d3-force": "^3.0.0",
+    "echarts": "^6.1.0",
     "lucide-solid": "^1.16.0",
     "solid-js": "^1.9.0"
   },
