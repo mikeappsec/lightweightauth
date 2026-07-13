@@ -51,6 +51,29 @@ leaderElection:
 clusterName: "local"
 defaultImage: "ghcr.io/mikeappsec/lightweightauth:latest"
 
+# Console authentication — enabled by default in the Helm chart.
+# Operators MUST set CP_AUTH_PASSWORD_HASH (or CP_AUTH_PASSWORD_HASH_FILE)
+# to a bcrypt hash of the admin password. The deployment refuses to
+# serve logins without it (fail-closed). Set to false only for local
+# development with port-forwarding.
+consoleAuth:
+  enabled: true
+  username: "admin"
+  # passwordHash must be a bcrypt hash. Set via a Kubernetes secret and
+  # reference with passwordHashFile, or inline via passwordHash.
+  # Example: htpasswd -nbBC 10 "" 'mypassword' | cut -d: -f2
+  passwordHash: ""
+  passwordHashFile: ""
+  cookieSecure: true
+  sessionTTL: "12h"
+
+# RBAC enforcement — enabled by default in the Helm chart. When true,
+# API callers must present a bearer token, X-Forwarded-User header, or
+# mTLS client cert. Browser console users authenticate via the session
+# cookie (consoleAuth above).
+consoleRBAC:
+  enabled: true
+
 # consoleOrigin restricts WebSocket upgrades to a single trusted origin.
 # Set to the full scheme+host of the UI (e.g. https://lwauth.example.com).
 # Empty string disables the check (dev mode — any origin accepted).
