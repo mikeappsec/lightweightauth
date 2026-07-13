@@ -119,6 +119,14 @@ func (s *Service) DecisionTimeSeries(ctx context.Context, window time.Duration, 
 	if s.Prom.Empty() {
 		return nil, alerting.ErrDegraded
 	}
+	// Validate groupBy against an allowlist of known metric labels
+	// to prevent PromQL injection — the value is interpolated
+	// directly into the query string.
+	switch groupBy {
+	case "outcome", "tenant", "authorizer", "identifier":
+	default:
+		return nil, fmt.Errorf("unsupported groupBy %q", groupBy)
+	}
 	// Build a sum by (groupBy) rate query for each outcome.
 	outcomes := []struct {
 		name  string

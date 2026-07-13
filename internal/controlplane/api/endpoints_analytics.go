@@ -57,6 +57,12 @@ func (s *Server) handleAnalyticsDecisions(w http.ResponseWriter, r *http.Request
 	if groupBy == "" {
 		groupBy = "outcome"
 	}
+	switch groupBy {
+	case "outcome", "tenant", "authorizer", "identifier":
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported groupBy")
+		return
+	}
 	resp, err := s.AnalyticsService.DecisionTimeSeries(r.Context(), window, step, groupBy)
 	if err != nil {
 		if errors.Is(err, alerting.ErrDegraded) {
