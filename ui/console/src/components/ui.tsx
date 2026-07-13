@@ -117,9 +117,10 @@ export function Card(props: {
   subtitle?: string;
   children: JSX.Element;
   action?: JSX.Element;
+  class?: string;
 }): JSX.Element {
   return (
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+    <div class={`bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden ${props.class ?? ""}`}>
       <Show when={props.title || props.action}>
         <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>

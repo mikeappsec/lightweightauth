@@ -8,6 +8,7 @@ import {
   Network,
   ShieldCheck,
   AlertTriangle,
+  FileText,
   Activity,
   Settings,
   LogOut,
@@ -61,6 +62,8 @@ export default function App(props: ParentProps) {
           <NavSection label="Observability">
             <NavLink href="/decisions" icon={ShieldCheck} label="Decisions" />
             <NavLink href="/alerts" icon={AlertTriangle} label="Alerts" />
+            <NavLink href="/policies" icon={FileText} label="Policy Analytics" />
+            <NavLink href="/policies/explain" icon={Activity} label="Explain Studio" />
             <NavLink href="/health" icon={Activity} label="Health" />
           </NavSection>
         </nav>

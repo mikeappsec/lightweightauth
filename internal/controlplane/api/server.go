@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/alerting"
+	"github.com/mikeappsec/lightweightauth/internal/controlplane/analytics"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/configmgmt"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/discovery"
 	"github.com/mikeappsec/lightweightauth/internal/controlplane/metrics"
@@ -48,6 +49,11 @@ type Server struct {
 	// crashing.
 	AlertEngine  *alerting.Engine
 	RulesLoader  *alerting.ConfigMapLoader
+
+	// AnalyticsService is the Phase 4 query proxy for the Decision
+	// Inspector and Policy Analytics pages. Nil in local-dev — the
+	// endpoints return 503 with a "backend not configured" message.
+	AnalyticsService *analytics.Service
 
 	// AllowedOrigin restricts WebSocket upgrades to a single trusted
 	// origin. Empty means any origin is accepted (dev mode).
@@ -78,6 +84,15 @@ func NewServer(registry *discovery.Registry, clusterMgr *multicluster.Manager, c
 func (s *Server) WithAlerting(engine *alerting.Engine, loader *alerting.ConfigMapLoader) *Server {
 	s.AlertEngine = engine
 	s.RulesLoader = loader
+	return s
+}
+
+// WithAnalytics wires the Phase 4 analytics query proxy into the
+// server. Optional — analytics endpoints degrade to 503 when this
+// is not called (local-dev without Prometheus/Loki).
+func (s *Server) WithAnalytics(svc *analytics.Service) *Server {
+	s.AnalyticsService = svc
+	s.registerAnalyticsRoutes()
 	return s
 }
 
