@@ -731,7 +731,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no config stored for this instance")
 		return
 	}
-	writeJSON(w, http.StatusOK, v)
+	redacted, err := configmgmt.RedactConfigVersion(v)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to redact config: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, redacted)
 }
 
 // handlePushConfig validates and stores a new config version.
@@ -766,7 +771,17 @@ func (s *Server) handlePushConfig(w http.ResponseWriter, r *http.Request) {
 
 	logger := log.FromContext(r.Context())
 	logger.Info("config pushed", "cluster", cluster, "instance", name, "version", v.Version)
-	writeJSON(w, http.StatusCreated, v)
+
+	// The push above has already succeeded and persisted -- a redaction
+	// failure here is a 500 with no data loss, not a failed write. The
+	// console's next GET/history fetch succeeds once the underlying bug
+	// (if any) is fixed.
+	redacted, err := configmgmt.RedactConfigVersion(v)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to redact config: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, redacted)
 }
 
 // handleConfigHistory returns all config versions for an instance.
@@ -780,10 +795,16 @@ func (s *Server) handleConfigHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	history := s.ConfigStore.History(cluster, name)
-	if history == nil {
-		history = []configmgmt.ConfigVersion{}
+	redacted := make([]configmgmt.ConfigVersion, len(history))
+	for i, v := range history {
+		rv, err := configmgmt.RedactConfigVersion(v)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to redact config: "+err.Error())
+			return
+		}
+		redacted[i] = rv
 	}
-	writeJSON(w, http.StatusOK, history)
+	writeJSON(w, http.StatusOK, redacted)
 }
 
 // handleConfigRollback rolls back to a specific config version.
@@ -817,7 +838,13 @@ func (s *Server) handleConfigRollback(w http.ResponseWriter, r *http.Request) {
 
 	logger := log.FromContext(r.Context())
 	logger.Info("config rolled back", "cluster", cluster, "instance", name, "toVersion", req.Version, "newVersion", v.Version)
-	writeJSON(w, http.StatusOK, v)
+
+	redacted, err := configmgmt.RedactConfigVersion(v)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to redact config: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, redacted)
 }
 
 // --- Route handlers (Phase 3) ---
