@@ -17,13 +17,16 @@ export default function Instances() {
 
   const [showCreate, setShowCreate] = createSignal(false);
   const [showLink, setShowLink] = createSignal(false);
+  const [deleteError, setDeleteError] = createSignal("");
 
   const deleteMut = createMutation(() => ({
     mutationFn: ({ cluster, name }: { cluster: string; name: string }) =>
       deleteInstance(cluster, name),
     onSuccess: () => {
+      setDeleteError("");
       queryClient.invalidateQueries({ queryKey: ["instances"] });
     },
+    onError: (err: Error) => setDeleteError(err.message),
   }));
 
   return (
@@ -70,6 +73,18 @@ export default function Instances() {
             queryClient.invalidateQueries({ queryKey: ["instances"] });
           }}
         />
+      )}
+
+      {deleteError() && (
+        <div class="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-400">
+          <span>Failed to remove instance: {deleteError()}</span>
+          <button
+            class="text-red-500 hover:text-red-700 dark:hover:text-red-300 font-medium"
+            onClick={() => setDeleteError("")}
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
       {/* Table card */}
