@@ -62,6 +62,21 @@ func TestHandleProbeURL_RejectsNonHTTPS(t *testing.T) {
 	}
 }
 
+// TestHandleProbeURL_RejectsUnresolvableHost is a regression test for the
+// fail-open bypass: validateHost used to return nil (allow) when DNS
+// resolution failed, letting a target skip the IP-range checks entirely.
+// ".invalid" is RFC 2606-reserved and guaranteed to never resolve.
+func TestHandleProbeURL_RejectsUnresolvableHost(t *testing.T) {
+	t.Parallel()
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/v1/controlplane/probe/url?url=https://this-host-does-not-exist.invalid/", nil)
+	w := httptest.NewRecorder()
+	s.handleProbeURL(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (unresolvable host must be rejected, not allowed through)", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestHandleProbeURL_MissingURLParam(t *testing.T) {
 	t.Parallel()
 	s := &Server{}

@@ -56,11 +56,14 @@ func validateHost(host string, allowPrivate bool) error {
 	// HTTP client may re-resolve, but this catches the common case.
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		// If we can't resolve, allow it — the HTTP client will also
-		// fail and the error will surface naturally. Blocking on DNS
-		// failure would break registrations during transient DNS
-		// outages.
-		return nil
+		// Fail closed: an attacker controlling the queried domain's DNS
+		// can make this lookup fail on demand (e.g. SERVFAIL) while a
+		// later lookup from the actual outbound client succeeds with an
+		// internal/metadata IP, bypassing validation entirely. A
+		// resolution failure must be rejected, not treated as "unknown,
+		// so allow" — the outbound request would fail on the same
+		// unresolvable host anyway in the benign case.
+		return errBlockedHost("host resolution failed")
 	}
 	for _, ip := range ips {
 		if err := validateIP(ip, allowPrivate); err != nil {
