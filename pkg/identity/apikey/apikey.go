@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
@@ -40,11 +41,17 @@ import (
 //	      hash:    "$argon2id$v=19$m=65536,t=2,p=1$..."
 //	      subject: alice
 //	      roles:   [admin]
+//	# OR, for rotation support:
+//	secrets:
+//	  - kid: "v2"
+//	    secret: "<base64-or-utf8>"
+//	    notAfter: "2026-05-02T00:00:00Z"
 type Config struct {
 	HeaderName string         `yaml:"headerName" json:"headerName"`
 	Header     string         `yaml:"header" json:"header"`
 	Static     map[string]any `yaml:"static" json:"static"`
 	Hashed     map[string]any `yaml:"hashed" json:"hashed"`
+	Secrets    []any          `yaml:"secrets" json:"secrets"`
 }
 
 type entry struct {
@@ -99,22 +106,38 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	} else if cfg.Header != "" {
 		hdr = cfg.Header
 	}
-	store, err := buildStore(name, raw)
+	store, keyset, err := buildStore(name, raw)
 	if err != nil {
 		return nil, err
 	}
-	return &identifier{name: name, header: hdr, store: store}, nil
+	base := identifier{name: name, header: hdr, store: store}
+	if keyset != nil {
+		return &rotatableIdentifier{identifier: base, keyset: keyset}, nil
+	}
+	return &base, nil
 }
 
-// buildStore picks exactly one of `static` or `hashed`.
-func buildStore(name string, raw map[string]any) (Store, error) {
+// buildStore picks exactly one of `static`, `hashed`, or `secrets`. The
+// returned KeySet is non-nil only for the `secrets` (rotation-aware) path.
+func buildStore(name string, raw map[string]any) (Store, *keyrotation.KeySet[entry], error) {
 	staticRaw, hasStatic := raw["static"].(map[string]any)
 	hashedRaw, hasHashed := raw["hashed"].(map[string]any)
-	if hasStatic && hasHashed {
-		return nil, fmt.Errorf("%w: apikey %q: pick exactly one of static / hashed", module.ErrConfig, name)
+	secretsRaw, hasSecrets := raw["secrets"].([]any)
+	hasSecrets = hasSecrets && len(secretsRaw) > 0
+	switch n := boolCount(hasStatic, hasHashed, hasSecrets); {
+	case n > 1:
+		return nil, nil, fmt.Errorf("%w: apikey %q: pick exactly one of static / hashed / secrets", module.ErrConfig, name)
+	case n == 0:
+		return nil, nil, fmt.Errorf("%w: apikey %q: one of static / hashed / secrets is required", module.ErrConfig, name)
 	}
-	if !hasStatic && !hasHashed {
-		return nil, fmt.Errorf("%w: apikey %q: one of static / hashed is required", module.ErrConfig, name)
+
+	if hasSecrets {
+		entries, err := keyrotation.ParseSecretsConfig(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: apikey %q: %v", module.ErrConfig, name, err)
+		}
+		store, ks := buildRotatableStore(entries)
+		return store, ks, nil
 	}
 
 	if hasStatic {
@@ -129,7 +152,7 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 			switch t := val.(type) {
 			case string:
 				if t == "" {
-					return nil, fmt.Errorf("%w: apikey %q: static[%q] subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, k)
+					return nil, nil, fmt.Errorf("%w: apikey %q: static[%q] subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, k)
 				}
 				keys[k] = entry{subject: t, keyID: shortID(k)}
 			case map[string]any:
@@ -138,7 +161,7 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 					e.subject = s
 				}
 				if e.subject == "" {
-					return nil, fmt.Errorf("%w: apikey %q: static[%q].subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, k)
+					return nil, nil, fmt.Errorf("%w: apikey %q: static[%q].subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, k)
 				}
 				if rs, ok := t["roles"].([]any); ok {
 					for _, r := range rs {
@@ -150,30 +173,32 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 				keys[k] = e
 			}
 		}
-		return &staticStore{keys: keys}, nil
+		return &staticStore{keys: keys}, nil, nil
 	}
 
 	// Hashed branch.
 	if file, ok := hashedRaw["file"].(string); ok && file != "" {
-		return LoadHashedStoreFromFile(file)
+		store, err := LoadHashedStoreFromFile(file)
+		return store, nil, err
 	}
 	if dir, ok := hashedRaw["dir"].(string); ok && dir != "" {
-		return LoadHashedStoreFromDir(dir)
+		store, err := LoadHashedStoreFromDir(dir)
+		return store, nil, err
 	}
 	if entries, ok := hashedRaw["entries"].(map[string]any); ok {
 		store := &HashedStore{}
 		for id, v := range entries {
 			spec, ok := v.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q] must be an object", module.ErrConfig, name, id)
+				return nil, nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q] must be an object", module.ErrConfig, name, id)
 			}
 			hash, _ := spec["hash"].(string)
 			if hash == "" {
-				return nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q].hash is required", module.ErrConfig, name, id)
+				return nil, nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q].hash is required", module.ErrConfig, name, id)
 			}
 			subject, _ := spec["subject"].(string)
 			if subject == "" {
-				return nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q].subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, id)
+				return nil, nil, fmt.Errorf("%w: apikey %q: hashed.entries[%q].subject is required (empty subject defeats RBAC and audit)", module.ErrConfig, name, id)
 			}
 			var roles []string
 			if rs, ok := spec["roles"].([]any); ok {
@@ -184,12 +209,23 @@ func buildStore(name string, raw map[string]any) (Store, error) {
 				}
 			}
 			if err := store.AddHashed(id, hash, subject, roles); err != nil {
-				return nil, fmt.Errorf("apikey %q entry %q: %w", name, id, err)
+				return nil, nil, fmt.Errorf("apikey %q entry %q: %w", name, id, err)
 			}
 		}
-		return store, nil
+		return store, nil, nil
 	}
-	return nil, fmt.Errorf("%w: apikey %q: hashed needs one of file / dir / entries", module.ErrConfig, name)
+	return nil, nil, fmt.Errorf("%w: apikey %q: hashed needs one of file / dir / entries", module.ErrConfig, name)
+}
+
+// boolCount returns how many of the given booleans are true.
+func boolCount(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
 }
 
 // RevocationKeys implements module.RevocationChecker for the API key identifier.

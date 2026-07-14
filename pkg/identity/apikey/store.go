@@ -48,6 +48,9 @@ type hashedEntry struct {
 	digest  []byte
 	subject string
 	roles   []string
+	time    uint32
+	memory  uint32
+	threads uint8
 }
 
 // argon2id parameters (interactive profile from RFC 9106 §4):
@@ -78,7 +81,7 @@ func HashKey(plain string) (string, error) {
 // AddHashed installs an entry whose digest is provided in encoded form
 // (HashKey output). Returns an error on malformed input.
 func (h *HashedStore) AddHashed(id, encoded, subject string, roles []string) error {
-	salt, digest, err := parseEncoded(encoded)
+	salt, digest, t, m, p, err := parseEncoded(encoded)
 	if err != nil {
 		return err
 	}
@@ -86,6 +89,7 @@ func (h *HashedStore) AddHashed(id, encoded, subject string, roles []string) err
 	defer h.mu.Unlock()
 	h.entries = append(h.entries, hashedEntry{
 		id: id, salt: salt, digest: digest, subject: subject, roles: roles,
+		time: t, memory: m, threads: p,
 	})
 	return nil
 }
@@ -105,7 +109,7 @@ func (h *HashedStore) Lookup(presented string) (entry, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, e := range h.entries {
-		d := argon2.IDKey([]byte(presented), e.salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+		d := argon2.IDKey([]byte(presented), e.salt, e.time, e.memory, e.threads, uint32(len(e.digest)))
 		if subtle.ConstantTimeCompare(d, e.digest) == 1 {
 			return entry{subject: e.subject, roles: append([]string(nil), e.roles...), keyID: e.id}, true
 		}
@@ -197,25 +201,40 @@ func LoadHashedStoreFromDir(dir string) (*HashedStore, error) {
 	return store, nil
 }
 
-// parseEncoded decodes the standard argon2id encoded hash format.
-func parseEncoded(s string) (salt, digest []byte, err error) {
+// parseEncoded decodes the standard argon2id encoded hash format, including
+// the m=/t=/p= cost parameters actually embedded in the string — these are
+// honoured on verify (see HashedStore.Lookup) instead of being silently
+// recomputed with the package's own constants, so hashes produced by a
+// standard argon2 tool with different parameters still verify correctly.
+//
+// t and m are floored at the package's own argonTime/argonMemory: a hash
+// file that has been tampered with (or corrupted) to advertise weaker cost
+// parameters must not be able to downgrade verification cost below the
+// module's minimum, even silently.
+func parseEncoded(s string) (salt, digest []byte, t, m uint32, p uint8, err error) {
 	if !strings.HasPrefix(s, "$argon2id$") {
-		return nil, nil, errors.New("apikey: not an argon2id hash")
+		return nil, nil, 0, 0, 0, errors.New("apikey: not an argon2id hash")
 	}
 	parts := strings.Split(s, "$")
 	// ["", "argon2id", "v=19", "m=...,t=...,p=...", "<salt>", "<digest>"]
 	if len(parts) != 6 {
-		return nil, nil, fmt.Errorf("apikey: malformed hash: %d parts", len(parts))
+		return nil, nil, 0, 0, 0, fmt.Errorf("apikey: malformed hash: %d parts", len(parts))
+	}
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil {
+		return nil, nil, 0, 0, 0, fmt.Errorf("apikey: malformed params %q: %w", parts[3], err)
+	}
+	if m < argonMemory || t < argonTime {
+		return nil, nil, 0, 0, 0, fmt.Errorf("apikey: hash params (m=%d,t=%d) below security floor (m=%d,t=%d)", m, t, argonMemory, argonTime)
 	}
 	salt, err = base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
-		return nil, nil, fmt.Errorf("apikey: salt b64: %w", err)
+		return nil, nil, 0, 0, 0, fmt.Errorf("apikey: salt b64: %w", err)
 	}
 	digest, err = base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
-		return nil, nil, fmt.Errorf("apikey: digest b64: %w", err)
+		return nil, nil, 0, 0, 0, fmt.Errorf("apikey: digest b64: %w", err)
 	}
-	return salt, digest, nil
+	return salt, digest, t, m, p, nil
 }
 
 // staticStore is the plaintext-map backend kept for tests and dev. It
