@@ -172,9 +172,20 @@ func ValidateConfig(content string) error {
 }
 
 // PushConfig validates and stores a new config, returning the version.
+//
+// content may contain redaction sentinels (see redact.go) for secret
+// fields the caller received from a prior GET/history/rollback response
+// and left untouched — mergeSecrets splices the real stored values back
+// in before persisting, so a plain "edit one field, Apply" round trip
+// never overwrites a working secret with a placeholder string.
 func (s *Store) PushConfig(ctx context.Context, cluster, name, content, author, comment string) (ConfigVersion, error) {
 	if err := ValidateConfig(content); err != nil {
 		return ConfigVersion{}, err
 	}
-	return s.Push(cluster, name, content, author, comment)
+	prev, hasPrev := s.Current(cluster, name)
+	merged, err := mergeSecrets(content, prev.Content, hasPrev)
+	if err != nil {
+		return ConfigVersion{}, err
+	}
+	return s.Push(cluster, name, merged, author, comment)
 }
