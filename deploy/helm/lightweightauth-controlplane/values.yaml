@@ -18,36 +18,31 @@ service:
   port: 8443
   nodePort: ""  # only used when type is NodePort
 
-# Ingress exposes the control plane outside the cluster. Disabled by
-# default — operators enable by setting `ingress.enabled: true` and
-# populating the `hosts` list. Template requires the `ingress` block
-# to exist (even when disabled) so this section is preserved as a
-# stub rather than relying on nil-evaluation of `.Values.ingress`.
-ingress:
-  enabled: false
-  ingressClassName: ""
-  annotations: {}
-  hosts: []
-    # - host: console.example.com
-    #   paths:
-    #     - path: /
-    #       pathType: Prefix
-  tls: []
-    # - secretName: console-tls
-    #   hosts:
-    #     - console.example.com
-
-# HTTPRoute exposes the control plane via Gateway API, as an alternative to
-# the classic Ingress above (e.g. for a Cilium Gateway API installation).
-# Disabled by default — operators enable by setting `gatewayRoute.enabled:
-# true` plus `parentRefs` and `hostnames`. TLS terminates at the Gateway's
-# listener, not here, so there is no tls block. Both `ingress` and
-# `gatewayRoute` may be enabled at the same time during a migration.
+# HTTPRoute exposes the control plane via the standard Kubernetes Gateway
+# API (gateway.networking.k8s.io/v1). This template is implementation-
+# agnostic -- it just sets parentRefs on your Gateway, so it works
+# identically with any conformant controller (Cilium, Envoy Gateway, Istio,
+# Traefik, Kong, ...). You create and manage the Gateway/GatewayClass
+# yourself, outside this chart; point parentRefs at it here. Disabled by
+# default — operators enable by setting `gatewayRoute.enabled: true` plus
+# `parentRefs` and `hostnames`. TLS terminates at the Gateway's listener,
+# not here, so there is no tls block.
+#
+# A classic networking.k8s.io/v1 Ingress template previously lived here;
+# removed in 0.3.0 as part of migrating this project's own deployment from
+# ingress-nginx to Gateway API. Breaking change for any other deployment
+# still using it: pin to <0.3.0, or reintroduce templates/ingress.yaml from
+# git history.
 gatewayRoute:
   enabled: false
   parentRefs: []
+    # Cilium example:
     # - name: lwauth-gateway
     #   namespace: lwauth-system
+    #   sectionName: https
+    # Envoy Gateway example (gatewayClassName: eg on the Gateway itself):
+    # - name: eg-lwauth
+    #   namespace: envoy-gateway-system
     #   sectionName: https
   hostnames: []
     # - console.example.com
