@@ -18,10 +18,15 @@ service:
   port: 8443
   nodePort: ""  # only used when type is NodePort
 
-# HTTPRoute exposes the control plane via Gateway API (e.g. Cilium's Gateway
-# API implementation). Disabled by default — operators enable by setting
-# `gatewayRoute.enabled: true` plus `parentRefs` and `hostnames`. TLS
-# terminates at the Gateway's listener, not here, so there is no tls block.
+# HTTPRoute exposes the control plane via the standard Kubernetes Gateway
+# API (gateway.networking.k8s.io/v1). This template is implementation-
+# agnostic -- it just sets parentRefs on your Gateway, so it works
+# identically with any conformant controller (Cilium, Envoy Gateway, Istio,
+# Traefik, Kong, ...). You create and manage the Gateway/GatewayClass
+# yourself, outside this chart; point parentRefs at it here. Disabled by
+# default — operators enable by setting `gatewayRoute.enabled: true` plus
+# `parentRefs` and `hostnames`. TLS terminates at the Gateway's listener,
+# not here, so there is no tls block.
 #
 # A classic networking.k8s.io/v1 Ingress template previously lived here;
 # removed in 0.3.0 as part of migrating this project's own deployment from
@@ -31,8 +36,13 @@ service:
 gatewayRoute:
   enabled: false
   parentRefs: []
+    # Cilium example:
     # - name: lwauth-gateway
     #   namespace: lwauth-system
+    #   sectionName: https
+    # Envoy Gateway example (gatewayClassName: eg on the Gateway itself):
+    # - name: eg-lwauth
+    #   namespace: envoy-gateway-system
     #   sectionName: https
   hostnames: []
     # - console.example.com
