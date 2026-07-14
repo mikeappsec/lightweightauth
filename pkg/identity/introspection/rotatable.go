@@ -18,7 +18,7 @@ var _ module.Rotatable = (*rotatableIdentifier)(nil)
 // (used to authenticate to the IdP's introspection endpoint) can be
 // rotated using the shared secrets config format.
 type rotatableIdentifier struct {
-	identifier
+	*identifier
 	keyset *keyrotation.KeySet[string] // keyed by kid, value is clientSecret
 }
 
@@ -33,4 +33,34 @@ func (ri *rotatableIdentifier) KeyStates() []module.KeyStateMeta {
 		}
 	}
 	return out
+}
+
+// buildRotatableIdentifier constructs an introspection identifier whose
+// client secret (used for Basic Auth against the IdP's introspection
+// endpoint) is resolved fresh from a KeySet on every request, using the
+// shared secrets config format. The clientId itself stays static (from the
+// top-level clientId config) — only the secret behind it rotates.
+func buildRotatableIdentifier(base *identifier, entries []keyrotation.SecretEntry) *rotatableIdentifier {
+	ks := keyrotation.NewKeySet[string](nil)
+	for _, e := range entries {
+		ks.Put(e.Meta, string(e.Secret))
+	}
+	base.resolveSecret = func() (string, bool) {
+		return resolveActiveSecret(ks)
+	}
+	return &rotatableIdentifier{identifier: base, keyset: ks}
+}
+
+// resolveActiveSecret returns the current secret to authenticate with: the
+// first active key, falling back to a retiring one so an in-flight
+// rotation doesn't cause an outage while the new secret propagates to the
+// IdP's side.
+func resolveActiveSecret(ks *keyrotation.KeySet[string]) (string, bool) {
+	if kids := ks.ActiveKIDs(); len(kids) > 0 {
+		return ks.Get(kids[0])
+	}
+	if kids := ks.RetiringKIDs(); len(kids) > 0 {
+		return ks.Get(kids[0])
+	}
+	return "", false
 }
