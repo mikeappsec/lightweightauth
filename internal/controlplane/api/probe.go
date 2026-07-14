@@ -20,9 +20,18 @@ import (
 //   - Only HTTPS URLs are accepted (no http://, no file://, etc.).
 //   - Timeout: 5 s.
 //   - Maximum 2 redirects followed.
-//   - Private / link-local / loopback IP ranges are not blocked here because
-//     IdPs may legitimately be in-cluster (they are reachable from the CP pod
-//     via ClusterIP); the operator is responsible for network policy.
+//   - The target host is validated via validateHost (ssrf.go), which
+//     resolves the hostname and checks every returned IP against
+//     loopback, link-local, and cloud-metadata ranges — not just a
+//     static hostname list — on the initial URL AND on every redirect
+//     target (SSRF redirect bypass defence). A hostname that isn't an
+//     IP literal and isn't a known metadata host would otherwise pass
+//     a naive string-only check even when it resolves to an internal
+//     or metadata address.
+//   - In-cluster service hostnames (.svc.cluster.local) are allowed
+//     because operators may run their IdP inside the cluster, so
+//     private RFC1918 ranges are permitted here (allowPrivate=true) —
+//     unlike handleRegisterInstance, which blocks them.
 //
 // Route: GET /v1/controlplane/probe/url?url=<encoded>
 func (s *Server) handleProbeURL(w http.ResponseWriter, r *http.Request) {
@@ -37,9 +46,11 @@ func (s *Server) handleProbeURL(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "only https:// URLs are allowed")
 		return
 	}
-	// Reject bare hostnames that look like private/metadata endpoints typically
-	// exploited in SSRF, while still allowing in-cluster HTTPS IdPs.
-	if isBlockedHost(parsed.Hostname()) {
+	// Reject SSRF pivot targets (loopback, link-local, cloud metadata).
+	// allowPrivate=true: in-cluster IdP hostnames commonly resolve to
+	// RFC1918 addresses, and that's an intentional, documented use case
+	// for this endpoint (unlike instance registration).
+	if err := validateHost(parsed.Hostname(), true); err != nil {
 		writeError(w, http.StatusBadRequest, "target host is not allowed")
 		return
 	}
@@ -55,6 +66,14 @@ func (s *Server) handleProbeURL(w http.ResponseWriter, r *http.Request) {
 			}
 			// Ensure redirects also stay on HTTPS.
 			if !strings.EqualFold(req.URL.Scheme, "https") {
+				return http.ErrUseLastResponse
+			}
+			// SECURITY: Re-validate the redirect target host with the
+			// same check applied to the initial URL. Without this an
+			// attacker can redirect from a safe host to a cloud
+			// metadata or internal endpoint, bypassing the initial
+			// check.
+			if validateHost(req.URL.Hostname(), true) != nil {
 				return http.ErrUseLastResponse
 			}
 			return nil
@@ -92,26 +111,4 @@ func (s *Server) handleProbeURL(w http.ResponseWriter, r *http.Request) {
 		"reachable":  resp.StatusCode < 400,
 		"statusCode": resp.StatusCode,
 	})
-}
-
-// isBlockedHost blocks a small list of well-known SSRF pivot targets.
-// In-cluster service hostnames (.svc.cluster.local) are intentionally allowed
-// because operators may run their IdP inside the cluster.
-func isBlockedHost(host string) bool {
-	// Strip port if present.
-	if i := strings.LastIndex(host, ":"); i != -1 && strings.Count(host, ":") == 1 {
-		host = host[:i]
-	}
-	blocked := []string{
-		"169.254.169.254", // AWS/GCP/OCI IMDS
-		"metadata.google.internal",
-		"instance-data",
-	}
-	lower := strings.ToLower(host)
-	for _, b := range blocked {
-		if lower == b {
-			return true
-		}
-	}
-	return false
 }

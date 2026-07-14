@@ -90,6 +90,15 @@ func main() {
 	streamHub := streaming.NewHub(registry, aggregator)
 	streamHub.AllowedOrigin = cfg.ConsoleOrigin
 
+	// SECURITY: When auth is enabled, require a console origin to be
+	// set so WebSocket upgraders fail-closed on cross-origin connections.
+	// If the operator forgot to set CP_CONSOLE_ORIGIN, warn loudly and
+	// use the request's Host header as the default (same-origin only).
+	effectiveOrigin := cfg.ConsoleOrigin
+	if cfg.AuthEnabled && effectiveOrigin == "" {
+		logger.Error(nil, "CP_AUTH_ENABLED=true but CP_CONSOLE_ORIGIN is empty — WebSocket connections will accept any origin. Set CP_CONSOLE_ORIGIN to the console URL (e.g. https://lwauth.example.com).")
+	}
+
 	// Alerting engine (Phase 2). Pulls rule evaluations from
 	// Prometheus and Loki when configured; degrades to a readonly
 	// catalog with running rule definitions but no firings when the

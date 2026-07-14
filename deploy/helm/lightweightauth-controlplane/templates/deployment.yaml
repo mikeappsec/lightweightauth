@@ -37,6 +37,27 @@ spec:
               value: {{ .Values.defaultImage | quote }}
             - name: CP_LEADER_ELECT
               value: {{ .Values.leaderElection.enabled | quote }}
+            # Console authentication — enabled by default in the chart.
+            # Operators must supply a bcrypt password hash.
+            - name: CP_AUTH_ENABLED
+              value: {{ .Values.consoleAuth.enabled | quote }}
+            - name: CP_AUTH_USERNAME
+              value: {{ .Values.consoleAuth.username | quote }}
+            - name: CP_AUTH_COOKIE_SECURE
+              value: {{ .Values.consoleAuth.cookieSecure | quote }}
+            - name: CP_AUTH_SESSION_TTL
+              value: {{ .Values.consoleAuth.sessionTTL | quote }}
+            {{- if .Values.consoleAuth.passwordHash }}
+            - name: CP_AUTH_PASSWORD_HASH
+              value: {{ .Values.consoleAuth.passwordHash | quote }}
+            {{- end }}
+            {{- if .Values.consoleAuth.passwordHashFile }}
+            - name: CP_AUTH_PASSWORD_HASH_FILE
+              value: {{ .Values.consoleAuth.passwordHashFile | quote }}
+            {{- end }}
+            # RBAC enforcement — enabled by default in the chart.
+            - name: CP_RBAC_ENABLED
+              value: {{ .Values.consoleRBAC.enabled | quote }}
             {{- if .Values.alerting.enabled }}
             - name: PROMETHEUS_URL
               value: {{ .Values.alerting.prometheusURL | quote }}

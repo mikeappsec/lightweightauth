@@ -58,7 +58,6 @@ config:
         config:
           required: true
           skew: 30s
-          replayCacheSize: 10000
 
           # Pinned proof keys with rotation metadata
           pinnedKeys:

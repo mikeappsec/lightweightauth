@@ -70,6 +70,26 @@ func TestIntrospection_ActiveTokenIdentifies(t *testing.T) {
 	}
 }
 
+// TestIntrospection_ActiveButExpiredRejected is a regression test: the IdP
+// can report active=true with an exp already in the past (e.g. a stale
+// upstream cache of its own). Previously the TTL clamp only kicked in when
+// d > 0, so an already-past exp left ttl at the full MaxCacheTTL and the
+// expired token was cached as valid instead of rejected.
+func TestIntrospection_ActiveButExpiredRejected(t *testing.T) {
+	t.Parallel()
+	hits := &atomic.Int32{}
+	srv := mkServer(t, hits, map[string]any{
+		"active": true, "sub": "alice", "exp": float64(time.Now().Add(-time.Hour).Unix()),
+	})
+	defer srv.Close()
+	id := mkIdentifier(t, srv.URL)
+
+	_, err := id.Identify(t.Context(), req("tok"))
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (active=true with a past exp must be rejected)", err)
+	}
+}
+
 func TestIntrospection_PositiveCacheHits(t *testing.T) {
 	t.Parallel()
 	hits := &atomic.Int32{}

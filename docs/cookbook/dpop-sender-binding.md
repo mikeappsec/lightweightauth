@@ -198,15 +198,13 @@ No extra configuration needed — as long as your proxy sets
 ## 6. Replay prevention
 
 The `jti` claim prevents token replay. lwauth maintains a cache of
-recently seen jti values — but there's no `replayCache:` config block
-on the `dpop` identifier (`pkg/identity/dpop/dpop.go`'s `knownKeys`
-only has `replayCacheSize`, and that field is parsed but never
-actually read anywhere in the package — it's presently dead). The
-cache handle instead comes from the shared, named cache-pool
-infrastructure: `deps.CacheProvider().Cache("replay")` requests a
-pool named `"replay"` from the top-level `caches:` block. If you
-don't declare one, lwauth synthesizes an implicit in-memory default
-pool so existing configs keep working:
+recently seen jti values — but there's no per-identifier `replayCache:`
+or `replayCacheSize:` config block on the `dpop` identifier. The cache
+handle instead comes from the shared, named cache-pool infrastructure:
+`deps.CacheProvider().Cache("replay")` requests a pool named `"replay"`
+from the top-level `caches:` block. If you don't declare one, lwauth
+synthesizes an implicit in-memory default pool so existing configs
+keep working:
 
 ```yaml
 identifiers:

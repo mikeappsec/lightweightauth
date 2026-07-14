@@ -204,6 +204,16 @@ func (s *Server) handleRegisterInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// SSRF defence: validate the AdminURL host against loopback,
+	// link-local, private, and cloud-metadata ranges. Seven downstream
+	// consumers (proxy, aggregator, health checker, decision collector,
+	// route probes, quick test, reconciler) trust this URL uncondi-
+	// tionally, so the intake is the single choke point.
+	if err := validateAdminURL(reg.AdminURL, false); err != nil {
+		writeError(w, http.StatusBadRequest, "adminUrl rejected: "+err.Error())
+		return
+	}
+
 	inst := discovery.RegisterManual(&reg)
 	s.Registry.Register(inst)
 
@@ -673,8 +683,16 @@ func (s *Server) handleAddCluster(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
-	if cfg.APIServer == "" && cfg.KubeconfigPath == "" {
-		writeError(w, http.StatusUnprocessableEntity, "either apiServer or kubeconfigPath is required")
+	// SECURITY: Reject kubeconfigPath — it allows arbitrary file reads
+	// from the CP pod's filesystem via the clientcmd loader. Operators
+	// must supply apiServer + token + caBundle instead, which are
+	// passed to the REST config without touching the local filesystem.
+	if cfg.KubeconfigPath != "" {
+		writeError(w, http.StatusBadRequest, "kubeconfigPath is not accepted via the API for security reasons — supply apiServer, token, and caBundle instead")
+		return
+	}
+	if cfg.APIServer == "" {
+		writeError(w, http.StatusUnprocessableEntity, "apiServer is required")
 		return
 	}
 

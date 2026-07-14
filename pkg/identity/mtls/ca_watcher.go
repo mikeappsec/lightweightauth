@@ -7,6 +7,7 @@
 package mtls
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -31,8 +32,12 @@ type CABundleWatcher struct {
 }
 
 // NewCABundleWatcher creates a watcher that loads the CA bundle at path
-// and reloads on file-system changes. Call Close() when done.
-func NewCABundleWatcher(path string, onReload func(*x509.CertPool, error)) (*CABundleWatcher, error) {
+// and reloads on file-system changes. The watch goroutine is bound to ctx:
+// when ctx is cancelled (e.g. the engine is swapped on hot-reload), the
+// watcher closes itself instead of leaking — the same pattern used for the
+// JWKS pollers in pkg/identity/jwt and pkg/identity/oauth2. Callers may
+// still call Close() directly for immediate synchronous shutdown.
+func NewCABundleWatcher(ctx context.Context, path string, onReload func(*x509.CertPool, error)) (*CABundleWatcher, error) {
 	w := &CABundleWatcher{path: path, onReload: onReload}
 
 	if err := w.load(); err != nil {
@@ -48,7 +53,7 @@ func NewCABundleWatcher(path string, onReload func(*x509.CertPool, error)) (*CAB
 		return nil, fmt.Errorf("watch %s: %w", path, err)
 	}
 	w.watcher = fsw
-	go w.watchLoop()
+	go w.watchLoop(ctx)
 	return w, nil
 }
 
@@ -100,9 +105,12 @@ func (w *CABundleWatcher) load() error {
 	return nil
 }
 
-func (w *CABundleWatcher) watchLoop() {
+func (w *CABundleWatcher) watchLoop(ctx context.Context) {
 	for {
 		select {
+		case <-ctx.Done():
+			w.Close()
+			return
 		case ev, ok := <-w.watcher.Events:
 			if !ok {
 				return

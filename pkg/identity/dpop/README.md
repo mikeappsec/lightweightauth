@@ -32,7 +32,6 @@ identifiers:
     config:
       required: true
       skew: "30s"
-      replayCacheSize: 10000
       proofHeader: "DPoP"
       inner:
         type: jwt
@@ -44,11 +43,14 @@ identifiers:
 |-------|------|---------|-------------|
 | `required` | bool | `true` | Whether DPoP proof is mandatory |
 | `skew` | duration | `30s` | Allowed clock drift on `iat` |
-| `replayCacheSize` | int | `10000` | LRU entries for jti replay prevention |
 | `proofHeader` | string | `"DPoP"` | Header carrying the DPoP proof JWS |
 | `bearerHeader` | string | `"Authorization"` | Header for `ath` computation |
 | `inner` | object | *required* | Wrapped identifier spec (type + config) |
 | `pinnedKeys` | []object | — | Optional server-side proof-key pinning with `notBefore`/`notAfter`/`gracePeriod` rotation lifecycle per key (see `pkg/identity/dpop/dpop.go` and `pkg/identity/dpop/rotatable.go`) — unlike the apikey/hmac/oauth2/introspection "rotatable" variants elsewhere in this codebase, this one **is** wired into the live factory |
+
+The `jti` replay cache is not a per-identifier field — it's sized via
+the top-level `caches:` block under the pool name `"replay"` (see
+`docs/cookbook/dpop-sender-binding.md`).
 
 ## Features
 

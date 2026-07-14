@@ -107,8 +107,8 @@ func (i *identifier) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 		"device_code": {deviceCode},
 		"client_id":   {i.oauth.ClientID},
 	}
-	if i.oauth.ClientSecret != "" {
-		form.Set("client_secret", i.oauth.ClientSecret)
+	if secret := i.currentClientSecret(); secret != "" {
+		form.Set("client_secret", secret)
 	}
 
 	body, status, err := i.postForm(r.Context(), i.oauth.Endpoint.TokenURL, form)

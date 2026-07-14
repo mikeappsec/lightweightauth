@@ -56,6 +56,7 @@ import (
 	"time"
 
 	pkgcache "github.com/mikeappsec/lightweightauth/pkg/cache"
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/upstream"
 )
@@ -84,6 +85,25 @@ type identifier struct {
 	errCache pkgcache.Cache
 	sf       singleflight
 	guard    *upstream.Guard
+
+	// resolveSecret, when set, replaces cfg.ClientSecret for Basic Auth
+	// against the introspection endpoint. buildRotatableIdentifier sets
+	// this to resolve the current active secret from a KeySet on every
+	// call (cfg.ClientSecret is read fresh per callIntrospection call
+	// already, so this makes rotation take effect immediately without any
+	// other client construction change).
+	resolveSecret func() (string, bool)
+}
+
+// currentClientSecret returns the secret to send via Basic Auth: the
+// dynamically-resolved active secret when resolveSecret is set, otherwise
+// the static cfg.ClientSecret.
+func (i *identifier) currentClientSecret() string {
+	if i.resolveSecret != nil {
+		s, _ := i.resolveSecret()
+		return s
+	}
+	return i.cfg.ClientSecret
 }
 
 func (i *identifier) Name() string { return i.name }
@@ -145,7 +165,15 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 	}
 	ttl := i.cfg.MaxCacheTTL
 	if expF, ok := claims["exp"].(float64); ok {
-		if d := time.Until(time.Unix(int64(expF), 0)); d > 0 && d < ttl {
+		d := time.Until(time.Unix(int64(expF), 0))
+		if d <= 0 {
+			// IdP said active but the token's own exp has already passed —
+			// treat it as inactive rather than positive-caching a token
+			// that's already unusable for the full MaxCacheTTL.
+			_ = i.negCache.Set(ctx, key, []byte{1}, i.cfg.NegativeTTL)
+			return nil, module.ErrInvalidCredential
+		}
+		if d < ttl {
 			ttl = d
 		}
 	}
@@ -166,8 +194,9 @@ func (i *identifier) callIntrospection(ctx context.Context, tok string) (map[str
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Accept", "application/json")
-		if i.cfg.ClientID != "" || i.cfg.ClientSecret != "" {
-			req.SetBasicAuth(i.cfg.ClientID, i.cfg.ClientSecret)
+		secret := i.currentClientSecret()
+		if i.cfg.ClientID != "" || secret != "" {
+			req.SetBasicAuth(i.cfg.ClientID, secret)
 		}
 		resp, err := i.http.Do(req)
 		if err != nil {
@@ -296,6 +325,7 @@ var knownKeys = map[string]struct{}{
 	"negativeTtl":  {},
 	"errorTtl":     {},
 	"resilience":   {},
+	"secrets":      {},
 }
 
 func factory(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
@@ -319,6 +349,11 @@ func factory(name string, raw map[string]any, deps module.Deps) (module.Identifi
 	}
 	if v, ok := raw["clientSecret"].(string); ok {
 		cfg.ClientSecret = v
+	}
+	secretsRaw, hasSecrets := raw["secrets"].([]any)
+	hasSecrets = hasSecrets && len(secretsRaw) > 0
+	if hasSecrets && cfg.ClientSecret != "" {
+		return nil, fmt.Errorf("%w: introspection %q: pick exactly one of clientSecret / secrets", module.ErrConfig, name)
 	}
 	if v, ok := raw["headerName"].(string); ok && v != "" {
 		cfg.HeaderName = v
@@ -346,7 +381,7 @@ func factory(name string, raw map[string]any, deps module.Deps) (module.Identifi
 	// the host injects the implicit in-memory default. TTLs remain a module
 	// concern (set per-Set call below in Identify).
 	prov := deps.CacheProvider()
-	return &identifier{
+	base := &identifier{
 		name:     name,
 		cfg:      cfg,
 		http:     &http.Client{Timeout: 5 * time.Second},
@@ -354,7 +389,15 @@ func factory(name string, raw map[string]any, deps module.Deps) (module.Identifi
 		negCache: prov.Cache("introspection.negative"),
 		errCache: prov.Cache("introspection.error"),
 		guard:    upstream.NewGuard(guardCfg),
-	}, nil
+	}
+	if hasSecrets {
+		entries, err := keyrotation.ParseSecretsConfig(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: introspection %q: %v", module.ErrConfig, name, err)
+		}
+		return buildRotatableIdentifier(base, entries), nil
+	}
+	return base, nil
 }
 
 func durationFrom(raw map[string]any, key string) (time.Duration, bool) {

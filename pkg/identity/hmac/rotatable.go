@@ -35,19 +35,19 @@ func (ri *rotatableIdentifier) KeyStates() []module.KeyStateMeta {
 }
 
 // buildRotatableIdentifier constructs an HMAC identifier backed by a
-// KeySet, using the shared secrets config format.
+// KeySet, using the shared secrets config format. Key resolution is
+// routed through the KeySet's state-aware Get (via base.lookupKey) rather
+// than a flat map, so a retired key is rejected instead of continuing to
+// verify signatures forever.
 func buildRotatableIdentifier(base *identifier, entries []keyrotation.SecretEntry) *rotatableIdentifier {
 	ks := keyrotation.NewKeySet[KeyEntry](nil)
-	keys := make(map[string]KeyEntry, len(entries))
 	for _, e := range entries {
-		ke := KeyEntry{
+		ks.Put(e.Meta, KeyEntry{
 			Secret:  e.Secret,
 			Subject: e.Subject,
 			Roles:   e.Roles,
-		}
-		ks.Put(e.Meta, ke)
-		keys[e.Meta.KID] = ke
+		})
 	}
-	base.keys = keys
+	base.lookupKey = ks.Get
 	return &rotatableIdentifier{identifier: *base, keyset: ks}
 }

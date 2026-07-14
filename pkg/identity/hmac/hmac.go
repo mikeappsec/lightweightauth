@@ -56,6 +56,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 )
 
@@ -69,6 +70,11 @@ import (
 //	requiredSignedHeaders: [host, date]         # default
 //	keys:
 //	  abc: { secret: "<base64>", subject: "service-a", roles: [machine] }
+//	# OR, for rotation support:
+//	secrets:
+//	  - kid: "v2"
+//	    secret: "<base64-or-utf8>"
+//	    notAfter: "2026-05-02T00:00:00Z"
 type Config struct {
 	Header                string              `yaml:"header" json:"header"`
 	Scheme                string              `yaml:"scheme" json:"scheme"`
@@ -76,6 +82,7 @@ type Config struct {
 	ClockSkew             time.Duration       `yaml:"clockSkew" json:"clockSkew"`
 	RequiredSignedHeaders []string            `yaml:"requiredSignedHeaders" json:"requiredSignedHeaders"`
 	Keys                  map[string]KeyEntry `yaml:"keys" json:"keys"`
+	Secrets               []any               `yaml:"secrets" json:"secrets"`
 }
 
 // KeyEntry is one HMAC key + its associated identity.
@@ -93,6 +100,19 @@ type identifier struct {
 	clockSkew       time.Duration
 	requiredHeaders []string // already lower-cased
 	keys            map[string]KeyEntry
+
+	// lookupKey, when set, replaces the flat keys map for key resolution.
+	// buildRotatableIdentifier sets this to a KeySet's state-aware Get so
+	// retired keys are rejected instead of matching the flat map forever.
+	lookupKey func(kid string) (KeyEntry, bool)
+}
+
+func (i *identifier) lookupEntry(kid string) (KeyEntry, bool) {
+	if i.lookupKey != nil {
+		return i.lookupKey(kid)
+	}
+	e, ok := i.keys[kid]
+	return e, ok
 }
 
 // canonical builds the canonical string. signedHeaders is the
@@ -188,7 +208,7 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	if err != nil {
 		return nil, fmt.Errorf("%w: hmac: %v", module.ErrInvalidCredential, err)
 	}
-	entry, ok := i.keys[parsed.keyID]
+	entry, ok := i.lookupEntry(parsed.keyID)
 	if !ok {
 		return nil, fmt.Errorf("%w: hmac: unknown keyId", module.ErrInvalidCredential)
 	}
@@ -348,6 +368,7 @@ var knownKeys = map[string]struct{}{
 	"clockSkew":             {},
 	"requiredSignedHeaders": {},
 	"keys":                  {},
+	"secrets":               {},
 }
 
 func factory(name string, raw map[string]any) (module.Identifier, error) {
@@ -392,10 +413,33 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	}
 	required = dedupStrings(required)
 
-	rawKeys, _ := raw["keys"].(map[string]any)
-	if len(rawKeys) == 0 {
-		return nil, fmt.Errorf("%w: hmac %q: keys map is required", module.ErrConfig, name)
+	base := &identifier{
+		name:            name,
+		header:          hdr,
+		scheme:          scheme,
+		dateHeader:      dateHdr,
+		clockSkew:       skew,
+		requiredHeaders: required,
 	}
+
+	rawKeys, _ := raw["keys"].(map[string]any)
+	secretsRaw, hasSecrets := raw["secrets"].([]any)
+	hasSecrets = hasSecrets && len(secretsRaw) > 0
+	switch n := boolCount(len(rawKeys) > 0, hasSecrets); {
+	case n > 1:
+		return nil, fmt.Errorf("%w: hmac %q: pick exactly one of keys / secrets", module.ErrConfig, name)
+	case n == 0:
+		return nil, fmt.Errorf("%w: hmac %q: one of keys / secrets is required", module.ErrConfig, name)
+	}
+
+	if hasSecrets {
+		entries, err := keyrotation.ParseSecretsConfig(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: hmac %q: %v", module.ErrConfig, name, err)
+		}
+		return buildRotatableIdentifier(base, entries), nil
+	}
+
 	keys := make(map[string]KeyEntry, len(rawKeys))
 	for kid, v := range rawKeys {
 		spec, ok := v.(map[string]any)
@@ -434,15 +478,19 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 		keys[kid] = entry
 	}
 
-	return &identifier{
-		name:            name,
-		header:          hdr,
-		scheme:          scheme,
-		dateHeader:      dateHdr,
-		clockSkew:       skew,
-		requiredHeaders: required,
-		keys:            keys,
-	}, nil
+	base.keys = keys
+	return base, nil
+}
+
+// boolCount returns how many of the given booleans are true.
+func boolCount(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
 }
 
 func dedupStrings(in []string) []string {

@@ -55,11 +55,27 @@ type identifier struct {
 	name           string
 	header         string
 	trustXFCC      bool
-	trustedRoots   *x509.CertPool // non-nil ⇒ chain-verify XFCC leaves
+	trustedRoots   *x509.CertPool // static pool; non-nil ⇒ chain-verify XFCC leaves
 	trustedIssuers map[string]struct{}
+
+	// caPool, when set, replaces the static trustedRoots for chain
+	// verification on every request — set when watchCAFile: true hot-
+	// reloads the CA bundle via CABundleWatcher, so a file change on disk
+	// takes effect without rebuilding the identifier.
+	caPool func() *x509.CertPool
 }
 
 func (i *identifier) Name() string { return i.name }
+
+// currentTrustedRoots returns the CertPool to chain-verify XFCC leaves
+// against: the dynamically-reloaded pool when caPool is set, otherwise the
+// static trustedRoots pool captured at construction.
+func (i *identifier) currentTrustedRoots() *x509.CertPool {
+	if i.caPool != nil {
+		return i.caPool()
+	}
+	return i.trustedRoots
+}
 
 func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Identity, error) {
 	cert, fromXFCC, err := i.extractCert(r)
@@ -75,12 +91,13 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 	// us a CA bundle, verify the chain. Without a CA bundle we fall
 	// back to the (legacy) Subject-DN allow-list, but that is a weak
 	// check by itself — see docs/modules/mtls.md.
-	if fromXFCC && i.trustedRoots != nil {
+	roots := i.currentTrustedRoots()
+	if fromXFCC && roots != nil {
 		// Security hardening: enforce ClientAuth EKU only. ExtKeyUsageAny
 		// short-circuits Go's x509 EKU check and would accept server certs,
 		// code-signing certs, etc. as valid client identities.
 		opts := x509.VerifyOptions{
-			Roots:     i.trustedRoots,
+			Roots:     roots,
 			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		}
 		if _, err := cert.Verify(opts); err != nil {
@@ -88,14 +105,14 @@ func (i *identifier) Identify(_ context.Context, r *module.Request) (*module.Ide
 		}
 	}
 
-	// MTLS-VULN-01: When the XFCC cert is NOT chain-verified (trustedRoots
-	// is nil), Go's x509.Verify is never called, which means NotBefore /
+	// MTLS-VULN-01: When the XFCC cert is NOT chain-verified (roots is
+	// nil), Go's x509.Verify is never called, which means NotBefore /
 	// NotAfter are never enforced. An attacker with access to an expired or
 	// not-yet-valid certificate could still authenticate. Validate temporal
 	// bounds explicitly on the XFCC path whenever chain verification was
 	// skipped. (PeerCerts path is fine — the TLS stack already rejected
 	// expired/future certs during the handshake.)
-	if fromXFCC && i.trustedRoots == nil {
+	if fromXFCC && roots == nil {
 		now := time.Now()
 		if now.Before(cert.NotBefore) {
 			return nil, fmt.Errorf("%w: mtls: xfcc certificate not yet valid (NotBefore: %s)",
@@ -258,9 +275,10 @@ type MtlsConfig struct {
 	TrustedCAFiles           []string `yaml:"trustedCAFiles" json:"trustedCAFiles"`
 	TrustedCAs               string   `yaml:"trustedCAs" json:"trustedCAs"`
 	TrustedIssuers           []string `yaml:"trustedIssuers" json:"trustedIssuers"`
+	CAWatch                  bool     `yaml:"watchCAFile" json:"watchCAFile"`
 }
 
-func factory(name string, raw map[string]any) (module.Identifier, error) {
+func factory(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
 	var cfg MtlsConfig
 	if err := module.DecodeConfig(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("mtls %q: %w", name, err)
@@ -269,6 +287,10 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	hdr := "X-Forwarded-Client-Cert"
 	if cfg.Header != "" {
 		hdr = cfg.Header
+	}
+
+	if cfg.CAWatch && (len(cfg.TrustedCAFiles) != 1 || cfg.TrustedCAs != "") {
+		return nil, fmt.Errorf("%w: mtls %q: watchCAFile: true requires exactly one trustedCAFiles entry and no trustedCAs (the watcher reloads only the single watched file)", module.ErrConfig, name)
 	}
 
 	pool, err := loadCAPool(cfg.TrustedCAFiles, cfg.TrustedCAs)
@@ -299,13 +321,28 @@ func factory(name string, raw map[string]any) (module.Identifier, error) {
 	if cfg.TrustForwardedClientCert && pool == nil {
 		return nil, fmt.Errorf("%w: mtls: trustForwardedClientCert: true requires a CA bundle (trustedCAFiles or trustedCAs) for cryptographic chain verification; trustedIssuers alone is not a trust anchor because the Issuer DN is self-declared and trivially forgeable", module.ErrConfig)
 	}
-	return &identifier{
+
+	id := &identifier{
 		name:           name,
 		header:         hdr,
 		trustXFCC:      cfg.TrustForwardedClientCert,
 		trustedRoots:   pool,
 		trustedIssuers: trusted,
-	}, nil
+	}
+
+	if cfg.CAWatch {
+		ctx := deps.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		watcher, err := NewCABundleWatcher(ctx, cfg.TrustedCAFiles[0], nil)
+		if err != nil {
+			return nil, fmt.Errorf("%w: mtls %q: watchCAFile: %v", module.ErrConfig, name, err)
+		}
+		id.caPool = watcher.Pool
+	}
+
+	return id, nil
 }
 
 // RevocationKeys implements module.RevocationChecker for the mTLS identifier.
@@ -333,4 +370,4 @@ func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []stri
 	return keys
 }
 
-func init() { module.RegisterIdentifier("mtls", factory) }
+func init() { module.RegisterIdentifierWithDeps("mtls", factory) }

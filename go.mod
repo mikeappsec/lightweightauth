@@ -6,6 +6,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/authzed/authzed-go v1.10.0
 	github.com/authzed/grpcutil v0.0.0-20260105210157-e237581949c2
+	github.com/beevik/etree v1.6.0
 	github.com/coder/websocket v1.8.15
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0
 	github.com/fsnotify/fsnotify v1.10.1
@@ -16,6 +17,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/russellhaering/goxmldsig v1.6.0
 	github.com/tetratelabs/wazero v1.11.0
 	github.com/valkey-io/valkey-go v1.0.74
 	go.opentelemetry.io/otel v1.43.0
@@ -75,6 +77,7 @@ require (
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/jzelinskie/stringz v0.0.3 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.4 // indirect

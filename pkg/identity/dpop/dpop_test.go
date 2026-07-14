@@ -73,11 +73,10 @@ func newFixture(t *testing.T, inner module.Identifier, skew time.Duration) *dpop
 	id := &identifier{
 		name: "dpop-test",
 		cfg: Config{
-			Required:        true,
-			Skew:            skew,
-			ReplayCacheSize: 64,
-			ProofHeader:     defaultProofHeader,
-			BearerHeader:    defaultBearerHeader,
+			Required:     true,
+			Skew:         skew,
+			ProofHeader:  defaultProofHeader,
+			BearerHeader: defaultBearerHeader,
 		},
 		inner:  inner,
 		replay: replay.New(nil),
@@ -688,11 +687,10 @@ func newRotatableFixture(t *testing.T, inner module.Identifier, skew time.Durati
 	id := &identifier{
 		name: "dpop-pinned-test",
 		cfg: Config{
-			Required:        true,
-			Skew:            skew,
-			ReplayCacheSize: 64,
-			ProofHeader:     defaultProofHeader,
-			BearerHeader:    defaultBearerHeader,
+			Required:     true,
+			Skew:         skew,
+			ProofHeader:  defaultProofHeader,
+			BearerHeader: defaultBearerHeader,
 		},
 		inner:  inner,
 		replay: replay.New(nil),
@@ -737,6 +735,37 @@ func TestPinnedKey_ActiveKey_Accepted(t *testing.T) {
 	}
 	if id.Subject != "bob" {
 		t.Fatalf("subject = %q, want bob", id.Subject)
+	}
+}
+
+// TestPinnedKey_RejectsTokenWithoutCnfJkt verifies the pinned-key
+// (rotatableIdentifier) path enforces the same cnf.jkt binding as the base
+// identifier (see TestDPoP_RejectsTokenWithoutCnfJkt). Regression test for
+// the bug where rotatableIdentifier.Identify's cnf.jkt check had no `else`
+// branch, silently accepting a valid proof from a pinned key paired with a
+// bearer token that carried no cnf.jkt at all — defeating proof-of-possession
+// specifically in the mode meant to be more secure.
+func TestPinnedKey_RejectsTokenWithoutCnfJkt(t *testing.T) {
+	accessToken := "pinned-no-cnf-token"
+	inner := &capturingIdentifier{
+		name:   "introspect",
+		claims: map[string]any{}, // no cnf.jkt
+	}
+	f, ri, clk := newRotatableFixture(t, inner, 30*time.Second)
+
+	// Register the key as active (no bounds) — the proof itself is
+	// legitimately signed by a pinned key, only the inner identity lacks
+	// cnf.jkt.
+	ri.pinned.Put(keyrotation.KeyMeta{KID: "key-v1"}, f.thumb)
+
+	sum := sha256.Sum256([]byte(accessToken))
+	ath := base64.RawURLEncoding.EncodeToString(sum[:])
+	proof := f.signProof(t, "GET", "https://api.example/data", "jti-pinned-no-cnf", clk.Now(), ath)
+
+	r := reqDPoP("GET", "api.example", "/data", proof, accessToken)
+	_, err := ri.Identify(context.Background(), r)
+	if !errors.Is(err, module.ErrInvalidCredential) {
+		t.Fatalf("err = %v, want ErrInvalidCredential (token without cnf.jkt must be rejected via the pinned-key path too)", err)
 	}
 }
 

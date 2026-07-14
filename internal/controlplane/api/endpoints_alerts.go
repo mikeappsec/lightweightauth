@@ -160,7 +160,18 @@ func (s *Server) handlePutRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate the override set before persisting: each rule must have
-	// a unique name and a sane (positive) For/Window when Enabled.
+	// a unique name. The Query and Source fields are rejected —
+	// operators can only override Threshold, For, Window, Enabled,
+	// and Severity on existing built-in rules. This prevents
+	// PromQL/LogQL injection via the API: the built-in catalog's
+	// queries are operator-reviewed at compile time and cannot be
+	// replaced at runtime.
+	knownRules := map[string]bool{}
+	if s.AlertEngine != nil {
+		for _, r := range s.AlertEngine.Rules() {
+			knownRules[r.Name] = true
+		}
+	}
 	seen := map[string]bool{}
 	for i, r := range req.Overrides {
 		if r.Name == "" {
@@ -172,6 +183,25 @@ func (s *Server) handlePutRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[r.Name] = true
+		// Reject custom rules (name not in the built-in catalog) —
+		// only overrides of existing defaults are allowed via the
+		// API. New custom rules must be added to the ConfigMap
+		// directly by the operator.
+		if !knownRules[r.Name] {
+			writeError(w, http.StatusBadRequest, "override["+strconv.Itoa(i)+"]: unknown rule name "+strconv.Quote(r.Name)+" — only overrides of built-in rules are allowed via the API")
+			return
+		}
+		// Reject Query and Source overrides — these are the
+		// PromQL/LogQL injection vectors. Operators who need to
+		// change a query must edit the ConfigMap directly.
+		if r.Query != "" {
+			writeError(w, http.StatusBadRequest, "override["+strconv.Itoa(i)+"]: query field cannot be set via the API — edit the ConfigMap directly")
+			return
+		}
+		if r.Source != "" {
+			writeError(w, http.StatusBadRequest, "override["+strconv.Itoa(i)+"]: source field cannot be set via the API — edit the ConfigMap directly")
+			return
+		}
 	}
 	if err := s.RulesLoader.PutRules(r.Context(), req.Overrides); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
