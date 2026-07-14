@@ -18,31 +18,16 @@ service:
   port: 8443
   nodePort: ""  # only used when type is NodePort
 
-# Ingress exposes the control plane outside the cluster. Disabled by
-# default — operators enable by setting `ingress.enabled: true` and
-# populating the `hosts` list. Template requires the `ingress` block
-# to exist (even when disabled) so this section is preserved as a
-# stub rather than relying on nil-evaluation of `.Values.ingress`.
-ingress:
-  enabled: false
-  ingressClassName: ""
-  annotations: {}
-  hosts: []
-    # - host: console.example.com
-    #   paths:
-    #     - path: /
-    #       pathType: Prefix
-  tls: []
-    # - secretName: console-tls
-    #   hosts:
-    #     - console.example.com
-
-# HTTPRoute exposes the control plane via Gateway API, as an alternative to
-# the classic Ingress above (e.g. for a Cilium Gateway API installation).
-# Disabled by default — operators enable by setting `gatewayRoute.enabled:
-# true` plus `parentRefs` and `hostnames`. TLS terminates at the Gateway's
-# listener, not here, so there is no tls block. Both `ingress` and
-# `gatewayRoute` may be enabled at the same time during a migration.
+# HTTPRoute exposes the control plane via Gateway API (e.g. Cilium's Gateway
+# API implementation). Disabled by default — operators enable by setting
+# `gatewayRoute.enabled: true` plus `parentRefs` and `hostnames`. TLS
+# terminates at the Gateway's listener, not here, so there is no tls block.
+#
+# A classic networking.k8s.io/v1 Ingress template previously lived here;
+# removed in 0.3.0 as part of migrating this project's own deployment from
+# ingress-nginx to Gateway API. Breaking change for any other deployment
+# still using it: pin to <0.3.0, or reintroduce templates/ingress.yaml from
+# git history.
 gatewayRoute:
   enabled: false
   parentRefs: []
