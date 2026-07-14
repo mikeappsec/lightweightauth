@@ -5,6 +5,20 @@
 // backend-validated JSON, never arbitrary free-form YAML with
 // anchors/multiline block scalars, so a per-line regex pass covers it
 // without pulling in a full grammar (Shiki/Prism) for two languages.
+//
+// Secret handling: /v1/controlplane/instances/{cluster}/{name}/config*
+// responses (GET, the POST-push echo, /config/history, /config/rollback)
+// are now redacted server-side (internal/controlplane/configmgmt/redact.go)
+// with structural knowledge this regex can't have — e.g. apikey's
+// `static` mode stores raw API keys as map KEYS, which no key-name
+// pattern can ever catch. The masking here is now defense-in-depth /
+// preview-path coverage only, for: the create-instance wizard's preview
+// (deliberately left unredacted server-side — it's the same user's own
+// just-typed input in the same session, never persisted), and as a second
+// independent check against a gap in the server's rule table. It cannot
+// catch a secret-as-map-key pattern; only the server-side redaction does.
+// Don't "fix" this regex chasing a case that's actually solved server-side
+// — check redact.go's moduleRules first.
 
 export type TokenKind =
   | "key"
@@ -25,9 +39,12 @@ export type CodeLanguage = "yaml" | "json";
 
 // Key names whose inline scalar value gets classified as "secret".
 // Deliberately narrow: caBundle/cert/trustedCAs are public material an
-// operator needs to actually read to verify, so they're excluded.
+// operator needs to actually read to verify, so they're excluded. Keep
+// in sync with the Go-side heuristicSecretKeyRE in redact.go (used for
+// module types with no explicit rule table entry) — the two exist to
+// catch each other's gaps, so drift between them quietly reopens one.
 const SECRET_KEY_RE =
-  /\b(secret|password|passphrase|token|api[_-]?key|private[_-]?key|signing[_-]?key|client[_-]?secret|credential)\b/i;
+  /\b(secret|password|passphrase|token|api[_-]?key|private[_-]?key|signing[_-]?key|client[_-]?secret|credential|hash)\b/i;
 
 function isSecretKey(key: string): boolean {
   return SECRET_KEY_RE.test(key.trim());
