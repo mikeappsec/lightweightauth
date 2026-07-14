@@ -10,11 +10,18 @@ rules:
     resources: ["lwauthinstances", "lwauthinstances/status", "proxyroutes", "proxyroutes/status", "authconfigs", "authconfigs/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Deployments, Services, PDBs managed by the controller.
+  # deletecollection is required in addition to delete: handleDeleteInstance
+  # tears down instance resources via client.DeleteAllOf (a label-selector
+  # bulk delete), which Kubernetes authorizes under deletecollection, not
+  # delete -- delete alone only covers single-object DELETE-by-name calls.
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
   - apiGroups: [""]
-    resources: ["services", "serviceaccounts", "endpoints", "configmaps", "secrets"]
+    resources: ["services", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts", "endpoints"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
