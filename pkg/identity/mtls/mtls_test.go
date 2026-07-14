@@ -104,7 +104,7 @@ func makeCAandLeaf(t *testing.T, caCN, leafCN, spiffeID string) (caPEM, leafPEM 
 func TestMTLS_PeerCertsPath(t *testing.T) {
 	t.Parallel()
 	der, _ := makeCert(t, "alice", "Corp Root", "")
-	id, err := factory("mtls", map[string]any{})
+	id, err := factory("mtls", map[string]any{}, module.Deps{})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestMTLS_XFCCPath(t *testing.T) {
 		"trustForwardedClientCert": true,
 		"trustedCAs":               caPEM,
 		"trustedIssuers":           []any{"CN=Test CA"},
-	})
+	}, module.Deps{})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestMTLS_XFCC_DefaultIgnored(t *testing.T) {
 	xfcc := `Cert="` + url.QueryEscape(pemStr) + `";Subject="CN=admin"`
 
 	// Default factory: trustForwardedClientCert is false.
-	id, err := factory("mtls", map[string]any{})
+	id, err := factory("mtls", map[string]any{}, module.Deps{})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestMTLS_XFCC_SelfSignedRejectedByCAPool(t *testing.T) {
 		"trustForwardedClientCert": true,
 		"trustedCAs":               caPEM,
 		"trustedIssuers":           []any{"CN=Corp Root CA"},
-	})
+	}, module.Deps{})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestMTLS_XFCC_TrustedChainAccepted(t *testing.T) {
 	id, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
 		"trustedCAs":               caPEM,
-	})
+	}, module.Deps{})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestMTLS_CAPoolRequiresTrustFlag(t *testing.T) {
 	_, err := factory("mtls", map[string]any{
 		"trustedCAs": caPEM,
 		// trustForwardedClientCert deliberately omitted
-	})
+	}, module.Deps{})
 	if err == nil {
 		t.Fatal("factory accepted trustedCAs without trustForwardedClientCert")
 	}
@@ -294,7 +294,7 @@ func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 	// Bare trust=true with no anchor: must fail.
 	if _, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
-	}); err == nil {
+	}, module.Deps{}); err == nil {
 		t.Fatal("factory accepted trustForwardedClientCert: true without any anchor")
 	}
 
@@ -302,7 +302,7 @@ func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 	if _, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
 		"trustedIssuers":           []any{},
-	}); err == nil {
+	}, module.Deps{}); err == nil {
 		t.Fatal("factory accepted trustForwardedClientCert: true with empty trustedIssuers")
 	}
 
@@ -311,7 +311,7 @@ func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 	if _, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
 		"trustedIssuers":           []any{"CN=Corp Root CA"},
-	}); err == nil {
+	}, module.Deps{}); err == nil {
 		t.Fatal("factory accepted trustForwardedClientCert: true with only trustedIssuers (must require CA pool)")
 	}
 
@@ -320,7 +320,7 @@ func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 	if _, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
 		"trustedCAs":               caPEM,
-	}); err != nil {
+	}, module.Deps{}); err != nil {
 		t.Errorf("trustedCAs anchor rejected: %v", err)
 	}
 
@@ -329,7 +329,7 @@ func TestMTLS_TrustFlagRequiresAnchor(t *testing.T) {
 		"trustForwardedClientCert": true,
 		"trustedCAs":               caPEM,
 		"trustedIssuers":           []any{"CN=Corp Root CA"},
-	}); err != nil {
+	}, module.Deps{}); err != nil {
 		t.Errorf("trustedCAs + trustedIssuers anchor rejected: %v", err)
 	}
 }
@@ -370,7 +370,7 @@ func TestMTLS_XFCC_ExpiredCertRejected(t *testing.T) {
 	id, err := factory("mtls", map[string]any{
 		"trustForwardedClientCert": true,
 		"trustedCAs":               caPEM,
-	})
+	}, module.Deps{})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestMTLS_TrustedIssuersAllowList(t *testing.T) {
 	der, _ := makeCert(t, "carol", "Untrusted CA", "")
 	id, _ := factory("mtls", map[string]any{
 		"trustedIssuers": []any{"CN=Corp Root"},
-	})
+	}, module.Deps{})
 	_, err := id.Identify(context.Background(), &module.Request{PeerCerts: der})
 	if !errors.Is(err, module.ErrInvalidCredential) {
 		t.Fatalf("err = %v, want ErrInvalidCredential", err)
@@ -397,7 +397,7 @@ func TestMTLS_TrustedIssuersAllowList(t *testing.T) {
 
 func TestMTLS_NoCertNoMatch(t *testing.T) {
 	t.Parallel()
-	id, _ := factory("mtls", map[string]any{})
+	id, _ := factory("mtls", map[string]any{}, module.Deps{})
 	_, err := id.Identify(context.Background(), &module.Request{})
 	if !errors.Is(err, module.ErrNoMatch) {
 		t.Fatalf("err = %v, want ErrNoMatch", err)
@@ -409,7 +409,7 @@ func TestMTLS_RejectsUnknownConfigKey(t *testing.T) {
 	_, err := factory("m", map[string]any{
 		"header":    "X-Client-Cert",
 		"allowList": []any{"cn=admin"},
-	})
+	}, module.Deps{})
 	if err == nil {
 		t.Fatal("expected error for unknown config key, got nil")
 	}
