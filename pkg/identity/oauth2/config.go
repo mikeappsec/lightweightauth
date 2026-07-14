@@ -34,6 +34,7 @@ var knownKeys = map[string]struct{}{
 	"scopes":               {},
 	"allowedRedirectHosts": {},
 	"cookie":               {},
+	"secrets":              {},
 }
 
 func parseConfig(raw map[string]any) (Config, error) {
@@ -101,13 +102,21 @@ func buildCookieStore(cfg CookieConfig, defaultName string, defaultMaxAge time.D
 	if name == "" {
 		name = defaultName
 	}
-	return buildCookieStoreNamed(cfg, name, defaultMaxAge)
+	return buildCookieStoreNamed(cfg, name, defaultMaxAge, false)
 }
 
 // buildCookieStoreNamed forces the cookie name (used to mint the
 // short-lived flow cookie under a distinct name without interfering with
 // the user-configured session cookie name).
-func buildCookieStoreNamed(cfg CookieConfig, name string, defaultMaxAge time.Duration) (*session.CookieStore, error) {
+//
+// forceLax clamps SameSite=Strict down to Lax. It must be true for the
+// flow cookie (state + PKCE verifier): the IdP redirects the browser back
+// to /oauth2/callback as a cross-site top-level navigation, and browsers
+// never send a SameSite=Strict cookie on that navigation — a Strict flow
+// cookie would make every login fail regardless of the operator's
+// cookie.sameSite choice for the long-lived session cookie, which forceLax
+// leaves untouched (false at that call site).
+func buildCookieStoreNamed(cfg CookieConfig, name string, defaultMaxAge time.Duration, forceLax bool) (*session.CookieStore, error) {
 	maxAge := defaultMaxAge
 	if cfg.MaxAge != "" && name == cfg.Name {
 		// Only the long-lived session honours the user MaxAge; the flow
@@ -118,6 +127,10 @@ func buildCookieStoreNamed(cfg CookieConfig, name string, defaultMaxAge time.Dur
 		}
 		maxAge = d
 	}
+	sameSite := parseSameSite(cfg.SameSite)
+	if forceLax && sameSite == http.SameSiteStrictMode {
+		sameSite = http.SameSiteLaxMode
+	}
 	sc := session.CookieStoreConfig{
 		Name:     name,
 		Secret:   []byte(cfg.Secret),
@@ -126,7 +139,7 @@ func buildCookieStoreNamed(cfg CookieConfig, name string, defaultMaxAge time.Dur
 		MaxAge:   maxAge,
 		Secure:   cfg.Secure,
 		HTTPOnly: cfg.HTTPOnly,
-		SameSite: parseSameSite(cfg.SameSite),
+		SameSite: sameSite,
 	}
 	return session.NewCookieStore(sc)
 }

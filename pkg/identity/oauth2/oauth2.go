@@ -38,6 +38,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	jwtlib "github.com/lestrrat-go/jwx/v2/jwt"
 
+	"github.com/mikeappsec/lightweightauth/pkg/keyrotation"
 	"github.com/mikeappsec/lightweightauth/pkg/module"
 	"github.com/mikeappsec/lightweightauth/pkg/session"
 )
@@ -155,6 +156,37 @@ type identifier struct {
 	refreshSF singleflight.Group
 
 	jwtParseOpts []jwtlib.ParseOption
+
+	// resolveClientSecret, when set, replaces oauth.ClientSecret for token
+	// exchange/refresh/device-poll calls. buildRotatableIdentifier sets
+	// this to resolve the current active secret from a KeySet, so
+	// rotation takes effect without mutating the shared oauth config in
+	// place (which would race under concurrent requests).
+	resolveClientSecret func() (string, bool)
+}
+
+// currentOAuthConfig returns the *oauth2.Config to use for a single
+// token-endpoint call. When resolveClientSecret is set, it returns a COPY
+// with ClientSecret replaced by the currently active secret; the shared
+// i.oauth is never mutated in place.
+func (i *identifier) currentOAuthConfig() *oauth2.Config {
+	if i.resolveClientSecret == nil {
+		return i.oauth
+	}
+	cfg := *i.oauth
+	cfg.ClientSecret = i.currentClientSecret()
+	return &cfg
+}
+
+// currentClientSecret returns the secret to use for a single token-endpoint
+// call: the dynamically-resolved active secret when resolveClientSecret is
+// set, otherwise the static oauth.ClientSecret.
+func (i *identifier) currentClientSecret() string {
+	if i.resolveClientSecret != nil {
+		s, _ := i.resolveClientSecret()
+		return s
+	}
+	return i.oauth.ClientSecret
 }
 
 // Compile-time guards.
@@ -200,7 +232,7 @@ func reqFromHeaders(h map[string][]string) *http.Request {
 	return &http.Request{Header: hdr}
 }
 
-func newIdentifier(name string, cfg Config) (*identifier, error) {
+func newIdentifier(ctx context.Context, name string, cfg Config) (*identifier, error) {
 	if cfg.ClientID == "" || cfg.AuthURL == "" || cfg.TokenURL == "" || cfg.JWKSURL == "" {
 		return nil, fmt.Errorf("%w: oauth2: clientId, authUrl, tokenUrl, jwksUrl are required", module.ErrConfig)
 	}
@@ -225,12 +257,12 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 		return nil, fmt.Errorf("%w: oauth2 session cookie: %v", module.ErrConfig, err)
 	}
 	flowName := "_lwauth_oauth2_flow"
-	flow, err := buildCookieStoreNamed(cfg.Cookie, flowName, 10*time.Minute)
+	flow, err := buildCookieStoreNamed(cfg.Cookie, flowName, 10*time.Minute, true)
 	if err != nil {
 		return nil, fmt.Errorf("%w: oauth2 flow cookie: %v", module.ErrConfig, err)
 	}
 
-	cache := jwk.NewCache(context.Background())
+	cache := jwk.NewCache(ctx)
 	if err := cache.Register(cfg.JWKSURL); err != nil {
 		return nil, fmt.Errorf("%w: oauth2 jwks register: %v", module.ErrConfig, err)
 	}
@@ -290,12 +322,32 @@ func newIdentifier(name string, cfg Config) (*identifier, error) {
 	}, nil
 }
 
-func factory(name string, raw map[string]any) (module.Identifier, error) {
+func factory(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
 	}
-	return newIdentifier(name, cfg)
+	secretsRaw, hasSecrets := raw["secrets"].([]any)
+	hasSecrets = hasSecrets && len(secretsRaw) > 0
+	if hasSecrets && cfg.ClientSecret != "" {
+		return nil, fmt.Errorf("%w: oauth2 %q: pick exactly one of clientSecret / secrets", module.ErrConfig, name)
+	}
+	ctx := deps.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	id, err := newIdentifier(ctx, name, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if hasSecrets {
+		entries, err := keyrotation.ParseSecretsConfig(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: oauth2 %q: %v", module.ErrConfig, name, err)
+		}
+		return buildRotatableIdentifier(id, entries), nil
+	}
+	return id, nil
 }
 
 // RevocationKeys implements module.RevocationChecker for the OAuth2 identifier.
@@ -323,4 +375,4 @@ func (i *identifier) RevocationKeys(id *module.Identity, tenantID string) []stri
 	return keys
 }
 
-func init() { module.RegisterIdentifier("oauth2", factory) }
+func init() { module.RegisterIdentifierWithDeps("oauth2", factory) }

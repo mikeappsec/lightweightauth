@@ -141,7 +141,7 @@ func (i *identifier) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := i.oauth.Exchange(
+	tok, err := i.currentOAuthConfig().Exchange(
 		r.Context(),
 		code,
 		oauth2.SetAuthURLParam("code_verifier", flow.Verifier),
@@ -407,7 +407,7 @@ func (i *identifier) doRefresh(ctx context.Context, w http.ResponseWriter, r *ht
 // doRefreshOnce is the actual token exchange; called at most once per
 // concurrent batch of requests for the same session.
 func (i *identifier) doRefreshOnce(ctx context.Context, w http.ResponseWriter, r *http.Request, s *session.Session) (*session.Session, error) {
-	src := i.oauth.TokenSource(ctx, &oauth2.Token{
+	src := i.currentOAuthConfig().TokenSource(ctx, &oauth2.Token{
 		RefreshToken: s.RefreshToken,
 	})
 	tok, err := src.Token()
