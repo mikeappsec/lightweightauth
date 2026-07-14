@@ -37,6 +37,21 @@ ingress:
     #   hosts:
     #     - console.example.com
 
+# HTTPRoute exposes the control plane via Gateway API, as an alternative to
+# the classic Ingress above (e.g. for a Cilium Gateway API installation).
+# Disabled by default — operators enable by setting `gatewayRoute.enabled:
+# true` plus `parentRefs` and `hostnames`. TLS terminates at the Gateway's
+# listener, not here, so there is no tls block. Both `ingress` and
+# `gatewayRoute` may be enabled at the same time during a migration.
+gatewayRoute:
+  enabled: false
+  parentRefs: []
+    # - name: lwauth-gateway
+    #   namespace: lwauth-system
+    #   sectionName: https
+  hostnames: []
+    # - console.example.com
+
 resources:
   requests:
     cpu: 100m
