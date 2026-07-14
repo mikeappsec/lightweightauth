@@ -17,7 +17,6 @@
 //	                                   # missing DPoP header passes through
 //	                                   # to the inner identifier as a plain bearer.
 //	      skew: 30s                   # default 30s on iat
-//	      replayCacheSize: 10000      # default 10000
 //	      proofHeader: DPoP           # default DPoP
 //	      bearerHeader: Authorization # default Authorization, used to
 //	                                   # compute `ath` and to detect
@@ -68,21 +67,19 @@ import (
 )
 
 const (
-	defaultSkew          = 30 * time.Second
-	defaultReplayEntries = 10_000
-	defaultProofHeader   = "DPoP"
-	defaultBearerHeader  = "Authorization"
-	dpopJWTType          = "dpop+jwt"
+	defaultSkew         = 30 * time.Second
+	defaultProofHeader  = "DPoP"
+	defaultBearerHeader = "Authorization"
+	dpopJWTType         = "dpop+jwt"
 )
 
 // Config is the YAML/CRD shape understood by the dpop identifier.
 type Config struct {
-	Required        bool
-	Skew            time.Duration
-	ReplayCacheSize int
-	ProofHeader     string
-	BearerHeader    string
-	Inner           InnerSpec
+	Required     bool
+	Skew         time.Duration
+	ProofHeader  string
+	BearerHeader string
+	Inner        InnerSpec
 }
 
 // InnerSpec names the wrapped identifier. The dpop identifier resolves
@@ -147,22 +144,8 @@ func (i *identifier) Identify(ctx context.Context, r *module.Request) (*module.I
 	}
 
 	// Confirmation-claim binding (RFC 9449 §6.1 / RFC 7800 cnf.jkt).
-	// When DPoP is required AND an access token is present, the inner
-	// identity MUST carry cnf.jkt. Without it, the proof-of-possession
-	// binding is absent and a stolen token can be replayed with any key.
-	jkt, hasCnf := extractCnfJkt(id)
-	if hasCnf {
-		thumb, terr := jwkThumbprintB64(jwkProof)
-		if terr != nil {
-			return nil, fmt.Errorf("%w: dpop: thumbprint: %v", module.ErrInvalidCredential, terr)
-		}
-		if thumb != jkt {
-			return nil, fmt.Errorf("%w: dpop: cnf.jkt mismatch", module.ErrInvalidCredential)
-		}
-	} else if i.cfg.Required && bearerToken(r, i.cfg.BearerHeader) != "" {
-		// DPoP is required and a token is present but the token lacks
-		// cnf.jkt — this defeats proof-of-possession. Reject.
-		return nil, fmt.Errorf("%w: dpop: token missing cnf.jkt (required for DPoP-bound tokens)", module.ErrInvalidCredential)
+	if err := enforceCnfBinding(i.cfg, id, jwkProof, bearerToken(r, i.cfg.BearerHeader) != ""); err != nil {
+		return nil, err
 	}
 
 	// ath binding (RFC 9449 §4.3 step 11). Computed against whatever
@@ -353,6 +336,35 @@ func extractCnfJkt(id *module.Identity) (string, bool) {
 	return "", false
 }
 
+// enforceCnfBinding implements the confirmation-claim binding step shared
+// by identifier.Identify and rotatableIdentifier.Identify (RFC 9449 §6.1 /
+// RFC 7800 cnf.jkt). When DPoP is required AND an access token is present,
+// the inner identity MUST carry cnf.jkt matching the proof key's
+// thumbprint. Without it, proof-of-possession binding is absent and a
+// stolen token can be replayed with any key. Both call sites MUST route
+// through this helper rather than reimplementing the if/else-if — the two
+// copies previously drifted, with the pinned-key path silently skipping
+// the "missing cnf.jkt" rejection entirely.
+func enforceCnfBinding(cfg Config, id *module.Identity, jwkProof jwk.Key, hasBearer bool) error {
+	jkt, hasCnf := extractCnfJkt(id)
+	if hasCnf {
+		thumb, terr := jwkThumbprintB64(jwkProof)
+		if terr != nil {
+			return fmt.Errorf("%w: dpop: thumbprint: %v", module.ErrInvalidCredential, terr)
+		}
+		if thumb != jkt {
+			return fmt.Errorf("%w: dpop: cnf.jkt mismatch", module.ErrInvalidCredential)
+		}
+		return nil
+	}
+	if cfg.Required && hasBearer {
+		// DPoP is required and a token is present but the token lacks
+		// cnf.jkt — this defeats proof-of-possession. Reject.
+		return fmt.Errorf("%w: dpop: token missing cnf.jkt (required for DPoP-bound tokens)", module.ErrInvalidCredential)
+	}
+	return nil
+}
+
 func bearerToken(r *module.Request, header string) string {
 	v := r.Header(header)
 	if v == "" {
@@ -410,13 +422,12 @@ func (i *identifier) rewriteAuthForInner(r *module.Request) *module.Request {
 }
 
 var knownKeys = map[string]struct{}{
-	"required":        {},
-	"skew":            {},
-	"replayCacheSize": {},
-	"proofHeader":     {},
-	"bearerHeader":    {},
-	"inner":           {},
-	"pinnedKeys":      {},
+	"required":     {},
+	"skew":         {},
+	"proofHeader":  {},
+	"bearerHeader": {},
+	"inner":        {},
+	"pinnedKeys":   {},
 }
 
 func factory(name string, raw map[string]any, deps module.Deps) (module.Identifier, error) {
@@ -424,22 +435,16 @@ func factory(name string, raw map[string]any, deps module.Deps) (module.Identifi
 		return nil, err
 	}
 	cfg := Config{
-		Required:        true,
-		Skew:            defaultSkew,
-		ReplayCacheSize: defaultReplayEntries,
-		ProofHeader:     defaultProofHeader,
-		BearerHeader:    defaultBearerHeader,
+		Required:     true,
+		Skew:         defaultSkew,
+		ProofHeader:  defaultProofHeader,
+		BearerHeader: defaultBearerHeader,
 	}
 	if v, ok := raw["required"].(bool); ok {
 		cfg.Required = v
 	}
 	if d, ok := durationFrom(raw, "skew"); ok {
 		cfg.Skew = d
-	}
-	if v, ok := raw["replayCacheSize"].(int); ok && v > 0 {
-		cfg.ReplayCacheSize = v
-	} else if v, ok := raw["replayCacheSize"].(float64); ok && v > 0 {
-		cfg.ReplayCacheSize = int(v)
 	}
 	if v, ok := raw["proofHeader"].(string); ok && v != "" {
 		cfg.ProofHeader = v

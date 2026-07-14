@@ -24,7 +24,9 @@ identifiers:
       proofHeader:  DPoP             # default
       bearerHeader: Authorization    # default
       skew: 30s                      # iat tolerance; jti replay TTL = 2·skew
-      replayCacheSize: 10000         # in-process; switches to valkey if AuthConfig.cache.backend = valkey
+      # replay cache is sized via the top-level `caches:` block
+      # (pool name "replay"), not a per-identifier field — see
+      # docs/cookbook/dpop-sender-binding.md #6.
 
       inner:
         type: jwt                    # any registered Identifier

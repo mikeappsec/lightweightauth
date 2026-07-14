@@ -73,11 +73,11 @@ func (ri *rotatableIdentifier) Identify(ctx context.Context, r *module.Request) 
 		return nil, err
 	}
 
-	// cnf.jkt binding.
-	if jkt, ok := extractCnfJkt(id); ok {
-		if thumb != jkt {
-			return nil, fmt.Errorf("%w: dpop: cnf.jkt mismatch", module.ErrInvalidCredential)
-		}
+	// cnf.jkt binding — shared with the base identifier so this check
+	// can't drift between the two Identify paths again (see
+	// enforceCnfBinding's doc comment in dpop.go).
+	if err := enforceCnfBinding(ri.cfg, id, jwkProof, bearerToken(r, ri.cfg.BearerHeader) != ""); err != nil {
+		return nil, err
 	}
 
 	// ath binding.
