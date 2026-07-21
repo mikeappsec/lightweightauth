@@ -14,6 +14,7 @@ import {
   type QuickTestResponse,
 } from "../api/client";
 import { Copy, Send, Globe, Server as ServerIcon, Shield, ChevronDown, ChevronUp, ExternalLink } from "lucide-solid";
+import { Reveal } from "../components/Reveal";
 
 export default function InstanceDetail() {
   const params = useParams<{ cluster: string; name: string }>();
@@ -26,6 +27,7 @@ export default function InstanceDetail() {
 
   // Sparkline history from WebSocket.
   const [history, setHistory] = createSignal<InstanceMetrics[]>([]);
+  const [updateTick, setUpdateTick] = createSignal(0);
 
   createEffect(() => {
     const ws = new WebSocket(metricsStreamUrl());
@@ -40,6 +42,7 @@ export default function InstanceDetail() {
             const next = [...prev, m];
             return next.length > 60 ? next.slice(-60) : next; // ~2min at 2s intervals
           });
+          setUpdateTick((t) => t + 1);
         }
       } catch { /* ignore */ }
     };
@@ -49,12 +52,12 @@ export default function InstanceDetail() {
   return (
     <div>
       <div class="flex items-center justify-between mb-6">
-        <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+        <h2 class="font-display text-2xl font-semibold text-gray-900 dark:text-gray-100">
           Instance: <span class="font-mono">{params.name}</span>
         </h2>
         <A
           href={`/instances/${params.cluster}/${params.name}/config`}
-          class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+          class="px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm rounded-lg shadow-[0_0_20px_-6px_rgba(99,102,241,0.5)] transition-all"
         >
           Edit Config
         </A>
@@ -65,9 +68,10 @@ export default function InstanceDetail() {
         <p class="text-red-600 dark:text-red-400">Error: {(instance.error as Error).message}</p>
       )}
       {instance.data && (
+        <Reveal>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Info panel */}
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+          <div class="bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-4">
             <h3 class="font-medium text-gray-700 dark:text-gray-300 mb-3">Instance Info</h3>
             <dl class="grid grid-cols-2 gap-y-2 text-sm">
               <dt class="text-gray-500 dark:text-gray-400">Name</dt>
@@ -86,7 +90,7 @@ export default function InstanceDetail() {
           </div>
 
           {/* Status panel */}
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+          <div class="bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-4">
             <h3 class="font-medium text-gray-700 dark:text-gray-300 mb-3">Health Status</h3>
             <dl class="grid grid-cols-2 gap-y-2 text-sm">
               <dt class="text-gray-500 dark:text-gray-400">Healthy</dt>
@@ -124,6 +128,7 @@ export default function InstanceDetail() {
             </dl>
           </div>
         </div>
+        </Reveal>
       )}
 
       {/* Metrics sparklines (Phase 4) */}
@@ -135,21 +140,25 @@ export default function InstanceDetail() {
               label="Decision Rate"
               unit="/s"
               data={history().map((m) => m.decisionRate)}
+              updateTick={updateTick()}
             />
             <SparklineCard
               label="Latency P50"
               unit="ms"
               data={history().map((m) => m.latencyP50Ms)}
+              updateTick={updateTick()}
             />
             <SparklineCard
               label="Latency P99"
               unit="ms"
               data={history().map((m) => m.latencyP99Ms)}
+              updateTick={updateTick()}
             />
             <SparklineCard
               label="Cache Hit Ratio"
               unit="%"
               data={history().map((m) => m.cacheHitRatio * 100)}
+              updateTick={updateTick()}
             />
           </div>
         </div>
@@ -184,7 +193,7 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
   return (
     <div class="mt-6">
       <h3 class="text-lg font-medium mb-3 flex items-center gap-2 text-gray-900 dark:text-gray-100">
-        <Globe size={18} class="text-blue-600 dark:text-blue-400" />
+        <Globe size={18} class="text-indigo-600 dark:text-indigo-400" />
         Endpoints
       </h3>
 
@@ -193,26 +202,27 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
       </Show>
 
       <Show when={endpoints.data}>
+        <Reveal>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* CP Proxy — primary external access path */}
           {(() => {
             const proxyBase = () => `${window.location.origin}${endpoints.data!.proxyPath}`;
             const authorizeUrl = () => `${proxyBase()}/v1/authorize`;
             return (
-              <div class="lg:col-span-2 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-500/10 dark:to-indigo-500/10 border border-blue-200 dark:border-blue-500/30 rounded-xl p-4">
+              <div class="lg:col-span-2 glass-panel bg-gradient-to-r from-indigo-50 to-violet-50 dark:from-indigo-500/10 dark:to-violet-500/10 border border-indigo-200 dark:border-indigo-500/30 rounded-2xl p-4">
                 <div class="flex items-start justify-between mb-3">
                   <div>
-                    <h4 class="text-sm font-semibold text-blue-900 dark:text-blue-300 flex items-center gap-1.5">
-                      <ExternalLink size={14} class="text-blue-600 dark:text-blue-400" />
+                    <h4 class="text-sm font-semibold text-indigo-900 dark:text-indigo-300 flex items-center gap-1.5">
+                      <ExternalLink size={14} class="text-indigo-600 dark:text-indigo-400" />
                       CP Proxy (recommended external endpoint)
                     </h4>
-                    <p class="text-[11px] text-blue-700 dark:text-blue-400 mt-0.5">
+                    <p class="text-[11px] text-indigo-700 dark:text-indigo-400 mt-0.5">
                       This node is only reachable externally through the control plane proxy. The node's Service is cluster-internal only.
                     </p>
                   </div>
                   <button
                     onClick={() => copyText(proxyBase())}
-                    class="shrink-0 p-1 hover:bg-blue-100 dark:hover:bg-blue-500/20 rounded text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
+                    class="shrink-0 p-1 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 rounded text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300"
                     title="Copy base URL"
                   >
                     <Copy size={14} />
@@ -220,14 +230,14 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
                 </div>
                 <dl class="text-xs space-y-2">
                   <div>
-                    <dt class="text-blue-600 dark:text-blue-400 font-medium">Base URL</dt>
-                    <dd class="font-mono text-blue-900 dark:text-blue-200 break-all mt-0.5 bg-white/60 dark:bg-gray-900/40 px-2 py-1 rounded">
+                    <dt class="text-indigo-600 dark:text-indigo-400 font-medium">Base URL</dt>
+                    <dd class="font-mono text-indigo-900 dark:text-indigo-200 break-all mt-0.5 bg-white/60 dark:bg-gray-900/40 px-2 py-1 rounded">
                       {proxyBase()}
                     </dd>
                   </div>
                 </dl>
-                <div class="mt-3 p-2.5 bg-white/70 dark:bg-gray-900/40 rounded-lg border border-blue-100 dark:border-blue-500/20">
-                  <p class="text-[10px] text-blue-600 dark:text-blue-400 font-medium mb-1.5">Authorization request:</p>
+                <div class="mt-3 p-2.5 bg-white/70 dark:bg-gray-900/40 rounded-lg border border-indigo-100 dark:border-indigo-500/20">
+                  <p class="text-[10px] text-indigo-600 dark:text-indigo-400 font-medium mb-1.5">Authorization request:</p>
                   <code class="text-[11px] text-gray-700 dark:text-gray-300 break-all leading-relaxed">
                     curl -s -X POST {authorizeUrl()}
                     {" "}-H 'Content-Type: application/json'
@@ -239,12 +249,12 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
             );
           })()}
           {/* HTTP */}
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+          <div class="bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-4">
             <div class="flex items-center justify-between mb-2">
               <h4 class="text-sm font-semibold text-gray-700 dark:text-gray-300">HTTP</h4>
               <button
                 onClick={() => copyText(endpoints.data!.http.external || endpoints.data!.http.internal)}
-                class="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.06] rounded text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                 title="Copy URL"
               >
                 <Copy size={14} />
@@ -262,7 +272,7 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
                 </div>
               </Show>
             </dl>
-            <div class="mt-3 p-2 bg-gray-50 dark:bg-gray-800/60 rounded-lg">
+            <div class="mt-3 p-2 bg-gray-50 dark:bg-white/[0.04] rounded-lg">
               <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1">Sample curl:</p>
               <code class="text-[11px] text-gray-700 dark:text-gray-300 break-all">
                 curl -H "Authorization: Bearer &lt;token&gt;" {endpoints.data!.http.external || endpoints.data!.http.internal}/v1/authorize
@@ -271,12 +281,12 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
           </div>
 
           {/* gRPC */}
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+          <div class="bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-4">
             <div class="flex items-center justify-between mb-2">
               <h4 class="text-sm font-semibold text-gray-700 dark:text-gray-300">gRPC (Native)</h4>
               <button
                 onClick={() => copyText(endpoints.data!.grpc.external || endpoints.data!.grpc.internal)}
-                class="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.06] rounded text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                 title="Copy URL"
               >
                 <Copy size={14} />
@@ -294,7 +304,7 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
                 </div>
               </Show>
             </dl>
-            <div class="mt-3 p-2 bg-gray-50 dark:bg-gray-800/60 rounded-lg">
+            <div class="mt-3 p-2 bg-gray-50 dark:bg-white/[0.04] rounded-lg">
               <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1">Sample grpcurl:</p>
               <code class="text-[11px] text-gray-700 dark:text-gray-300 break-all">
                 grpcurl -d '{"{"}\"method\":\"GET\",\"resource\":\"/api/v1/...\"{"}"}'
@@ -305,7 +315,7 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
           </div>
 
           {/* Envoy ext_authz */}
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 lg:col-span-2">
+          <div class="bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-4 lg:col-span-2">
             <div class="flex items-center justify-between mb-2">
               <h4 class="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
                 <Shield size={14} class="text-purple-500 dark:text-purple-400" />
@@ -314,14 +324,14 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
               <div class="flex items-center gap-2">
                 <button
                   onClick={() => copyText(endpoints.data!.extAuthz.envoyClusterConfig)}
-                  class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-gray-800"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-white/[0.12] rounded-md hover:bg-gray-50 dark:hover:bg-white/[0.04]"
                 >
                   <Copy size={12} />
                   Copy Config
                 </button>
                 <button
                   onClick={() => setShowEnvoy(!showEnvoy())}
-                  class="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-400 dark:text-gray-500"
+                  class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.06] rounded text-gray-400 dark:text-gray-500"
                 >
                   {showEnvoy() ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
@@ -340,14 +350,14 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
               </div>
             </dl>
             <Show when={showEnvoy()}>
-              <pre class="mt-3 p-3 bg-gray-900 dark:bg-gray-950 text-gray-100 text-[11px] rounded-lg overflow-x-auto leading-relaxed border dark:border-gray-800">
+              <pre class="mt-3 p-3 bg-gray-900 dark:bg-[#0b0d14] text-gray-100 text-[11px] rounded-lg overflow-x-auto leading-relaxed border dark:border-white/[0.08]">
                 {endpoints.data!.extAuthz.envoyClusterConfig}
               </pre>
             </Show>
           </div>
 
           {/* Load Balancing */}
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 lg:col-span-2">
+          <div class="bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-4 lg:col-span-2">
             <h4 class="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-1.5 mb-2">
               <ServerIcon size={14} class="text-green-500 dark:text-green-400" />
               Load Balancing
@@ -374,6 +384,7 @@ function EndpointsPanel(props: { cluster: string; name: string }) {
             </div>
           </div>
         </div>
+        </Reveal>
       </Show>
     </div>
   );
@@ -447,7 +458,7 @@ function QuickTestPanel(props: { cluster: string; name: string }) {
         Quick Test
       </h3>
 
-      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-5">
+      <div class="bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-5">
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
           {/* Protocol */}
           <div>
@@ -458,8 +469,8 @@ function QuickTestPanel(props: { cluster: string; name: string }) {
                   <button
                     class={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-all ${
                       protocol() === p
-                        ? "bg-blue-600 text-white"
-                        : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+                        ? "bg-indigo-600 text-white"
+                        : "bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/[0.1]"
                     }`}
                     onClick={() => setProtocol(p)}
                   >
@@ -503,7 +514,7 @@ function QuickTestPanel(props: { cluster: string; name: string }) {
             <label class="text-xs font-medium text-gray-600 dark:text-gray-400">Headers</label>
             <button
               onClick={addHeader}
-              class="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium"
+              class="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-medium"
             >
               + Add Header
             </button>
@@ -550,7 +561,7 @@ function QuickTestPanel(props: { cluster: string; name: string }) {
 
         {/* Result */}
         <Show when={result()}>
-          <div class="mt-4 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
+          <div class="mt-4 border border-gray-200 dark:border-white/[0.08] rounded-2xl overflow-hidden animate-scale-in">
             {/* Status bar */}
             <div
               class={`px-4 py-2.5 flex items-center justify-between ${
@@ -601,7 +612,7 @@ function QuickTestPanel(props: { cluster: string; name: string }) {
               <Show when={result()!.identity && Object.keys(result()!.identity!).length > 0}>
                 <div>
                   <p class="font-medium text-gray-700 dark:text-gray-300 mb-1">Identity</p>
-                  <pre class="bg-gray-50 dark:bg-gray-800/60 text-gray-800 dark:text-gray-200 p-2 rounded text-[11px] overflow-x-auto">
+                  <pre class="bg-gray-50 dark:bg-white/[0.04] text-gray-800 dark:text-gray-200 p-2 rounded text-[11px] overflow-x-auto">
                     {JSON.stringify(result()!.identity, null, 2)}
                   </pre>
                 </div>
@@ -628,7 +639,7 @@ function QuickTestPanel(props: { cluster: string; name: string }) {
                   <summary class="font-medium text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200">
                     Raw Response
                   </summary>
-                  <pre class="mt-2 bg-gray-50 dark:bg-gray-800/60 text-gray-800 dark:text-gray-200 p-2 rounded text-[11px] overflow-x-auto">
+                  <pre class="mt-2 bg-gray-50 dark:bg-white/[0.04] text-gray-800 dark:text-gray-200 p-2 rounded text-[11px] overflow-x-auto">
                     {JSON.stringify(result()!.rawResponse, null, 2)}
                   </pre>
                 </details>
@@ -643,7 +654,7 @@ function QuickTestPanel(props: { cluster: string; name: string }) {
 
 // ── Sparkline ───────────────────────────────────────────────────────────
 
-function SparklineCard(props: { label: string; unit: string; data: number[] }) {
+function SparklineCard(props: { label: string; unit: string; data: number[]; updateTick: number }) {
   const current = () => props.data[props.data.length - 1] ?? 0;
   const svgPath = () => {
     const d = props.data;
@@ -660,14 +671,33 @@ function SparklineCard(props: { label: string; unit: string; data: number[] }) {
       .join(" ");
   };
 
+  // Pulse briefly whenever fresh WS data lands, skipping the very first
+  // render so the card doesn't flash on initial mount.
+  const [pulsing, setPulsing] = createSignal(false);
+  let firstTick = true;
+  createEffect(() => {
+    void props.updateTick;
+    if (firstTick) {
+      firstTick = false;
+      return;
+    }
+    setPulsing(true);
+    const timer = setTimeout(() => setPulsing(false), 600);
+    onCleanup(() => clearTimeout(timer));
+  });
+
   return (
-    <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-3">
+    <div
+      class={`bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/[0.08] rounded-2xl p-3 transition-shadow ${
+        pulsing() ? "animate-glow-pulse-once" : ""
+      }`}
+    >
       <div class="flex justify-between items-baseline mb-1">
         <span class="text-xs text-gray-500 dark:text-gray-400">{props.label}</span>
         <span class="text-sm font-bold text-gray-900 dark:text-gray-100">{current().toFixed(1)}{props.unit}</span>
       </div>
       <svg viewBox="0 0 120 30" class="w-full h-8" preserveAspectRatio="none">
-        <path d={svgPath()} fill="none" stroke="#3b82f6" stroke-width="1.5" />
+        <path d={svgPath()} fill="none" stroke="#22d3ee" stroke-width="1.5" />
       </svg>
     </div>
   );

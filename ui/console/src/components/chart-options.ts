@@ -3,14 +3,16 @@
 // wrapper component just calls setOption — no per-page chart
 // configuration logic duplicates across pages.
 //
-// Design: dark background to match the existing sidebar/theme; the
-// chart containers live inside white cards (bg-white rounded-xl)
-// so the dark canvas provides contrast for the data series while
-// the surrounding card stays light for readability.
+// Theme-aware: every builder takes a `dark` flag and branches its axis/
+// text/tooltip colors accordingly (ECharts renders to canvas, so it can't
+// read CSS custom properties directly — callers pass `theme() === "dark"`
+// from src/theme/store.ts so charts actually follow the app's light/dark
+// toggle instead of the fixed light-axis-colors-on-a-forced-dark-canvas
+// mismatch this had before).
 
 import type { EChartsOption } from "echarts";
 
-// --- color tokens (enterprise severity palette) ---
+// --- color tokens (enterprise severity + mission-control palette) ---
 
 export const chartColors = {
   allow: "#22c55e",
@@ -19,17 +21,52 @@ export const chartColors = {
   warning: "#f59e0b",
   critical: "#dc2626",
   info: "#3b82f6",
-  blue: "#3b82f6",
+  blue: "#6366f1",
+  live: "#22d3ee",
   indigo: "#6366f1",
   purple: "#a855f7",
   orange: "#f97316",
   gray: "#9ca3af",
 };
 
-const baseTextStyle = {
-  color: "#374151",
-  fontFamily: "ui-monospace, monospace",
-};
+interface Palette {
+  text: string;
+  axisLabel: string;
+  axisLine: string;
+  splitLine: string;
+  tooltipBg: string;
+  tooltipBorder: string;
+  tooltipText: string;
+  legendText: string;
+}
+
+function palette(dark: boolean): Palette {
+  return dark
+    ? {
+        text: "#cbd5e1",
+        axisLabel: "#94a3b8",
+        axisLine: "rgba(255,255,255,0.12)",
+        splitLine: "rgba(255,255,255,0.06)",
+        tooltipBg: "#12141f",
+        tooltipBorder: "rgba(255,255,255,0.1)",
+        tooltipText: "#f1f5f9",
+        legendText: "#94a3b8",
+      }
+    : {
+        text: "#374151",
+        axisLabel: "#9ca3af",
+        axisLine: "#e5e7eb",
+        splitLine: "#f3f4f6",
+        tooltipBg: "#1f2937",
+        tooltipBorder: "#374151",
+        tooltipText: "#f3f4f6",
+        legendText: "#6b7280",
+      };
+}
+
+function baseTextStyle(p: Palette) {
+  return { color: p.text, fontFamily: "ui-monospace, monospace" };
+}
 
 const baseGrid: EChartsOption["grid"] = {
   left: 50,
@@ -49,22 +86,23 @@ export interface TimeSeriesSeries {
 
 export function timeSeriesOption(
   series: TimeSeriesSeries[],
-  opts?: { yLabel?: string; yUnit?: string },
+  opts?: { yLabel?: string; yUnit?: string; dark?: boolean },
 ): EChartsOption {
+  const p = palette(opts?.dark ?? false);
   return {
     backgroundColor: "transparent",
-    textStyle: baseTextStyle,
+    textStyle: baseTextStyle(p),
     grid: baseGrid,
     tooltip: {
       trigger: "axis",
-      backgroundColor: "#1f2937",
-      borderColor: "#374151",
-      textStyle: { color: "#f3f4f6" },
+      backgroundColor: p.tooltipBg,
+      borderColor: p.tooltipBorder,
+      textStyle: { color: p.tooltipText },
       formatter: (params: any) => {
         const ts = new Date(params[0].value[0]).toLocaleString();
         let html = `<div style="font-size:11px;color:#9ca3af;margin-bottom:4px">${ts}</div>`;
-        for (const p of params) {
-          html += `<div style="font-size:12px"><span style="color:${p.color}">●</span> ${p.seriesName}: <b>${p.value[1].toFixed(2)}${opts?.yUnit ?? ""}</b></div>`;
+        for (const pt of params) {
+          html += `<div style="font-size:12px"><span style="color:${pt.color}">●</span> ${pt.seriesName}: <b>${pt.value[1].toFixed(2)}${opts?.yUnit ?? ""}</b></div>`;
         }
         return html;
       },
@@ -72,20 +110,20 @@ export function timeSeriesOption(
     legend: {
       show: series.length > 1,
       bottom: 0,
-      textStyle: { color: "#6b7280", fontSize: 11 },
+      textStyle: { color: p.legendText, fontSize: 11 },
     },
     xAxis: {
       type: "time",
-      axisLine: { lineStyle: { color: "#e5e7eb" } },
-      axisLabel: { color: "#9ca3af", fontSize: 10 },
+      axisLine: { lineStyle: { color: p.axisLine } },
+      axisLabel: { color: p.axisLabel, fontSize: 10 },
     },
     yAxis: {
       type: "value",
       name: opts?.yLabel,
-      nameTextStyle: { color: "#9ca3af", fontSize: 10 },
+      nameTextStyle: { color: p.axisLabel, fontSize: 10 },
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: "#f3f4f6" } },
-      axisLabel: { color: "#9ca3af", fontSize: 10 },
+      splitLine: { lineStyle: { color: p.splitLine } },
+      axisLabel: { color: p.axisLabel, fontSize: 10 },
     },
     series: series.map((s) => ({
       name: s.name,
@@ -96,7 +134,7 @@ export function timeSeriesOption(
       lineStyle: { width: 2, color: s.color },
       itemStyle: { color: s.color },
       ...(s.areaStyle
-        ? { areaStyle: { opacity: 0.15, color: s.color } }
+        ? { areaStyle: { opacity: opts?.dark ? 0.25 : 0.15, color: s.color } }
         : {}),
     })),
   };
@@ -111,41 +149,41 @@ export interface HistogramBucket {
 
 export function histogramOption(
   buckets: HistogramBucket[],
-  opts?: { xLabel?: string; xUnit?: string },
+  opts?: { xLabel?: string; xUnit?: string; dark?: boolean },
 ): EChartsOption {
+  const p = palette(opts?.dark ?? false);
   const categories = buckets.map((b) => `${(b.le * 1000).toFixed(0)}ms`);
   const counts = buckets.map((b) => b.count);
-  const maxCount = Math.max(...counts, 1);
 
   return {
     backgroundColor: "transparent",
-    textStyle: baseTextStyle,
+    textStyle: baseTextStyle(p),
     grid: baseGrid,
     tooltip: {
       trigger: "axis",
-      backgroundColor: "#1f2937",
-      borderColor: "#374151",
-      textStyle: { color: "#f3f4f6" },
+      backgroundColor: p.tooltipBg,
+      borderColor: p.tooltipBorder,
+      textStyle: { color: p.tooltipText },
       formatter: (params: any) => {
-        const p = params[0];
-        return `<div style="font-size:12px"><b>${p.name}</b><br/>count: ${p.value}</div>`;
+        const pt = params[0];
+        return `<div style="font-size:12px"><b>${pt.name}</b><br/>count: ${pt.value}</div>`;
       },
     },
     xAxis: {
       type: "category",
       data: categories,
       name: opts?.xLabel ?? "Latency",
-      nameTextStyle: { color: "#9ca3af", fontSize: 10 },
-      axisLine: { lineStyle: { color: "#e5e7eb" } },
-      axisLabel: { color: "#9ca3af", fontSize: 10, rotate: categories.length > 10 ? 45 : 0 },
+      nameTextStyle: { color: p.axisLabel, fontSize: 10 },
+      axisLine: { lineStyle: { color: p.axisLine } },
+      axisLabel: { color: p.axisLabel, fontSize: 10, rotate: categories.length > 10 ? 45 : 0 },
     },
     yAxis: {
       type: "value",
       name: "Count",
-      nameTextStyle: { color: "#9ca3af", fontSize: 10 },
+      nameTextStyle: { color: p.axisLabel, fontSize: 10 },
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: "#f3f4f6" } },
-      axisLabel: { color: "#9ca3af", fontSize: 10 },
+      splitLine: { lineStyle: { color: p.splitLine } },
+      axisLabel: { color: p.axisLabel, fontSize: 10 },
     },
     series: [
       {
@@ -154,6 +192,7 @@ export function histogramOption(
           value: c,
           itemStyle: {
             color: i === buckets.length - 1 ? chartColors.error : chartColors.blue,
+            borderRadius: [3, 3, 0, 0],
           },
         })),
         barWidth: "70%",
@@ -170,21 +209,22 @@ export interface DonutSlice {
   color?: string;
 }
 
-export function donutOption(slices: DonutSlice[]): EChartsOption {
+export function donutOption(slices: DonutSlice[], opts?: { dark?: boolean }): EChartsOption {
+  const p = palette(opts?.dark ?? false);
   return {
     backgroundColor: "transparent",
-    textStyle: baseTextStyle,
+    textStyle: baseTextStyle(p),
     tooltip: {
       trigger: "item",
-      backgroundColor: "#1f2937",
-      borderColor: "#374151",
-      textStyle: { color: "#f3f4f6" },
-      formatter: (p: any) =>
-        `<div style="font-size:12px"><b>${p.name}</b><br/>${p.value} (${p.percent}%)</div>`,
+      backgroundColor: p.tooltipBg,
+      borderColor: p.tooltipBorder,
+      textStyle: { color: p.tooltipText },
+      formatter: (pt: any) =>
+        `<div style="font-size:12px"><b>${pt.name}</b><br/>${pt.value} (${pt.percent}%)</div>`,
     },
     legend: {
       bottom: 0,
-      textStyle: { color: "#6b7280", fontSize: 11 },
+      textStyle: { color: p.legendText, fontSize: 11 },
     },
     series: [
       {
@@ -194,6 +234,10 @@ export function donutOption(slices: DonutSlice[]): EChartsOption {
         avoidLabelOverlap: true,
         label: { show: false },
         labelLine: { show: false },
+        itemStyle: {
+          borderColor: opts?.dark ? "#0b0d14" : "#ffffff",
+          borderWidth: 2,
+        },
         data: slices.map((s) => ({
           name: s.name,
           value: s.value,
@@ -212,7 +256,8 @@ export interface WaterfallStage {
   color?: string;
 }
 
-export function waterfallOption(stages: WaterfallStage[]): EChartsOption {
+export function waterfallOption(stages: WaterfallStage[], opts?: { dark?: boolean }): EChartsOption {
+  const p = palette(opts?.dark ?? false);
   const categories = stages.map((s) => s.name);
   // Waterfall: each stage starts where the previous ended. The
   // "transparent" base series creates the floating effect; the
@@ -228,13 +273,13 @@ export function waterfallOption(stages: WaterfallStage[]): EChartsOption {
 
   return {
     backgroundColor: "transparent",
-    textStyle: baseTextStyle,
+    textStyle: baseTextStyle(p),
     grid: { ...baseGrid, left: 120 },
     tooltip: {
       trigger: "axis",
-      backgroundColor: "#1f2937",
-      borderColor: "#374151",
-      textStyle: { color: "#f3f4f6" },
+      backgroundColor: p.tooltipBg,
+      borderColor: p.tooltipBorder,
+      textStyle: { color: p.tooltipText },
       formatter: (params: any) => {
         const stage = params[1];
         return `<div style="font-size:12px"><b>${stage.name}</b><br/>${stage.value.toFixed(1)}ms</div>`;
@@ -243,16 +288,16 @@ export function waterfallOption(stages: WaterfallStage[]): EChartsOption {
     xAxis: {
       type: "value",
       name: "Cumulative latency (ms)",
-      nameTextStyle: { color: "#9ca3af", fontSize: 10 },
+      nameTextStyle: { color: p.axisLabel, fontSize: 10 },
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: "#f3f4f6" } },
-      axisLabel: { color: "#9ca3af", fontSize: 10 },
+      splitLine: { lineStyle: { color: p.splitLine } },
+      axisLabel: { color: p.axisLabel, fontSize: 10 },
     },
     yAxis: {
       type: "category",
       data: categories,
-      axisLine: { lineStyle: { color: "#e5e7eb" } },
-      axisLabel: { color: "#374151", fontSize: 11 },
+      axisLine: { lineStyle: { color: p.axisLine } },
+      axisLabel: { color: p.text, fontSize: 11 },
     },
     series: [
       {
@@ -269,13 +314,13 @@ export function waterfallOption(stages: WaterfallStage[]): EChartsOption {
         barWidth: "60%",
         data: stages.map((s) => ({
           value: s.durationMs,
-          itemStyle: { color: s.color ?? chartColors.blue },
+          itemStyle: { color: s.color ?? chartColors.blue, borderRadius: [0, 3, 3, 0] },
         })),
         label: {
           show: true,
           position: "right",
-          formatter: (p: any) => `${p.value.toFixed(1)}ms`,
-          color: "#6b7280",
+          formatter: (pt: any) => `${pt.value.toFixed(1)}ms`,
+          color: p.legendText,
           fontSize: 10,
         },
       },

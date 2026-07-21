@@ -56,10 +56,10 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
     <div class="flex flex-col">
       <div class="overflow-auto">
         <table class="w-full text-sm">
-          <thead class="bg-gray-50/80 sticky top-0 z-10">
+          <thead class="bg-gray-50/80 dark:bg-white/[0.03] sticky top-0 z-10">
             <For each={table.getHeaderGroups()}>
               {(headerGroup) => (
-                <tr class="text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider">
+                <tr class="text-left text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   <For each={headerGroup.headers}>
                     {(header) => (
                       <th
@@ -70,7 +70,7 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
                         <div class="flex items-center gap-1">
                           {flexRender(header.column.columnDef.header, header.getContext())}
                           <Show when={header.column.getIsSorted()}>
-                            <span class="text-gray-400 text-[9px]">
+                            <span class="text-gray-400 dark:text-gray-500 text-[9px]">
                               {header.column.getIsSorted() === "asc" ? "▲" : "▼"}
                             </span>
                           </Show>
@@ -82,11 +82,11 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
               )}
             </For>
           </thead>
-          <tbody class="divide-y divide-gray-50">
+          <tbody class="divide-y divide-gray-50 dark:divide-white/[0.06]">
             <For each={table.getRowModel().rows}>
               {(row) => (
                 <tr
-                  class="hover:bg-gray-50/50 transition-colors"
+                  class="hover:bg-gray-50/50 dark:hover:bg-white/[0.03] transition-colors"
                   onClick={() => props.rowClick?.(row.original)}
                   style={{ cursor: props.rowClick ? "pointer" : "default" }}
                 >
@@ -106,31 +106,31 @@ export function DataTable<T>(props: DataTableProps<T>): JSX.Element {
 
       <Show when={props.data.length === 0}>
         <div class="py-12 text-center">
-          <p class="text-sm text-gray-400">{props.emptyMessage ?? "No data"}</p>
+          <p class="text-sm text-gray-400 dark:text-gray-500">{props.emptyMessage ?? "No data"}</p>
         </div>
       </Show>
 
       {/* Pagination controls */}
       <Show when={table.getPageCount() > 1}>
-        <div class="flex items-center gap-2 px-4 py-3 border-t border-gray-100">
+        <div class="flex items-center gap-2 px-4 py-3 border-t border-gray-100 dark:border-white/[0.06]">
           <button
-            class="px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-200 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+            class="px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-200 dark:border-white/[0.12] disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors"
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
           >
             ← Prev
           </button>
-          <span class="text-xs text-gray-500">
+          <span class="text-xs text-gray-500 dark:text-gray-400">
             Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
           </span>
           <button
-            class="px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-200 disabled:opacity-40 hover:bg-gray-50 transition-colors"
+            class="px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-200 dark:border-white/[0.12] disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors"
             onClick={() => table.nextPage()}
             disabled={!table.getCanNextPage()}
           >
             Next →
           </button>
-          <span class="ml-auto text-xs text-gray-400">
+          <span class="ml-auto text-xs text-gray-400 dark:text-gray-500">
             {table.getFilteredRowModel().rows.length} rows
           </span>
         </div>
