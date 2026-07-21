@@ -4,6 +4,8 @@ import { quickTest, type QuickTestResponse, type QuickTestRequest } from "../api
 import { EChart } from "../components/EChart";
 import { waterfallOption, chartColors } from "../components/chart-options";
 import { Card, EmptyState } from "../components/ui";
+import { Reveal } from "../components/Reveal";
+import { theme } from "../theme/store";
 import { Play, ChevronDown, ChevronRight } from "lucide-solid";
 
 interface ExplainStage {
@@ -88,28 +90,29 @@ export default function PolicyExplain() {
   const waterfallChart = () => {
     const s = stages();
     if (s.length === 0) return null;
-    return waterfallOption(s);
+    return waterfallOption(s, { dark: theme() === "dark" });
   };
 
   return (
     <div class="max-w-7xl">
       {/* Header */}
       <div class="mb-6">
-        <h1 class="text-2xl font-bold text-gray-900">Policy Explain Studio</h1>
-        <p class="text-sm text-gray-500 mt-1">
+        <h1 class="font-display text-2xl font-bold text-gray-900 dark:text-gray-100">Policy Explain Studio</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Submit a synthetic request and inspect the stage-by-stage authorization trace
         </p>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Request form */}
+        <Reveal>
         <Card title="Synthetic Request" subtitle="Construct a request to trace through the pipeline">
           <form onSubmit={handleSubmit} class="p-5 space-y-4">
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Method</label>
+                <label class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Method</label>
                 <select
-                  class="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                  class="mt-1 w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                   value={method()}
                   onChange={(e) => setMethod(e.currentTarget.value)}
                 >
@@ -119,35 +122,35 @@ export default function PolicyExplain() {
                 </select>
               </div>
               <div>
-                <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Host</label>
+                <label class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Host</label>
                 <input
-                  class="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                  class="mt-1 w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                   value={host()}
                   onInput={(e) => setHost(e.currentTarget.value)}
                 />
               </div>
             </div>
             <div>
-              <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Path</label>
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Path</label>
               <input
-                class="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                class="mt-1 w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 value={path()}
                 onInput={(e) => setPath(e.currentTarget.value)}
               />
             </div>
             <div>
-              <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Tenant (optional)</label>
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Tenant (optional)</label>
               <input
-                class="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                class="mt-1 w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 value={tenant()}
                 onInput={(e) => setTenant(e.currentTarget.value)}
                 placeholder="acme"
               />
             </div>
             <div>
-              <label class="text-xs font-medium text-gray-500 uppercase tracking-wide">Headers (JSON)</label>
+              <label class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Headers (JSON)</label>
               <textarea
-                class="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                class="mt-1 w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 rows={4}
                 value={headersJson()}
                 onInput={(e) => setHeadersJson(e.currentTarget.value)}
@@ -156,15 +159,17 @@ export default function PolicyExplain() {
             <button
               type="submit"
               disabled={testMutation.isPending}
-              class="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              class="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white disabled:opacity-50 shadow-[0_0_20px_-6px_rgba(99,102,241,0.5)] transition-all"
             >
               <Play size={14} />
               {testMutation.isPending ? "Tracing…" : "Trace Request"}
             </button>
           </form>
         </Card>
+        </Reveal>
 
         {/* Results — waterfall + outcome */}
+        <Reveal index={1}>
         <div class="space-y-4">
           <Card title="Pipeline Waterfall" subtitle="Stage-by-stage latency breakdown">
             <Show when={waterfallChart()} fallback={
@@ -172,9 +177,9 @@ export default function PolicyExplain() {
                 <EmptyState title="No trace yet" description="Submit a request to see the waterfall" />
               }>
                 <div class="p-8 animate-pulse">
-                  <div class="h-4 bg-gray-100 rounded w-3/4 mb-3" />
-                  <div class="h-4 bg-gray-100 rounded w-1/2 mb-3" />
-                  <div class="h-4 bg-gray-100 rounded w-2/3" />
+                  <div class="h-4 bg-gray-100 dark:bg-white/[0.06] rounded w-3/4 mb-3" />
+                  <div class="h-4 bg-gray-100 dark:bg-white/[0.06] rounded w-1/2 mb-3" />
+                  <div class="h-4 bg-gray-100 dark:bg-white/[0.06] rounded w-2/3" />
                 </div>
               </Show>
             }>
@@ -191,8 +196,8 @@ export default function PolicyExplain() {
                 <div class="flex items-center gap-3">
                   <span class={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
                     lastResult()!.status === "allow"
-                      ? "bg-green-50 text-green-700"
-                      : "bg-red-50 text-red-700"
+                      ? "bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400"
+                      : "bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400"
                   }`}>
                     <span class={`w-2 h-2 rounded-full ${
                       lastResult()!.status === "allow" ? "bg-green-500" : "bg-red-500"
@@ -200,41 +205,42 @@ export default function PolicyExplain() {
                     {lastResult()!.status.toUpperCase()}
                   </span>
                   <Show when={lastResult()!.latency}>
-                    <span class="text-sm text-gray-500 font-mono">{lastResult()!.latency}</span>
+                    <span class="text-sm text-gray-500 dark:text-gray-400 font-mono">{lastResult()!.latency}</span>
                   </Show>
                 </div>
                 <Show when={lastResult()!.denyReason}>
-                  <div class="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                    <p class="text-xs font-medium text-red-500 uppercase tracking-wide mb-1">Deny Reason</p>
-                    <p class="text-sm text-red-800 font-mono">{lastResult()!.denyReason}</p>
+                  <div class="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-lg px-4 py-3">
+                    <p class="text-xs font-medium text-red-500 dark:text-red-400 uppercase tracking-wide mb-1">Deny Reason</p>
+                    <p class="text-sm text-red-800 dark:text-red-300 font-mono">{lastResult()!.denyReason}</p>
                   </div>
                 </Show>
                 <Show when={lastResult()!.identity}>
-                  <div class="bg-gray-50 rounded-lg px-4 py-3">
-                    <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Identity</p>
-                    <pre class="text-xs text-gray-700 font-mono overflow-auto">
+                  <div class="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-4 py-3">
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Identity</p>
+                    <pre class="text-xs text-gray-700 dark:text-gray-300 font-mono overflow-auto">
                       {JSON.stringify(lastResult()!.identity, null, 2)}
                     </pre>
                   </div>
                 </Show>
                 <Show when={lastResult()!.headers}>
-                  <div class="bg-gray-50 rounded-lg px-4 py-3">
-                    <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Response Headers</p>
-                    <pre class="text-xs text-gray-700 font-mono overflow-auto">
+                  <div class="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-4 py-3">
+                    <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Response Headers</p>
+                    <pre class="text-xs text-gray-700 dark:text-gray-300 font-mono overflow-auto">
                       {JSON.stringify(lastResult()!.headers, null, 2)}
                     </pre>
                   </div>
                 </Show>
                 <Show when={lastResult()!.error}>
-                  <div class="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                    <p class="text-xs font-medium text-red-500 uppercase tracking-wide mb-1">Error</p>
-                    <p class="text-sm text-red-800">{lastResult()!.error}</p>
+                  <div class="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-lg px-4 py-3">
+                    <p class="text-xs font-medium text-red-500 dark:text-red-400 uppercase tracking-wide mb-1">Error</p>
+                    <p class="text-sm text-red-800 dark:text-red-300">{lastResult()!.error}</p>
                   </div>
                 </Show>
               </div>
             </Card>
           </Show>
         </div>
+        </Reveal>
       </div>
     </div>
   );

@@ -14,13 +14,14 @@ import {
   ShieldCheck,
   Pause,
   Play,
-  Radio,
   CheckCircle2,
   XCircle,
   ChevronDown,
   ChevronRight,
   Activity,
 } from "lucide-solid";
+import { GlowDot } from "../components/GlowDot";
+import { Reveal } from "../components/Reveal";
 
 const MAX_ALERTS = 200;
 
@@ -114,14 +115,14 @@ export default function Alerts() {
   return (
     <div class="max-w-7xl">
       {/* Header */}
-      <div class="flex items-center justify-between mb-6">
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Alerts</h1>
+          <h1 class="font-display text-2xl font-bold text-gray-900 dark:text-gray-100">Alerts</h1>
           <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
             Policy-engine & request-health triage — see why requests aren't responding at a glance
           </p>
         </div>
-        <div class="flex items-center gap-4">
+        <div class="flex flex-wrap items-center gap-3 sm:gap-4">
           <Show when={degraded()}>
             <span
               class={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${
@@ -135,14 +136,7 @@ export default function Alerts() {
               {(degraded()!.prometheus || degraded()!.loki) ? "Degraded" : "Backends OK"}
             </span>
           </Show>
-          <span
-            class={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${
-              connected() ? "bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400" : "bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400"
-            }`}
-          >
-            <Radio size={12} class={connected() ? "text-green-500 animate-pulse" : "text-red-500"} />
-            {connected() ? "Live" : "Disconnected"}
-          </span>
+          <GlowDot tone={connected() ? "live" : "critical"} pulse={connected()} label={connected() ? "Live" : "Disconnected"} />
           <button
             class={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg transition-colors ${
               paused()
@@ -157,10 +151,11 @@ export default function Alerts() {
       </div>
 
       {/* Filters bar */}
-      <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm px-4 py-3 mb-4 flex items-center gap-3">
+      <Reveal>
+      <div class="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200 dark:border-white/[0.08] shadow-sm dark:shadow-none px-4 py-3 mb-4 flex flex-wrap items-center gap-3">
         <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Filters</span>
         <select
-          class="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+          class="border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
           value={filterState()}
           onChange={(e) => setFilterState(e.currentTarget.value)}
         >
@@ -170,7 +165,7 @@ export default function Alerts() {
           <option value="resolved">Resolved</option>
         </select>
         <select
-          class="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+          class="border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
           value={filterSeverity()}
           onChange={(e) => setFilterSeverity(e.currentTarget.value)}
         >
@@ -180,13 +175,13 @@ export default function Alerts() {
           <option value="info">Info</option>
         </select>
         <input
-          class="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm w-48 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+          class="border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm w-48 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
           placeholder="Rule name"
           value={filterRule()}
           onInput={(e) => setFilterRule(e.currentTarget.value)}
         />
         <span
-          class="ml-auto text-xs text-gray-400 dark:text-gray-500 cursor-pointer hover:text-blue-600 dark:hover:text-blue-400"
+          class="ml-auto text-xs text-gray-400 dark:text-gray-500 cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400"
           onClick={() => navigate("/")}
         >
           View dashboard →
@@ -195,7 +190,7 @@ export default function Alerts() {
       </div>
 
       {/* Alerts list */}
-      <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+      <div class="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200 dark:border-white/[0.08] shadow-sm dark:shadow-none overflow-hidden">
         <div class="overflow-auto max-h-[calc(100vh-320px)]">
           <Show when={alerts().length > 0} fallback={
             <div class="py-16 text-center">
@@ -206,12 +201,12 @@ export default function Alerts() {
               </p>
             </div>
           }>
-            <ul class="divide-y divide-gray-100 dark:divide-gray-800">
+            <ul class="divide-y divide-gray-100 dark:divide-white/[0.06]">
               <For each={sorted()}>
                 {(a) => (
                   <li>
                     <button
-                      class="w-full flex items-start gap-4 px-5 py-3.5 hover:bg-gray-50/50 dark:hover:bg-gray-800/40 transition-colors text-left"
+                      class="w-full flex items-start gap-4 px-5 py-3.5 hover:bg-gray-50/50 dark:hover:bg-white/[0.03] transition-colors text-left"
                       onClick={() => setExpanded(expanded() === a.id ? null : a.id)}
                     >
                       <SeverityIcon severity={a.severity} state={a.state} />
@@ -271,6 +266,7 @@ export default function Alerts() {
           </Show>
         </div>
       </div>
+      </Reveal>
     </div>
   );
 }
@@ -305,7 +301,7 @@ function stateBadge(s: string): string {
 function ReasonPanel(props: { alert: Alert }) {
   const r = () => props.alert.reason;
   return (
-    <div class="bg-gray-50/60 dark:bg-gray-800/30 border-t border-gray-100 dark:border-gray-800 px-5 py-4 text-sm">
+    <div class="bg-gray-50/60 dark:bg-white/[0.02] border-t border-gray-100 dark:border-white/[0.06] px-5 py-4 text-sm">
       <Show when={r()} fallback={
         <p class="text-xs text-gray-500 dark:text-gray-400">
           Reason analysis unavailable — the alert fired before the recent-decisions ring populated.
@@ -371,7 +367,7 @@ function ReasonPanel(props: { alert: Alert }) {
             <div class="overflow-x-auto">
               <table class="w-full text-xs">
                 <thead>
-                  <tr class="text-left text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 border-b border-gray-200 dark:border-gray-800">
+                  <tr class="text-left text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 border-b border-gray-200 dark:border-white/[0.08]">
                     <th class="py-1.5 pr-3 font-medium">Time</th>
                     <th class="py-1.5 pr-3 font-medium">Method</th>
                     <th class="py-1.5 pr-3 font-medium">Path</th>
@@ -380,7 +376,7 @@ function ReasonPanel(props: { alert: Alert }) {
                     <th class="py-1.5 font-medium">Reason</th>
                   </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                <tbody class="divide-y divide-gray-100 dark:divide-white/[0.06]">
                   <For each={r()!.recent_failures}>
                     {(f) => (
                       <tr>

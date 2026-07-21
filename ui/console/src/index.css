@@ -7,6 +7,105 @@
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  /* "Mission control" palette. Void/surface are deliberately deeper than
+     Tailwind's stock gray-950/900 (not pure #000 — flat OLED black reads
+     lifeless and has no room for glass panels or glow to sit on top of),
+     so most existing bg-white/dark:bg-gray-900 cards keep working as-is
+     and simply read as "elevated" against the new, darker canvas.
+     --color-live is deliberately a different hue from --color-primary so
+     "this is happening right now" (WS-connected dots, live streams,
+     active mesh edges) reads distinctly from ordinary interactive/brand
+     accents. */
+  --color-void: #030407;
+  --color-void-light: #f8fafc;
+  --color-surface: #0b0d14;
+  --color-surface-elevated: #12141f;
+  --color-glass: rgba(255, 255, 255, 0.04);
+  --color-glass-light: rgba(255, 255, 255, 0.6);
+  --color-border-glass: rgba(255, 255, 255, 0.08);
+  --color-border-glass-light: rgba(15, 23, 42, 0.08);
+  --color-primary: #6366f1;
+  --color-primary-light: #4f46e5;
+  --color-live: #22d3ee;
+  --color-live-light: #0891b2;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --animate-fade-up: fade-up 0.5s var(--ease-out-expo) both;
+  --animate-scale-in: scale-in 0.3s var(--ease-out-expo) both;
+  --animate-glow-pulse: glow-pulse 2.2s ease-in-out infinite;
+  --animate-glow-pulse-once: glow-pulse 0.6s var(--ease-out-expo) 1;
+  --animate-shimmer: shimmer 2.5s linear infinite;
+  --animate-gradient-drift: gradient-drift 18s ease-in-out infinite;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes glow-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 var(--color-live);
+    }
+    50% {
+      opacity: 0.85;
+      box-shadow: 0 0 0 6px transparent;
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: -200% 0;
+    }
+    to {
+      background-position: 200% 0;
+    }
+  }
+  @keyframes gradient-drift {
+    0%,
+    100% {
+      transform: translate(0, 0) scale(1);
+    }
+    33% {
+      transform: translate(3%, -4%) scale(1.05);
+    }
+    66% {
+      transform: translate(-3%, 3%) scale(0.97);
+    }
+  }
+}
+
+/* Respect prefers-reduced-motion globally: shorten/disable rather than
+   hide, so reduced-motion users still see final states without the
+   distracting motion. Individual components (AmbientBackground) opt into
+   a "freeze in place" behavior on top of this rather than disappearing. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Base resets for professional look */
@@ -21,15 +120,64 @@ html.dark {
 
 body {
   font-family: var(--font-sans);
-  background-color: #f9fafb;
-}
-.dark body {
-  background-color: #030712;
 }
 
 /* Smooth transitions for interactive elements */
 a, button {
   transition: all 0.15s ease;
+}
+
+/* Reusable glass-panel treatment — a translucent, blurred surface with a
+   hairline border, used by Reveal-wrapped hero cards (Login, Dashboard,
+   Health) rather than the flat bg-white/bg-gray-900 cards elsewhere. */
+.glass-panel {
+  background: var(--color-glass-light);
+  border: 1px solid var(--color-border-glass-light);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.dark .glass-panel {
+  background: var(--color-glass);
+  border-color: var(--color-border-glass);
+}
+
+/* Scroll-reveal: elements start hidden/offset and the Reveal component
+   flips them to this state via IntersectionObserver. Kept as a plain
+   class (not a Tailwind utility) since it's a two-state toggle, not a
+   one-shot utility application. */
+.reveal-init {
+  opacity: 0;
+  transform: translateY(16px);
+}
+.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.6s var(--ease-out-expo), transform 0.6s var(--ease-out-expo);
+}
+
+/* Wizard step transitions (solid-transition-group's <Transition
+   name="wizard-step" mode="outin">) — Vue2-style class names: exit
+   finishes before enter starts, so no absolute-positioning is needed
+   to avoid layout jumps between differently-sized steps. */
+.wizard-step-enter-active,
+.wizard-step-exit-active {
+  transition: opacity 0.22s var(--ease-out-expo), transform 0.22s var(--ease-out-expo);
+}
+.wizard-step-enter {
+  opacity: 0;
+  transform: translateX(12px);
+}
+.wizard-step-enter-to {
+  opacity: 1;
+  transform: translateX(0);
+}
+.wizard-step-exit {
+  opacity: 1;
+  transform: translateX(0);
+}
+.wizard-step-exit-to {
+  opacity: 0;
+  transform: translateX(-12px);
 }
 
 /* Custom scrollbar for sidebar */

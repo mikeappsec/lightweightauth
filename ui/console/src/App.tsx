@@ -1,4 +1,4 @@
-import { type ParentProps, type JSX, Show } from "solid-js";
+import { type ParentProps, type JSX, Show, createSignal, createEffect } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 import {
   LayoutDashboard,
@@ -14,12 +14,24 @@ import {
   LogOut,
   Sun,
   Moon,
+  Menu,
+  X,
 } from "lucide-solid";
 import { logout } from "./api/client";
 import { session, setSession } from "./auth/store";
 import { theme, toggleTheme } from "./theme/store";
 
 export default function App(props: ParentProps) {
+  const location = useLocation();
+  const [navOpen, setNavOpen] = createSignal(false);
+
+  // Close the mobile drawer on every route change — otherwise tapping a
+  // nav link leaves the overlay open behind the newly-loaded page.
+  createEffect(() => {
+    void location.pathname;
+    setNavOpen(false);
+  });
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -31,19 +43,42 @@ export default function App(props: ParentProps) {
 
   return (
     <div class="min-h-screen flex bg-gray-50 dark:bg-gray-950">
+      {/* Mobile-only backdrop, shown while the drawer is open */}
+      <Show when={navOpen()}>
+        <div
+          class="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          onClick={() => setNavOpen(false)}
+          aria-hidden="true"
+        />
+      </Show>
+
       {/* Sidebar — deliberately stays a constant dark navy in both
           themes (a common enterprise-console pattern, e.g. Vercel/Linear):
-          it's the brand anchor, while the content pane is what switches. */}
-      <aside class="w-64 bg-gray-950 text-gray-300 flex flex-col border-r border-gray-800 shrink-0">
+          it's the brand anchor, while the content pane is what switches.
+          Below lg: an off-canvas drawer (fixed, slides in from the left,
+          toggled by the header hamburger). At lg+: back to the normal
+          static in-flow sidebar, always visible. */}
+      <aside
+        class={`w-64 bg-gray-950 text-gray-300 flex flex-col border-r border-gray-800 shrink-0 fixed inset-y-0 left-0 z-40 transition-transform duration-300 ease-out lg:static lg:translate-x-0 ${
+          navOpen() ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         {/* Brand */}
-        <div class="h-16 flex items-center gap-3 px-5 border-b border-gray-800">
+        <div class="h-16 flex items-center gap-3 px-5 border-b border-gray-800 shrink-0">
           <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
             <ShieldCheck size={18} class="text-white" />
           </div>
-          <div>
+          <div class="min-w-0">
             <span class="text-white font-semibold text-sm tracking-tight">LightweightAuth</span>
             <span class="block text-[10px] text-gray-500 -mt-0.5">Control Plane</span>
           </div>
+          <button
+            onClick={() => setNavOpen(false)}
+            class="ml-auto p-1 text-gray-500 hover:text-gray-200 lg:hidden"
+            aria-label="Close navigation"
+          >
+            <X size={18} />
+          </button>
         </div>
 
         {/* Navigation */}
@@ -69,7 +104,7 @@ export default function App(props: ParentProps) {
         </nav>
 
         {/* Footer */}
-        <div class="border-t border-gray-800 px-4 py-3 space-y-2">
+        <div class="border-t border-gray-800 px-4 py-3 space-y-2 shrink-0">
           <Show when={session()?.authEnabled}>
             <div class="flex items-center gap-2 text-xs">
               <div class="w-6 h-6 rounded-full bg-blue-600/20 text-blue-300 flex items-center justify-center text-[10px] font-semibold uppercase">
@@ -105,12 +140,19 @@ export default function App(props: ParentProps) {
       {/* Main content */}
       <div class="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <header class="h-16 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center px-6 shrink-0">
+        <header class="h-16 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center gap-3 px-4 sm:px-6 shrink-0">
+          <button
+            onClick={() => setNavOpen(true)}
+            class="p-1.5 -ml-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 lg:hidden"
+            aria-label="Open navigation"
+          >
+            <Menu size={20} />
+          </button>
           <Breadcrumb />
         </header>
 
         {/* Page content */}
-        <main class="flex-1 p-6 overflow-auto">
+        <main class="flex-1 p-4 sm:p-6 overflow-auto min-w-0">
           {props.children}
         </main>
       </div>

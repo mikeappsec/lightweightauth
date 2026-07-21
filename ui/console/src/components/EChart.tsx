@@ -21,7 +21,12 @@ export function EChart(props: EChartProps): JSX.Element {
 
   onMount(() => {
     if (!container) return;
-    chart = echarts.init(container, "dark", { renderer: "canvas" });
+    // No ECharts built-in theme name here — every color in this app's
+    // chart options (chart-options.ts) is explicit and already
+    // theme-aware (callers pass `dark: theme() === "dark"` into the
+    // option builders), so layering ECharts' own "dark" theme on top
+    // would just fight those explicit overrides.
+    chart = echarts.init(container, undefined, { renderer: "canvas" });
 
     // Responsive resize — ECharts doesn't observe container size
     // changes on its own.

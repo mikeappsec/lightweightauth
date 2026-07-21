@@ -2,6 +2,7 @@ import { createSignal, For, Show } from "solid-js";
 import { createQuery, createMutation, useQueryClient } from "@tanstack/solid-query";
 import { listRoutes, createRoute, deleteRoute, type Route, type CreateRouteRequest } from "../api/client";
 import { Plus, Trash2, Route as RouteIcon } from "lucide-solid";
+import { Reveal } from "../components/Reveal";
 
 export default function Routes() {
   const queryClient = useQueryClient();
@@ -66,11 +67,11 @@ export default function Routes() {
     <div class="max-w-7xl">
       <div class="flex items-center justify-between mb-6">
         <div>
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Routes</h1>
+          <h1 class="font-display text-2xl font-bold text-gray-900 dark:text-gray-100">Routes</h1>
           <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Proxy routes between LightweightAuth instances</p>
         </div>
         <button
-          class="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 shadow-sm"
+          class="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg shadow-[0_0_20px_-6px_rgba(99,102,241,0.5)] transition-all"
           onClick={() => (showForm() ? resetForm() : setShowForm(true))}
         >
           <Plus size={16} />
@@ -81,13 +82,13 @@ export default function Routes() {
       <Show when={showForm()}>
         <form
           onSubmit={handleSubmit}
-          class="mb-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-5 space-y-4"
+          class="mb-6 bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200 dark:border-white/[0.08] shadow-sm dark:shadow-none p-5 space-y-4 animate-scale-in"
         >
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
               Route name
               <input
-                class="mt-1.5 block w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                class="mt-1.5 block w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 placeholder="payments-to-orders"
                 value={name()}
                 onInput={(e) => setName(e.currentTarget.value)}
@@ -97,7 +98,7 @@ export default function Routes() {
             <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
               Path prefix
               <input
-                class="mt-1.5 block w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                class="mt-1.5 block w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 placeholder="/api/orders"
                 value={pathPrefix()}
                 onInput={(e) => setPathPrefix(e.currentTarget.value)}
@@ -107,7 +108,7 @@ export default function Routes() {
             <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
               Source instance
               <input
-                class="mt-1.5 block w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                class="mt-1.5 block w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 value={srcInstance()}
                 onInput={(e) => setSrcInstance(e.currentTarget.value)}
                 required
@@ -116,7 +117,7 @@ export default function Routes() {
             <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
               Source cluster
               <input
-                class="mt-1.5 block w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                class="mt-1.5 block w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 value={srcCluster()}
                 onInput={(e) => setSrcCluster(e.currentTarget.value)}
                 required
@@ -125,7 +126,7 @@ export default function Routes() {
             <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
               Target instance
               <input
-                class="mt-1.5 block w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                class="mt-1.5 block w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 value={tgtInstance()}
                 onInput={(e) => setTgtInstance(e.currentTarget.value)}
                 required
@@ -134,7 +135,7 @@ export default function Routes() {
             <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
               Target cluster
               <input
-                class="mt-1.5 block w-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                class="mt-1.5 block w-full border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
                 value={tgtCluster()}
                 onInput={(e) => setTgtCluster(e.currentTarget.value)}
                 required
@@ -142,17 +143,17 @@ export default function Routes() {
             </label>
           </div>
           {formError() && <p class="text-red-600 dark:text-red-400 text-xs font-medium">{formError()}</p>}
-          <div class="flex justify-end gap-3 pt-2 border-t border-gray-100 dark:border-gray-800">
+          <div class="flex justify-end gap-3 pt-2 border-t border-gray-100 dark:border-white/[0.08]">
             <button
               type="button"
               onClick={resetForm}
-              class="px-4 py-2.5 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              class="px-4 py-2.5 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.06] transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
-              class="px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 shadow-sm"
+              class="px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg disabled:opacity-50 shadow-sm transition-all"
               disabled={createMut.isPending}
             >
               {createMut.isPending ? "Creating…" : "Create Route"}
@@ -161,7 +162,8 @@ export default function Routes() {
         </form>
       </Show>
 
-      <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+      <Reveal>
+      <div class="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200 dark:border-white/[0.08] shadow-sm dark:shadow-none overflow-hidden">
         {routesQuery.isLoading && (
           <div class="px-5 py-12 text-center text-sm text-gray-400 dark:text-gray-500">Loading routes…</div>
         )}
@@ -178,9 +180,10 @@ export default function Routes() {
           </div>
         )}
         {routesQuery.data && routesQuery.data.length > 0 && (
+          <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
-              <tr class="bg-gray-50/80 dark:bg-gray-800/50 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-gray-800">
+              <tr class="bg-gray-50/80 dark:bg-white/[0.03] text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-100 dark:border-white/[0.06]">
                 <th class="px-5 py-3">Name</th>
                 <th class="px-5 py-3">Source</th>
                 <th class="px-5 py-3">Target</th>
@@ -190,10 +193,10 @@ export default function Routes() {
                 <th class="px-5 py-3 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+            <tbody class="divide-y divide-gray-100 dark:divide-white/[0.06]">
               <For each={routesQuery.data}>
                 {(route: Route) => (
-                  <tr class="hover:bg-gray-50/50 dark:hover:bg-gray-800/40 transition-colors">
+                  <tr class="hover:bg-gray-50/50 dark:hover:bg-white/[0.03] transition-colors">
                     <td class="px-5 py-3.5 font-medium text-gray-900 dark:text-gray-100">{route.name}</td>
                     <td class="px-5 py-3.5 text-gray-600 dark:text-gray-400">
                       {route.source.instance}<span class="text-gray-300 dark:text-gray-700">@</span>{route.source.cluster}
@@ -233,8 +236,10 @@ export default function Routes() {
               </For>
             </tbody>
           </table>
+          </div>
         )}
       </div>
+      </Reveal>
     </div>
   );
 }

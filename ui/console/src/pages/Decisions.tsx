@@ -1,7 +1,9 @@
 import { createSignal, createEffect, onCleanup, For, Show } from "solid-js";
 import { decisionStreamUrl, type Decision } from "../api/client";
-import { ShieldCheck, Pause, Play, Radio } from "lucide-solid";
+import { ShieldCheck, Pause, Play } from "lucide-solid";
 import { WSDisconnectBanner, EmptyState } from "../components/ui";
+import { GlowDot } from "../components/GlowDot";
+import { Reveal } from "../components/Reveal";
 
 const MAX_DECISIONS = 500;
 
@@ -58,23 +60,14 @@ export default function Decisions() {
     <div class="max-w-7xl">
       <WSDisconnectBanner show={!connected() && decisions().length === 0} />
       {/* Header */}
-      <div class="flex items-center justify-between mb-6">
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Decisions</h1>
+          <h1 class="font-display text-2xl font-bold text-gray-900 dark:text-gray-100">Decisions</h1>
           <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Real-time authorization decision stream</p>
         </div>
         <div class="flex items-center gap-4">
           {/* Connection indicator */}
-          <div class="flex items-center gap-2">
-            <span class={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${
-              connected()
-                ? "bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400"
-                : "bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400"
-            }`}>
-              <Radio size={12} class={connected() ? "text-green-500 animate-pulse" : "text-red-500"} />
-              {connected() ? "Live" : "Disconnected"}
-            </span>
-          </div>
+          <GlowDot tone={connected() ? "live" : "critical"} pulse={connected()} label={connected() ? "Live" : "Disconnected"} />
           {/* Pause/Resume */}
           <button
             class={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg transition-colors ${
@@ -90,22 +83,23 @@ export default function Decisions() {
       </div>
 
       {/* Filters bar */}
-      <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm px-4 py-3 mb-4 flex items-center gap-3">
+      <Reveal>
+      <div class="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200 dark:border-white/[0.08] shadow-sm dark:shadow-none px-4 py-3 mb-4 flex flex-wrap items-center gap-3">
         <span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Filters</span>
         <input
-          class="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm w-36 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+          class="border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm w-36 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
           placeholder="Cluster"
           value={filterCluster()}
           onInput={(e) => setFilterCluster(e.currentTarget.value)}
         />
         <input
-          class="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm w-36 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+          class="border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm w-36 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
           placeholder="Tenant"
           value={filterTenant()}
           onInput={(e) => setFilterTenant(e.currentTarget.value)}
         />
         <select
-          class="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+          class="border border-gray-200 dark:border-white/[0.12] bg-white dark:bg-white/[0.04] text-gray-900 dark:text-gray-100 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 outline-none transition-all"
           value={filterVerdict()}
           onChange={(e) => setFilterVerdict(e.currentTarget.value)}
         >
@@ -117,10 +111,10 @@ export default function Decisions() {
       </div>
 
       {/* Decision table */}
-      <div class="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+      <div class="bg-white dark:bg-white/[0.02] rounded-2xl border border-gray-200 dark:border-white/[0.08] shadow-sm dark:shadow-none overflow-hidden">
         <div class="overflow-auto max-h-[calc(100vh-320px)]">
           <table class="w-full text-xs">
-            <thead class="bg-gray-50/80 dark:bg-gray-800/50 sticky top-0 z-10">
+            <thead class="bg-gray-50/80 dark:bg-white/[0.03] sticky top-0 z-10">
               <tr class="text-left text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 <th class="px-4 py-3">Time</th>
                 <th class="px-4 py-3">Verdict</th>
@@ -132,10 +126,10 @@ export default function Decisions() {
                 <th class="px-4 py-3">Reason</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-gray-50 dark:divide-gray-800/60">
+            <tbody class="divide-y divide-gray-50 dark:divide-white/[0.06]">
               <For each={decisions()}>
                 {(d) => (
-                  <tr class="hover:bg-gray-50/50 dark:hover:bg-gray-800/40 transition-colors">
+                  <tr class="hover:bg-gray-50/50 dark:hover:bg-white/[0.03] transition-colors">
                     <td class="px-4 py-2.5 font-mono text-gray-600 dark:text-gray-400 whitespace-nowrap">
                       {new Date(d.timestamp).toLocaleTimeString()}
                     </td>
@@ -171,6 +165,7 @@ export default function Decisions() {
           </Show>
         </div>
       </div>
+      </Reveal>
     </div>
   );
 }

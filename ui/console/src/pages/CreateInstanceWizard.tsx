@@ -1,6 +1,7 @@
 import { createSignal, createResource, For, Show, Switch, Match, createEffect } from "solid-js";
 import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
+import { Transition } from "solid-transition-group";
 import { CodeBlock } from "../components/CodeBlock";
 import {
   listModules,
@@ -193,43 +194,47 @@ export default function CreateInstanceWizard(props: Props) {
     validationErrors().find((e) => e.field === field)?.message;
 
   return (
-    <div class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-      <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-100 dark:border-gray-800">
+    <div class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div class="bg-white dark:bg-[#12141f] rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-100 dark:border-white/[0.08] animate-scale-in">
         {/* Header */}
-        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
-          <div>
-            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">Create LwAuth Node</h3>
-            <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+        <div class="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-100 dark:border-white/[0.08]">
+          <div class="min-w-0">
+            <h3 class="font-display text-lg font-bold text-gray-900 dark:text-gray-100">Create LwAuth Node</h3>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
               Step {step() + 1} of {STEPS.length}: {STEPS[step()]}
             </p>
           </div>
-          <button onClick={props.onClose} class="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">
+          <button onClick={props.onClose} class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors shrink-0">
             <X size={18} class="text-gray-400" />
           </button>
         </div>
 
-        {/* Step indicators */}
-        <div class="flex px-6 pt-4 gap-1">
+        {/* Step indicators — numbered circles only on mobile (the header
+            above already spells out the current step name in full), full
+            text labels at sm+ where there's room for five of them. */}
+        <div class="flex px-4 sm:px-6 pt-4 gap-1">
           <For each={STEPS}>
             {(s, i) => (
               <button
-                class={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${
+                class={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-300 truncate ${
                   i() === step()
-                    ? "bg-blue-600 text-white"
+                    ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-[0_0_16px_-4px_rgba(99,102,241,0.6)]"
                     : i() < step()
-                    ? "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                    : "bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500"
+                    ? "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
+                    : "bg-gray-100 dark:bg-white/[0.06] text-gray-400 dark:text-gray-500"
                 }`}
                 onClick={() => i() <= step() && setStep(i())}
               >
-                {s}
+                <span class="sm:hidden">{i() + 1}</span>
+                <span class="hidden sm:inline">{s}</span>
               </button>
             )}
           </For>
         </div>
 
         {/* Body */}
-        <div class="flex-1 overflow-y-auto px-6 py-5">
+        <div class="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
+          <Transition name="wizard-step" mode="outin">
           <Switch>
             <Match when={step() === 0}>
               <StepBasics
@@ -282,22 +287,23 @@ export default function CreateInstanceWizard(props: Props) {
               />
             </Match>
           </Switch>
+          </Transition>
         </div>
 
         {/* Error display */}
         <Show when={error()}>
-          <div class="mx-6 mb-2 p-3 bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 rounded-lg flex items-start gap-2">
+          <div class="mx-4 sm:mx-6 mb-2 p-3 bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 rounded-lg flex items-start gap-2">
             <AlertCircle size={16} class="text-red-500 mt-0.5 shrink-0" />
             <p class="text-sm text-red-700 dark:text-red-400">{error()}</p>
           </div>
         </Show>
 
         {/* Footer */}
-        <div class="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-gray-800">
+        <div class="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-6 py-4 border-t border-gray-100 dark:border-white/[0.08]">
           <button
             onClick={() => setStep(Math.max(0, step() - 1))}
             disabled={step() === 0}
-            class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.06] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
             <ChevronLeft size={16} />
             Back
@@ -307,7 +313,7 @@ export default function CreateInstanceWizard(props: Props) {
             <Show when={step() === STEPS.length - 1}>
               <button
                 onClick={handlePreview}
-                class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                class="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-white/[0.12] rounded-lg hover:bg-gray-50 dark:hover:bg-white/[0.04] transition-colors"
               >
                 <Eye size={16} />
                 Preview
@@ -315,7 +321,7 @@ export default function CreateInstanceWizard(props: Props) {
               <button
                 onClick={handleSubmit}
                 disabled={createMut.isPending}
-                class="inline-flex items-center gap-1.5 px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 shadow-sm transition-colors"
+                class="inline-flex items-center gap-1.5 px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg disabled:opacity-50 shadow-sm transition-all"
               >
                 <Check size={16} />
                 {createMut.isPending ? "Creating…" : "Create Node"}
@@ -325,7 +331,7 @@ export default function CreateInstanceWizard(props: Props) {
               <button
                 onClick={handleNext}
                 disabled={!canProceed() || nextBusy()}
-                class="inline-flex items-center gap-1.5 px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 shadow-sm transition-colors"
+                class="inline-flex items-center gap-1.5 px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg disabled:opacity-50 shadow-sm transition-all"
               >
                 <Show when={nextBusy()} fallback={<><span>Next</span><ChevronRight size={16} /></>}>
                   <Loader size={16} class="animate-spin" />
@@ -375,19 +381,19 @@ function StepBasics(props: {
         <div>
           <label class="text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Quick Start Preset</label>
           <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 mb-3">Select a preset to pre-fill the form, then customize as needed.</p>
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <For each={props.presets}>
               {(preset) => (
                 <button
                   class={`text-left p-3 rounded-xl border transition-all ${
                     props.selectedPreset === preset.name
-                      ? "border-blue-500 bg-blue-50/50 dark:bg-blue-500/10 ring-1 ring-blue-500/20"
-                      : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50/50 dark:hover:bg-gray-800/50"
+                      ? "border-indigo-500 bg-indigo-50/50 dark:bg-indigo-500/10 ring-1 ring-indigo-500/20"
+                      : "border-gray-200 dark:border-white/[0.1] hover:border-gray-300 dark:hover:border-white/[0.2] hover:bg-gray-50/50 dark:hover:bg-white/[0.04]"
                   }`}
                   onClick={() => props.onPresetSelect(preset)}
                 >
                   <div class="flex items-center gap-2">
-                    <Zap size={14} class={props.selectedPreset === preset.name ? "text-blue-600 dark:text-blue-400" : "text-gray-400 dark:text-gray-500"} />
+                    <Zap size={14} class={props.selectedPreset === preset.name ? "text-indigo-600 dark:text-indigo-400" : "text-gray-400 dark:text-gray-500"} />
                     <span class="text-sm font-medium text-gray-900 dark:text-gray-100">{preset.displayName}</span>
                   </div>
                   <p class="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">{preset.description}</p>
@@ -399,7 +405,7 @@ function StepBasics(props: {
       </Show>
 
       {/* Form fields */}
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <FormField label="Node Name" required error={props.fieldError("name")}>
           <input
             type="text"
@@ -531,7 +537,7 @@ function StepInfrastructure(props: {
         <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">Configure caching, rate limiting, and network settings.</p>
       </div>
 
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <FormField label="Cache Backend">
           <select
             value={props.infra.cacheBackend ?? "memory"}
@@ -555,7 +561,7 @@ function StepInfrastructure(props: {
       </div>
 
       {/* Rate Limiting */}
-      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+      <div class="border border-gray-200 dark:border-white/[0.1] rounded-xl p-4">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -569,12 +575,12 @@ function StepInfrastructure(props: {
                 },
               })
             }
-            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
+            class="rounded border-gray-300 dark:border-white/[0.2] dark:bg-white/[0.06] text-indigo-600 focus:ring-indigo-500/30"
           />
           <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Rate Limiting</span>
         </label>
         <Show when={props.infra.rateLimiting?.enabled}>
-          <div class="grid grid-cols-2 gap-4 mt-3 pl-6">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3 pl-6">
             <FormField label="RPS">
               <input
                 type="number"
@@ -610,7 +616,7 @@ function StepInfrastructure(props: {
       </div>
 
       {/* Revocation */}
-      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+      <div class="border border-gray-200 dark:border-white/[0.1] rounded-xl p-4">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -623,7 +629,7 @@ function StepInfrastructure(props: {
                 },
               })
             }
-            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
+            class="rounded border-gray-300 dark:border-white/[0.2] dark:bg-white/[0.06] text-indigo-600 focus:ring-indigo-500/30"
           />
           <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Revocation</span>
         </label>
@@ -649,7 +655,7 @@ function StepInfrastructure(props: {
       </div>
 
       {/* Gateway */}
-      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+      <div class="border border-gray-200 dark:border-white/[0.1] rounded-xl p-4">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -663,12 +669,12 @@ function StepInfrastructure(props: {
                 },
               })
             }
-            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
+            class="rounded border-gray-300 dark:border-white/[0.2] dark:bg-white/[0.06] text-indigo-600 focus:ring-indigo-500/30"
           />
           <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Envoy Gateway Sidecar</span>
         </label>
         <Show when={props.infra.gateway?.enabled}>
-          <div class="grid grid-cols-2 gap-4 mt-3 pl-6">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3 pl-6">
             <FormField label="Upstream Service">
               <input
                 type="text"
@@ -702,7 +708,7 @@ function StepInfrastructure(props: {
       </div>
 
       {/* TLS */}
-      <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+      <div class="border border-gray-200 dark:border-white/[0.1] rounded-xl p-4">
         <label class="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -715,7 +721,7 @@ function StepInfrastructure(props: {
                 },
               })
             }
-            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
+            class="rounded border-gray-300 dark:border-white/[0.2] dark:bg-white/[0.06] text-indigo-600 focus:ring-indigo-500/30"
           />
           <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable TLS</span>
         </label>
@@ -749,7 +755,7 @@ function StepInfrastructure(props: {
           type="checkbox"
           checked={props.infra.networkPolicy}
           onChange={(e) => update({ networkPolicy: e.currentTarget.checked })}
-          class="rounded border-gray-300 text-blue-600 focus:ring-blue-500/20"
+          class="rounded border-gray-300 dark:border-white/[0.2] dark:bg-white/[0.06] text-indigo-600 focus:ring-indigo-500/30"
         />
         <span class="text-sm font-medium text-gray-900 dark:text-gray-100">Enable Network Policy</span>
       </label>
@@ -825,10 +831,10 @@ function ModuleListEditor(props: {
         {(entry, idx) => {
           const mod = () => props.modules.find((m) => m.type === entry.type);
           return (
-            <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4 space-y-3 bg-gray-50/30 dark:bg-gray-800/30">
+            <div class="border border-gray-200 dark:border-white/[0.1] rounded-xl p-4 space-y-3 bg-gray-50/30 dark:bg-white/[0.03]">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-2 py-0.5 rounded-full uppercase">
+                  <span class="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-0.5 rounded-full uppercase">
                     {entry.type}
                   </span>
                   <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{mod()?.displayName ?? entry.type}</span>
@@ -851,7 +857,7 @@ function ModuleListEditor(props: {
               </FormField>
 
               <Show when={mod()}>
-                <div class="grid grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <For each={mod()!.fields}>
                     {(field) => (
                       <ModuleFieldInput
@@ -887,7 +893,7 @@ function ModuleListEditor(props: {
         <button
           onClick={addModule}
           disabled={!addingType()}
-          class="inline-flex items-center gap-1.5 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-40 shadow-sm transition-colors"
+          class="inline-flex items-center gap-1.5 px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg disabled:opacity-40 shadow-sm transition-all"
         >
           <Plus size={16} />
           Add
@@ -931,7 +937,7 @@ function ModuleFieldInput(props: {
               type="checkbox"
               checked={Boolean(props.value ?? f.default)}
               onChange={(e) => props.onChange(e.currentTarget.checked)}
-              class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-800 text-blue-600 focus:ring-blue-500/20"
+              class="rounded border-gray-300 dark:border-white/[0.2] dark:bg-white/[0.06] text-indigo-600 focus:ring-indigo-500/30"
             />
             <span class="text-xs text-gray-600 dark:text-gray-400">{f.description}</span>
           </label>
@@ -1094,32 +1100,32 @@ function PreviewModal(props: {
   const content = () => (props.tab === "yaml" ? props.data.authConfig : props.data.helmValues);
 
   return (
-    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
-      <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-gray-100 dark:border-gray-800">
-        <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 dark:border-gray-800">
-          <div class="flex gap-1">
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div class="bg-white dark:bg-[#12141f] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-gray-100 dark:border-white/[0.08] animate-scale-in">
+        <div class="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-gray-100 dark:border-white/[0.08]">
+          <div class="flex gap-1 flex-wrap">
             <button
-              class={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+              class={`px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap ${
                 props.tab === "yaml"
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]"
               }`}
               onClick={() => props.setTab("yaml")}
             >
               Auth Config (YAML)
             </button>
             <button
-              class={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+              class={`px-3 py-1.5 text-xs font-medium rounded-md transition-all whitespace-nowrap ${
                 props.tab === "helm"
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/[0.06]"
               }`}
               onClick={() => props.setTab("helm")}
             >
               Helm Values
             </button>
           </div>
-          <button onClick={props.onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg">
+          <button onClick={props.onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.06] rounded-lg">
             <X size={16} class="text-gray-400" />
           </button>
         </div>

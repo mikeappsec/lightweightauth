@@ -19,6 +19,7 @@ const Decisions = lazy(() => import("./pages/Decisions"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const PolicyAnalytics = lazy(() => import("./pages/PolicyAnalytics"));
 const PolicyExplain = lazy(() => import("./pages/PolicyExplain"));
+const Health = lazy(() => import("./pages/Health"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +50,7 @@ render(
           <Route path="/alerts" component={Alerts} />
           <Route path="/policies" component={PolicyAnalytics} />
           <Route path="/policies/explain" component={PolicyExplain} />
+          <Route path="/health" component={Health} />
         </Router>
       </AuthGate>
     </QueryClientProvider>
