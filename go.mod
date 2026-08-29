@@ -10,7 +10,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/google/cel-go v0.28.0
+	github.com/google/cel-go v0.29.2
 	github.com/google/uuid v1.6.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/open-policy-agent/opa v1.16.1
