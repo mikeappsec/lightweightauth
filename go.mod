@@ -19,7 +19,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/russellhaering/goxmldsig v1.6.0
 	github.com/tetratelabs/wazero v1.11.0
-	github.com/valkey-io/valkey-go v1.0.74
+	github.com/valkey-io/valkey-go v1.0.76
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
 	go.uber.org/goleak v1.3.0
